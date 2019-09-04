@@ -1,0 +1,880 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.helpers.node_smapi_control &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.helpers.node_smapi_control</h1><div class="highlight"><pre>
+<span></span><span class="c1"># -*- coding: utf-8 -*-</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Control file for the node.js based mock SMAPI server that lives at /test/javascript/node-smapi/</span>
+
+<span class="sd">This server defaults to using the music files in /test/javascript/cloudqueue-api/files/smapi which results in the</span>
+<span class="sd">following track map (the number in the file name is the SMAPI ID for that track once parsed):</span>
+
+<span class="sd">music_1.mp3, music_2.mp3, music_3.mp3 - 30 second tracks</span>
+<span class="sd">music_4.mp3 - 10 second track</span>
+<span class="sd">music_5.mp3 - 1 second track</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">ast</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">urllib2</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">twisted.web</span> <span class="k">import</span> <span class="n">resource</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span><span class="p">,</span> <span class="n">time</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.network</span> <span class="k">import</span> <span class="n">Network</span>
+
+<span class="n">smapi_event_names</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;setPlayedSeconds&#39;</span><span class="p">,</span> <span class="s1">&#39;getMetadata&#39;</span><span class="p">,</span> <span class="s1">&#39;getMediaMetadata&#39;</span><span class="p">,</span> <span class="s1">&#39;getExtendedMetadata&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;getMediaURI&#39;</span><span class="p">,</span> <span class="s1">&#39;reportPlaySeconds&#39;</span><span class="p">,</span> <span class="s1">&#39;getLastUpdate&#39;</span><span class="p">,</span> <span class="s1">&#39;reportPlayStatus&#39;</span><span class="p">,</span> <span class="s1">&#39;refreshAuthToken&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;timePlayed&#39;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ManifestHandler"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.ManifestHandler">[docs]</a><span class="k">class</span> <span class="nc">ManifestHandler</span><span class="p">(</span><span class="n">resource</span><span class="o">.</span><span class="n">Resource</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a dynamically generated service manifest JSON object</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">server_uri</span><span class="p">,</span> <span class="n">schema_version</span><span class="o">=</span><span class="s1">&#39;1.0&#39;</span><span class="p">,</span> <span class="n">addUnkownItems</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">addRelativeUrls</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">sid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">resource</span><span class="o">.</span><span class="n">Resource</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">schema_version</span> <span class="o">=</span> <span class="n">schema_version</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_uri</span> <span class="o">=</span> <span class="n">server_uri</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">addUnkownItems</span> <span class="o">=</span> <span class="n">addUnkownItems</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">addRelativeUrls</span> <span class="o">=</span> <span class="n">addRelativeUrls</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid</span> <span class="o">=</span> <span class="n">sid</span>
+
+<div class="viewcode-block" id="ManifestHandler.render_GET"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.ManifestHandler.render_GET">[docs]</a>    <span class="k">def</span> <span class="nf">render_GET</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">args</span><span class="p">:</span>
+            <span class="n">sid</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">args</span><span class="p">[</span><span class="s1">&#39;sid&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">manifest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_manifest</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">manifest</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_manifest</span><span class="p">()</span>
+        <span class="n">request</span><span class="o">.</span><span class="n">setHeader</span><span class="p">(</span><span class="s2">&quot;content-type&quot;</span><span class="p">,</span> <span class="s2">&quot;application/json&quot;</span><span class="p">)</span>
+        <span class="n">request</span><span class="o">.</span><span class="n">setResponseCode</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">manifest</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ManifestHandler.get_manifest"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.ManifestHandler.get_manifest">[docs]</a>    <span class="k">def</span> <span class="nf">get_manifest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">manifest</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;schemaVersion&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">schema_version</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;presentationMap&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;presentationMap&quot;</span><span class="p">][</span><span class="s2">&quot;version&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;strings&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;strings&quot;</span><span class="p">][</span><span class="s2">&quot;version&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;apiKey&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">if</span> <span class="n">sid</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;apiKey&quot;</span><span class="p">][</span><span class="s2">&quot;cr&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;iGSZygAAALoAAQAAAAAAAAEAAAAUA444pCPrP+kszZNh1TUPdaUapCfBAAAAAQAAAIA7nUs3CCxnX83MHlaSbQkEDQOfw3Q4rawbMYH/JdN/j6r1PVFCmvQc/6pNgtvesgnxvIiUJ+jNVPzQ8nnBIdyYbEYag8lfw3je+fE0PpIGphEuIg0n6Oauajp4FMNPMwuG7nRLFpjn4JaZMKT/Ib6iWl0PG3UkIsaeY+87uqbLuAAAAAEAAABAm6C8WSOBERM/YylPDZkD5C3iy8SXvewuvBO55wa9Lezhp3tExgUw97wbJj4Qowi2Xmi5V1KBu1BigfVFbRStpA==&quot;</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;apiKey&quot;</span><span class="p">][</span><span class="s2">&quot;zp&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;iGSZygAAALoAAQAAAAAAAAEAAAAUA3ngEn8egjxXn/lW7mAMmqPEQsi4AAAAAQAAAIADuonfU05aHIr5cXIGiGxox0UW0+AbjNuiVxjf5eXXVZSsHgjY9umvMBYfvh1wKM/Tz33dM2rWewnzuo20yp26TV+BbAiycPQ0SyUkmijVAkRFbS6oR6W9s76wJ86WmQ6KmSNgrUaEzmImaP1dVJMSCXzvhsv/fHQ86nec1ShzAgAAAAEAAABA2PMuu87MuopnQtHLsprLryCud1Aag4xSmRUMOl28Hw/6FdaxV22jD2tH+YMksFSWtRWsBcRxh381hURfR0DwIw==&quot;</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;presentationMap&quot;</span><span class="p">][</span><span class="s2">&quot;uri&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;http://sonos.acmemusic.com/pmap&quot;</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;strings&quot;</span><span class="p">][</span><span class="s2">&quot;uri&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;http://sonos.acmemusic.com/strings&quot;</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;radio&quot;</span><span class="p">,</span>
+                                          <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/playback/radio&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">server_uri</span><span class="p">)})</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;reporting&quot;</span><span class="p">,</span>
+                                          <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/report&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">server_uri</span><span class="p">)})</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;presentationMap&quot;</span><span class="p">][</span><span class="s2">&quot;uri&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;http://sonos.acmemusic.com/pmap/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+            <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;strings&quot;</span><span class="p">][</span><span class="s2">&quot;uri&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;http://sonos.acmemusic.com/strings/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">addRelativeUrls</span><span class="p">:</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;radio&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;/playback/radio&quot;</span><span class="p">})</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;reporting&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;/node_smapi_tests/report/&quot;</span><span class="p">})</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;audiobook&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;/node_smapi_tests/audiobook&quot;</span><span class="p">})</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;radio&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;http://sonos.acmemusic.com/v2.1/playback/radio/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sid</span><span class="p">)})</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;endpoints&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;reporting&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;uri&quot;</span><span class="p">:</span> <span class="s2">&quot;http://sonos.acmemusic.com/v2.1/report/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sid</span><span class="p">)})</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">addUnkownItems</span><span class="p">:</span>
+                <span class="c1"># Add a bunch of unknown values to the manifest</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownString1&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;This is a future manifest element&quot;</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownArray&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownArray&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;unknown item 1&quot;</span><span class="p">)</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownArray&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;unknown item 2&quot;</span><span class="p">)</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownObject&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownObject&quot;</span><span class="p">][</span><span class="s2">&quot;unknownNumber&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">42</span>
+                <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;unknownObject&quot;</span><span class="p">][</span><span class="s2">&quot;unknownBoolean&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">return</span> <span class="n">manifest</span></div></div>
+
+<div class="viewcode-block" id="CambTestSmapiControl"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.CambTestSmapiControl">[docs]</a><span class="k">class</span> <span class="nc">CambTestSmapiControl</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">HTTP_OK</span> <span class="o">=</span> <span class="mi">200</span>
+    <span class="n">SMAPI_SERVER</span> <span class="o">=</span> <span class="s1">&#39;camb-test-smapi-0&#39;</span>
+    <span class="n">SMAPI_SERVER_NAME</span> <span class="o">=</span> <span class="s1">&#39;STA SMAPI Reference Server&#39;</span>
+    <span class="n">SMAPI_SERVER_SID</span> <span class="o">=</span> <span class="mi">255</span>
+    <span class="n">SMAPI_SERVER_URI</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:8080/smapi-1.0/ws/Sonos&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SMAPI_SERVER</span><span class="p">)</span>
+    <span class="n">SMAPI_SERVER_SECURE_URI</span> <span class="o">=</span> <span class="n">SMAPI_SERVER_URI</span>
+    <span class="n">SMAPI_SERVER_AUTHTYPE</span> <span class="o">=</span> <span class="s1">&#39;UserId&#39;</span>
+    <span class="n">SMAPI_SERVER_STRINGS_VERSION</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">SMAPI_SERVER_STRINGS_URI</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:8080/smapi-1.0/static/config/strings.xml&#39;</span>
+                                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SMAPI_SERVER</span><span class="p">))</span>
+    <span class="n">SMAPI_SERVER_PRESENTATION_MAP_VERSION</span> <span class="o">=</span> <span class="n">SMAPI_SERVER_STRINGS_VERSION</span>
+    <span class="n">SMAPI_SERVER_PRESENTATION_MAP_URI</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:8080/smapi-1.0/static/config/&#39;</span>
+                                         <span class="s1">&#39;pm.xml&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SMAPI_SERVER</span><span class="p">))</span>
+    <span class="n">SMAPI_SERVER_CONTAINER_TYPE</span> <span class="o">=</span> <span class="s1">&#39;MService&#39;</span>
+    <span class="n">SMAPI_SERVER_CAPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;search&#39;</span><span class="p">,</span> <span class="s1">&#39;trFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;alFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;ucPlaylists&#39;</span><span class="p">,</span>
+                         <span class="s1">&#39;logging&#39;</span><span class="p">,</span> <span class="s1">&#39;extendedMD&#39;</span><span class="p">]</span>
+
+    <span class="n">SMAPI_SERVER_INTERNAL_ID</span> <span class="o">=</span> <span class="mi">65287</span>
+    <span class="n">SMAPI_SERVER_USERNAME</span> <span class="o">=</span> <span class="s1">&#39;b&#39;</span>
+    <span class="n">SMAPI_SERVER_PASSWORD</span> <span class="o">=</span> <span class="s1">&#39;c&#39;</span>
+
+    <span class="n">SMAPI_SERVER_TRACK_URI</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;x-sonos-http:ref</span><span class="si">%3a</span><span class="s1">track</span><span class="si">%3a</span><span class="s1">57.mp3?sid=255&amp;amp;&#39;</span>
+                              <span class="s1">&#39;flags=32&#39;</span><span class="p">)</span>
+    <span class="n">SMAPI_SERVER_TRACK_METADATA</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/&#39;</span>
+                                   <span class="s1">&#39;elements/1.1/&quot; xmlns:upnp=&quot;urn:&#39;</span>
+                                   <span class="s1">&#39;schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns:&#39;</span>
+                                   <span class="s1">&#39;r=&quot;urn:schemas-rinconnetworks-com:&#39;</span>
+                                   <span class="s1">&#39;metadata-1-0/&quot; xmlns=&quot;urn:schemas-upnp-org:&#39;</span>
+                                   <span class="s1">&#39;metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&#39;</span>
+                                   <span class="s1">&#39;&quot;00030020ref</span><span class="si">%3a</span><span class="s1">track</span><span class="si">%3a</span><span class="s1">57&quot; parentID=&#39;</span>
+                                   <span class="s1">&#39;&quot;0004006eref</span><span class="si">%3a</span><span class="s1">album</span><span class="si">%3a</span><span class="s1">6&quot; restricted=&quot;true&quot;&gt;&#39;</span>
+                                   <span class="s1">&#39;&lt;dc:title&gt;One&lt;/dc:title&gt;&lt;upnp:class&gt;&#39;</span>
+                                   <span class="s1">&#39;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&#39;</span>
+                                   <span class="s1">&#39;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:&#39;</span>
+                                   <span class="s1">&#39;schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;&#39;</span>
+                                   <span class="s1">&#39;SA_RINCON65287_b&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="NodeSmapiControl"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl">[docs]</a><span class="k">class</span> <span class="nc">NodeSmapiControl</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">NodeSmapiControl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;SONOS.tests.webserver.helpers.NodeSmapiControl&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">network</span> <span class="o">=</span> <span class="n">Network</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">network</span><span class="o">.</span><span class="n">get_external_non_virtual_ips</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span> <span class="o">=</span> <span class="mi">200</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_NAME</span> <span class="o">=</span> <span class="s1">&#39;node-js SMAPI server&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span> <span class="o">=</span> <span class="mi">255</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span> <span class="o">=</span> <span class="mi">65287</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SECURE_URI</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_LOGS</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CLEAR_LOGS</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_AUTHTYPE</span> <span class="o">=</span> <span class="s1">&#39;Anonymous&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CONTAINER_TYPE</span> <span class="o">=</span> <span class="s1">&#39;MService&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CAPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;search&#39;</span><span class="p">,</span> <span class="s1">&#39;logging&#39;</span><span class="p">,</span> <span class="s1">&#39;playbackLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;extendedMD&#39;</span><span class="p">,</span> <span class="s1">&#39;userInfo&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_TRACK_URIS</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_HANDLER</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_TRACK_METADATA</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_CONTAINER_URI</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;1&#39;</span><span class="p">:</span> <span class="s1">&#39;x-rincon-cpcontainer:000e206cbrowse%3Atracks&#39;</span><span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_CONTAINER_MD</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">GET_METADATA_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/md/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_VERSION_COUNTER</span> <span class="o">=</span> <span class="mi">1</span>
+
+<div class="viewcode-block" id="NodeSmapiControl.start_node_smapi_server"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.start_node_smapi_server">[docs]</a>    <span class="k">def</span> <span class="nf">start_node_smapi_server</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">extra_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">server_port</span><span class="o">=</span><span class="mi">3000</span><span class="p">,</span>
+                                <span class="n">server_version</span><span class="o">=</span><span class="mf">2.1</span><span class="p">,</span> <span class="n">server_sid</span> <span class="o">=</span> <span class="mi">255</span><span class="p">,</span> <span class="n">server_internal_id</span><span class="o">=</span><span class="mi">65287</span><span class="p">,</span> <span class="n">cqport</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                <span class="n">magicLinkCode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">magicLinkDeviceId</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">verifyAuthSignature</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start the node.js mock smapi server that lives in /test/javascript/node_smapi.</span>
+<span class="sd">        Default output and error paths pipe to /dev/null but can be overridden by passing in those</span>
+<span class="sd">        params through your test.</span>
+<span class="sd">        :param stdout: the standard output for the cloudqueue server</span>
+<span class="sd">        :param stderr: the standard error for the cloudqueue server</span>
+<span class="sd">        :return: object; a running node-smapi server</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">workspace</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;WORKSPACE&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">workspace</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Unable to start node-smapi server because the environment variable $WORKSPACE is not set&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="s2">&quot;/tmp/cloudqueue&quot;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;/tmp/cloudqueue media repo does not exist on local testrunner&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">extra_path</span><span class="p">:</span>
+                <span class="n">music_path</span> <span class="o">=</span> <span class="s2">&quot;/tmp/cloudqueue/smapi/&quot;</span> <span class="o">+</span> <span class="n">extra_path</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">music_path</span> <span class="o">=</span> <span class="s2">&quot;/tmp/cloudqueue/smapi/&quot;</span>
+
+        <span class="c1"># Normalize the path to remove any &quot;..&quot;.  node.js will not serve up files that contain</span>
+        <span class="c1"># &quot;..&quot; in the path because it is a little paranoid about security.</span>
+        <span class="n">workspace</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">normpath</span><span class="p">(</span><span class="n">workspace</span><span class="p">)</span>
+        <span class="n">smapi_path</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/test/javascript/node_smapi&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">workspace</span><span class="p">)</span>
+
+        <span class="n">FNULL</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">devnull</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">stdout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">stderr</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">,</span> <span class="n">err</span> <span class="o">=</span> <span class="n">stdout</span><span class="p">,</span> <span class="n">stderr</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">,</span> <span class="n">err</span> <span class="o">=</span> <span class="n">FNULL</span><span class="p">,</span> <span class="n">FNULL</span>
+
+        <span class="c1"># Check if anything is using the default server port of 3000, if so pick something else</span>
+        <span class="n">ports</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="n">server_port</span><span class="p">,</span> <span class="mi">3400</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">port</span> <span class="ow">in</span> <span class="n">ports</span><span class="p">:</span>
+            <span class="n">smapi_rdy</span> <span class="o">=</span> <span class="s2">&quot;/tmp/&quot;</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">port</span><span class="p">)</span> <span class="o">+</span> <span class="s1">&#39;smapi.cq&#39;</span>
+            <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">smapi_rdy</span><span class="p">):</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">smapi_rdy</span><span class="p">)</span>
+
+            <span class="n">port_check</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span><span class="s1">&#39;lsof -i -P | grep -i &quot;listen&quot; | grep </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">port</span><span class="p">),</span>
+                                          <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                          <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">)</span>
+            <span class="n">port_check_output</span> <span class="o">=</span> <span class="n">port_check</span><span class="o">.</span><span class="n">stdout</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+            <span class="n">port_check</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">port_check_output</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="n">smapi_args</span> <span class="o">=</span> <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">smapi_path</span><span class="p">,</span> <span class="s1">&#39;init&#39;</span><span class="p">),</span>
+                              <span class="s1">&#39;-p&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">port</span><span class="p">),</span>
+                              <span class="s1">&#39;-v&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">server_version</span><span class="p">),</span>
+                              <span class="s1">&#39;-l&#39;</span><span class="p">,</span> <span class="n">music_path</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">cqport</span><span class="p">:</span>
+                    <span class="n">smapi_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">cqport</span><span class="p">)])</span>
+                <span class="k">if</span> <span class="n">magicLinkCode</span><span class="p">:</span>
+                    <span class="n">smapi_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;--magiclinkcode&#39;</span><span class="p">])</span>
+                <span class="k">if</span> <span class="n">magicLinkDeviceId</span><span class="p">:</span>
+                    <span class="n">smapi_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;--magiclinkdeviceid&#39;</span><span class="p">])</span>
+                <span class="k">if</span> <span class="n">verifyAuthSignature</span><span class="p">:</span>
+                    <span class="n">smapi_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;--authSignature&#39;</span><span class="p">])</span>
+
+                <span class="n">smapi</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span><span class="n">smapi_args</span><span class="p">,</span> <span class="n">cwd</span><span class="o">=</span><span class="n">smapi_path</span><span class="p">,</span>
+                                      <span class="n">stdout</span><span class="o">=</span><span class="n">out</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">err</span><span class="p">,</span> <span class="n">close_fds</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="n">port</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/v</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span> <span class="n">server_version</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SECURE_URI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_LOGS</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/logs/apilog&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="n">port</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CLEAR_LOGS</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/logs/apilog/clear&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="n">port</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_EXPIRE_TOKEN</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/expireToken&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="n">port</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span> <span class="o">=</span> <span class="n">server_sid</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span> <span class="o">=</span> <span class="n">server_internal_id</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;SMAPI Server started on port </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">port</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_TRACK_URIS</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="s1">&#39;1&#39;</span><span class="p">:</span> <span class="s1">&#39;x-sonos-http:1.mp3?sid=</span><span class="si">{}</span><span class="s1">&amp;amp;flags=8224&amp;amp;sn=2&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span><span class="p">),</span>
+                    <span class="s1">&#39;2&#39;</span><span class="p">:</span> <span class="s1">&#39;x-sonos-http:2.mp3?sid=</span><span class="si">{}</span><span class="s1">&amp;amp;flags=8224&amp;amp;sn=2&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span><span class="p">),</span>
+                    <span class="s1">&#39;3&#39;</span><span class="p">:</span> <span class="s1">&#39;x-sonos-http:3.mp3?sid=</span><span class="si">{}</span><span class="s1">&amp;amp;flags=8224&amp;amp;sn=2&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span><span class="p">),</span>
+                    <span class="s1">&#39;4&#39;</span><span class="p">:</span> <span class="s1">&#39;x-sonos-http:4.mp3?sid=</span><span class="si">{}</span><span class="s1">&amp;amp;flags=8224&amp;amp;sn=2&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span><span class="p">),</span>
+                    <span class="s1">&#39;5&#39;</span><span class="p">:</span> <span class="s1">&#39;x-sonos-http:5.mp3?sid=</span><span class="si">{}</span><span class="s1">&amp;amp;flags=8224&amp;amp;sn=2&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SID</span><span class="p">)}</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_TRACK_METADATA</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;1&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;000320201&quot; &#39;</span>
+                                              <span class="s1">&#39;parentID=&quot;000e206cbrowse</span><span class="si">%3a</span><span class="s1">tracks&quot; restricted=&quot;true&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;dc:title&gt;Track 1&lt;/dc:title&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;SA_RINCON</span><span class="si">{}</span><span class="s1">_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span><span class="p">),</span>
+                                         <span class="s1">&#39;2&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;item id=&quot;000320202&quot; parentID=&quot;000e206cbrowse</span><span class="si">%3a</span><span class="s1">tracks&quot; restricted=&quot;true&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;dc:title&gt;Track 2&lt;/dc:title&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;SA_RINCON</span><span class="si">{}</span><span class="s1">_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span><span class="p">),</span>
+                                         <span class="s1">&#39;3&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; &#39;</span>
+                                              <span class="s1">&#39;xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;item id=&quot;000320203&quot; parentID=&quot;000e206cbrowse</span><span class="si">%3a</span><span class="s1">tracks&quot; restricted=&quot;true&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;dc:title&gt;Track 3&lt;/dc:title&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&#39;</span>
+                                              <span class="s1">&#39;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;&#39;</span>
+                                              <span class="s1">&#39;SA_RINCON</span><span class="si">{}</span><span class="s1">_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span><span class="p">)}</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_CONTAINER_URI</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;1&#39;</span><span class="p">:</span> <span class="s1">&#39;x-rincon-cpcontainer:000e206cbrowse%3Atracks&#39;</span><span class="p">}</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_CONTAINER_MD</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;1&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; &#39;</span>
+                                            <span class="s1">&#39;xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; &#39;</span>
+                                            <span class="s1">&#39;xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; &#39;</span>
+                                            <span class="s1">&#39;xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&#39;</span>
+                                            <span class="s1">&#39;&lt;item id=&quot;000e206cbrowse</span><span class="si">%3a</span><span class="s1">tracks&quot; parentID=&quot;0&quot; restricted=&quot;true&quot;&gt;&#39;</span>
+                                            <span class="s1">&#39;&lt;dc:title&gt;tracks&lt;/dc:title&gt;&#39;</span>
+                                            <span class="s1">&#39;&lt;upnp:class&gt;object.container.playlistContainer&lt;/upnp:class&gt;&#39;</span>
+                                            <span class="s1">&#39;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;&#39;</span>
+                                            <span class="s1">&#39;SA_RINCON</span><span class="si">{}</span><span class="s1">_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_INTERNAL_ID</span><span class="p">)}</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">GET_METADATA_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/md/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span>
+                <span class="c1"># Retry getting the SMAPI logs to check if the server is up (for up to 10 seconds)</span>
+                <span class="n">retry_decorator</span> <span class="o">=</span> <span class="n">retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+                <span class="n">retry_func</span> <span class="o">=</span> <span class="n">retry_decorator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_smapi_log_content</span><span class="p">)</span>
+                <span class="n">retry_func</span><span class="p">()</span>
+                <span class="c1"># wait_until_true(lambda: os.path.exists(smapi_rdy), timeout_seconds=10, iteration_delay=1,</span>
+                <span class="c1">#                 reason=&quot;Waited too long for the node-smapi server to start&quot;)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;SMAPI Server started on port </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">port</span><span class="p">))</span>
+                <span class="k">break</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">p1</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;ps&#39;</span><span class="p">,</span> <span class="s1">&#39;-e&#39;</span><span class="p">,</span> <span class="s1">&#39;-l&#39;</span><span class="p">,</span> <span class="s1">&#39;-f&#39;</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">)</span>
+            <span class="n">p2</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">([</span><span class="s2">&quot;grep&quot;</span><span class="p">,</span> <span class="s2">&quot;node&quot;</span><span class="p">],</span> <span class="n">stdin</span><span class="o">=</span><span class="n">p1</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">)</span>
+            <span class="n">output</span> <span class="o">=</span> <span class="n">p2</span><span class="o">.</span><span class="n">communicate</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span><span class="s2">&quot;SMAPI Server failed to find open port, node processes: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">output</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">smapi</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.stop_node_smapi_server"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.stop_node_smapi_server">[docs]</a>    <span class="k">def</span> <span class="nf">stop_node_smapi_server</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">smapi_server</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">smapi_server</span><span class="o">.</span><span class="n">kill</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Failed to kill SMAPI server at pid &lt;</span><span class="si">{}</span><span class="s2">&gt;, &quot;</span>
+                <span class="s2">&quot;server may have terminated prematurely&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">smapi_server</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Don&#39;t try to read the error codes in cases where the CQ is piping output to /dev/null</span>
+            <span class="k">if</span> <span class="n">smapi_server</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="n">smapi_server</span><span class="o">.</span><span class="n">stdout</span> <span class="ow">and</span> <span class="n">smapi_server</span><span class="o">.</span><span class="n">stderr</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;SMAPI server failed [</span><span class="si">{}</span><span class="s2">]: </span><span class="si">{}</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">smapi_server</span><span class="o">.</span><span class="n">returncode</span><span class="p">,</span>
+                                                                            <span class="n">smapi_server</span><span class="o">.</span><span class="n">stderr</span><span class="o">.</span><span class="n">readlines</span><span class="p">(),</span>
+                                                                            <span class="n">smapi_server</span><span class="o">.</span><span class="n">stdout</span><span class="o">.</span><span class="n">readlines</span><span class="p">()))</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.get_account_type"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.get_account_type">[docs]</a>    <span class="k">def</span> <span class="nf">get_account_type</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sid</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the account type for a given serviceId</span>
+
+<span class="sd">        :param int sid: Service ID</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">sid</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="mi">7</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.generate_manifest"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.generate_manifest">[docs]</a>    <span class="k">def</span> <span class="nf">generate_manifest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">server_uri</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">8080</span><span class="p">,</span> <span class="n">schema_version</span><span class="o">=</span><span class="s1">&#39;1.0&#39;</span><span class="p">,</span> <span class="n">addUnkownItems</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">addRelativeUrls</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">sid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># Register a web server that will dynamically return manifests</span>
+        <span class="n">resource_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_HANDLER</span> <span class="o">=</span> <span class="n">ManifestHandler</span><span class="p">(</span><span class="n">server_uri</span><span class="o">=</span><span class="n">server_uri</span><span class="p">,</span> <span class="n">sid</span><span class="o">=</span><span class="n">sid</span><span class="p">,</span> <span class="n">schema_version</span><span class="o">=</span><span class="n">schema_version</span><span class="p">,</span>
+                                                <span class="n">addUnkownItems</span><span class="o">=</span><span class="n">addUnkownItems</span><span class="p">,</span> <span class="n">addRelativeUrls</span><span class="o">=</span><span class="n">addRelativeUrls</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="s2">&quot;manifest&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_HANDLER</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.tear_down_manifest"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.tear_down_manifest">[docs]</a>    <span class="k">def</span> <span class="nf">tear_down_manifest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;test_service_manifest: tearDownFixture&quot;</span><span class="p">)</span>
+        <span class="c1"># Tear down the webserver</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span><span class="o">.</span><span class="n">remove_handler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_HANDLER</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.smapi_account_setup"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.smapi_account_setup">[docs]</a>    <span class="k">def</span> <span class="nf">smapi_account_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                            <span class="n">zp</span><span class="p">,</span>
+                            <span class="n">sid</span><span class="p">,</span>
+                            <span class="n">add_account</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                            <span class="n">auth_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                            <span class="n">manifest_version</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                            <span class="n">manifest_uri</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span>
+                            <span class="n">caps</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper method for adding a SMAPI account to a given ZP.</span>
+
+<span class="sd">        :param zp: player object</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int sid: smapi server ID</span>
+<span class="sd">        :param bool add_account: (Default: True) Add an account for</span>
+<span class="sd">            the service?</span>
+<span class="sd">        :param int auth_type: Auth type for service -</span>
+<span class="sd">            DeviceLink = stateless authentication,</span>
+<span class="sd">            UserId = requires creds,</span>
+<span class="sd">            Anonymous (Default) = does not require creds</span>
+<span class="sd">        :param list caps: smapi server capabilities, will use default</span>
+<span class="sd">            if unspecified.</span>
+
+<span class="sd">        :return bool: Account added successfully?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">manifest_version</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">manifest_uri</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_VERSION_COUNTER</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">manifest_version</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">MANIFEST_VERSION_COUNTER</span>
+        <span class="k">if</span> <span class="n">caps</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">caps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CAPS</span>
+
+        <span class="n">account_type</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_account_type</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+
+        <span class="c1"># Setup fallback manifest if a manifest Uri is not defined</span>
+        <span class="k">if</span> <span class="p">(</span><span class="s1">&#39;manifest&#39;</span> <span class="ow">in</span> <span class="n">caps</span> <span class="ow">and</span> <span class="n">manifest_uri</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">generate_manifest</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span><span class="p">)</span>
+            <span class="n">manifest_uri</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/manifest&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">WEBSRV</span><span class="o">.</span><span class="n">host</span><span class="p">())</span>
+            <span class="n">manifest_version</span> <span class="o">=</span> <span class="mi">1</span>
+
+        <span class="c1"># Add service to ZP.</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_customsd</span><span class="p">(</span><span class="n">sid</span><span class="p">,</span>
+                                    <span class="n">name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_NAME</span><span class="p">,</span>
+                                    <span class="n">uri</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span><span class="p">,</span>
+                                    <span class="n">secure_uri</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_SECURE_URI</span><span class="p">,</span>
+                                    <span class="n">auth_type</span><span class="o">=</span><span class="n">auth_type</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_AUTHTYPE</span><span class="p">,</span>
+                                    <span class="n">strings_version</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">strings_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">presentation_map_version</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">presentation_map_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">manifest_version</span><span class="o">=</span><span class="n">manifest_version</span><span class="p">,</span>
+                                    <span class="n">manifest_uri</span><span class="o">=</span><span class="n">manifest_uri</span><span class="p">,</span>
+                                    <span class="n">container_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CONTAINER_TYPE</span><span class="p">,</span>
+                                    <span class="n">caps</span><span class="o">=</span><span class="n">caps</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">res</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; set_customsd failed!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="c1"># Add account to ZP for service.</span>
+        <span class="k">if</span> <span class="n">add_account</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">AddAccountX</span><span class="p">(</span><span class="n">account_type</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="n">account_type</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; failed to add account for SMAPI service!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="c1"># Clear log.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">clear_smapi_server_logs</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.smapi_account_teardown"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.smapi_account_teardown">[docs]</a>    <span class="k">def</span> <span class="nf">smapi_account_teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sid</span><span class="p">,</span> <span class="n">remove_account</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove the mock SMAPI service and account from a given zp.</span>
+
+<span class="sd">        :param zp: player object</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int sid: smapi server ID</span>
+<span class="sd">        :param bool remove_account: (Default: True) Remove any account</span>
+<span class="sd">            associated with the service?</span>
+
+<span class="sd">        :return bool: Account successfully removed?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">account_type</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_account_type</span><span class="p">(</span><span class="n">sid</span><span class="p">)</span>
+        <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">remove_account</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">RemoveAccount</span><span class="p">(</span><span class="n">account_type</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="n">account_type</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; failed to remove account </span><span class="si">{}</span><span class="s2"> for SMAPI service!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">account_type</span><span class="p">))</span>
+                    <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">except</span> <span class="n">UPnPError</span><span class="p">,</span> <span class="n">err</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; UPnP remove account command failed (</span><span class="si">{}</span><span class="s2">) to remove account </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">err</span><span class="p">,</span> <span class="n">account_type</span><span class="p">))</span>
+                <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_customsd</span><span class="p">(</span><span class="n">sid</span><span class="o">=</span><span class="n">sid</span><span class="p">)</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; set_customsd failed!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="n">account_removed</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.set_report_play_seconds_override"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.set_report_play_seconds_override">[docs]</a>    <span class="k">def</span> <span class="nf">set_report_play_seconds_override</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">limit</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set an override for the next &lt;limit&gt; number of reportPlaySeconds responses to include</span>
+<span class="sd">        &lt;interval&gt; value. This allows simulation of a SMAPI server requesting a new interval for reporting</span>
+<span class="sd">        the reportPlaySeconds call from the player. The node-smapi server is configured to default to an interval</span>
+<span class="sd">        of 0 if one is not specified.</span>
+<span class="sd">        :param limit: the number of times reportPlaySeconds should return the modified interval value</span>
+<span class="sd">        :param interval:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">interval</span><span class="p">:</span>
+            <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/rpsoverride?limit=</span><span class="si">{}</span><span class="s1">&amp;interval=</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span>
+                                                                              <span class="n">limit</span><span class="p">,</span>
+                                                                              <span class="n">interval</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/rpsoverride?limit=</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span>
+                                                                  <span class="n">limit</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Setting reportPlaySeconds override for </span><span class="si">{}</span><span class="s1"> iterations&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">limit</span><span class="p">))</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s1">&#39;Attempt to set reportPlaySeconds override returned </span><span class="si">{}</span><span class="s1"> error&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.get_smapi_log_content"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.get_smapi_log_content">[docs]</a>    <span class="k">def</span> <span class="nf">get_smapi_log_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Read the contents from the stdout of the node-smapi server. This method kills the</span>
+<span class="sd">        server so it should be called after all SMAPI actions have been completed to avoid any errors.</span>
+
+<span class="sd">        :return: list: a list of SMAPI logs in the order they were processed on the server, format as follows:</span>
+<span class="sd">          {&#39;timestamp&#39;: &#39;2015-11-23T23:24:14.712Z&#39;, &#39;args&#39;: {&#39;seconds&#39;: 0, &#39;id&#39;: &#39;1&#39;}, &#39;method&#39;: &#39;reportPlaySeconds&#39;}</span>
+
+<span class="sd">        Access data within the list using list position and dictionary key notation. For example if you want the</span>
+<span class="sd">        value of the &#39;method&#39; key in the above example (assuming its list position is 0):</span>
+<span class="sd">          method = list[0][&#39;args&#39;][&#39;method&#39;]</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logs_req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_LOGS</span><span class="p">)</span>
+        <span class="n">raw_logs</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">logs_req</span><span class="p">)</span>
+        <span class="c1"># the returned value is a string and we really want a list for iteration later, convert the string</span>
+        <span class="c1"># to a list and preserve the json hierarchy that was returned.</span>
+        <span class="n">logs</span> <span class="o">=</span> <span class="n">raw_logs</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="c1"># The player returns {&#39;recursive&#39;:true} argument with the getMetadata call but the literal_eval method</span>
+        <span class="c1"># requires certain types of input and variables are not on that list, so find it here and replace it with</span>
+        <span class="c1"># a string</span>
+        <span class="k">if</span> <span class="s1">&#39;&quot;recursive&quot;:true&#39;</span> <span class="ow">in</span> <span class="n">logs</span><span class="p">:</span>
+            <span class="n">logs</span> <span class="o">=</span> <span class="n">logs</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;&quot;recursive&quot;:true&#39;</span><span class="p">,</span> <span class="s1">&#39;&quot;recursive&quot;:&quot;true&quot;&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">log_list</span> <span class="o">=</span> <span class="n">ast</span><span class="o">.</span><span class="n">literal_eval</span><span class="p">(</span><span class="n">logs</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">log_list</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.clear_smapi_server_logs"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.clear_smapi_server_logs">[docs]</a>    <span class="k">def</span> <span class="nf">clear_smapi_server_logs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="n">clear_log_req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_CLEAR_LOGS</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1">#urllib2.urlopen(clear_log_req)</span>
+            <span class="c1">#sleep(wait)</span>
+            <span class="c1"># Hack work-around to wait and clear out any lingering setPlayedSeconds reports</span>
+            <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_smapi_log_content</span><span class="p">():</span>
+                <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">clear_log_req</span><span class="p">)</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="n">wait</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Successfully cleared SMAPI logs&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;attempt to clear SMAPI server logs failed!&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.get_smapi_call_logs"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.get_smapi_call_logs">[docs]</a>    <span class="k">def</span> <span class="nf">get_smapi_call_logs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">smapi_call</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">expected_items</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get just the messages for a specific call(s) from the running mock smapi_server.</span>
+
+<span class="sd">        :param smapi_call: list - which smapi calls to look for</span>
+<span class="sd">        :param: item_id: list - SMAPI itemId to filter the returned list of logs by</span>
+<span class="sd">        :param timeout: int - how long should we iterate over the SMAPI logs before giving up. Default to 15 sec</span>
+<span class="sd">        :param expected_items: int - how many entries expected in SMAPI logs. Default to 1</span>
+<span class="sd">        :param iteration_delay: int - delay between each iteration pass. Default to 1 sec</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">parsed_logs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="c1"># Remove any inputs that are not valid SMAPI method names to look for</span>
+        <span class="k">for</span> <span class="n">call</span> <span class="ow">in</span> <span class="n">smapi_call</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">call</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">smapi_event_names</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> is not a valid SMAPI call and will not return results&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">call</span><span class="p">))</span>
+                <span class="n">smapi_call</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">call</span><span class="p">)</span>
+
+        <span class="c1"># Get the logs and parse out just those that were passed in for return</span>
+        <span class="n">timeout_seconds</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="n">iteration_delay</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">iteration_delay</span><span class="p">)</span>
+        <span class="n">elapsed</span> <span class="o">=</span> <span class="mf">0.0</span>
+        <span class="n">t0</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+        <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">parsed_logs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">expected_items</span> <span class="ow">and</span> <span class="n">elapsed</span> <span class="o">&lt;=</span> <span class="n">timeout_seconds</span><span class="p">:</span>
+            <span class="n">logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_smapi_log_content</span><span class="p">()</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">iteration_delay</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">log_line</span> <span class="ow">in</span> <span class="n">logs</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">call</span> <span class="ow">in</span> <span class="n">smapi_call</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">call</span> <span class="ow">in</span> <span class="n">log_line</span><span class="p">[</span><span class="s1">&#39;method&#39;</span><span class="p">]:</span>
+                        <span class="c1"># In the event we&#39;re iterating over the log list more than once don&#39;t add the same</span>
+                        <span class="c1"># log line into the parsed_logs list twice so look through the list and see if</span>
+                        <span class="c1"># call is already there</span>
+                        <span class="k">if</span> <span class="nb">next</span><span class="p">((</span><span class="n">log</span> <span class="k">for</span> <span class="n">log</span> <span class="ow">in</span> <span class="n">parsed_logs</span> <span class="k">if</span> <span class="n">log_line</span> <span class="o">==</span> <span class="n">log</span><span class="p">),</span> <span class="kc">None</span><span class="p">):</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Removing duplicate log: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">log_line</span><span class="p">))</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="n">parsed_logs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">log_line</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="k">continue</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Rescanning SMAPI logs&quot;</span><span class="p">)</span>
+            <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">t0</span>
+        <span class="c1"># Search for item_id in parsed_logs if specified</span>
+        <span class="k">if</span> <span class="n">item_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># wrap a bare string in a tuple so that the &#39;filter&#39; statements works</span>
+            <span class="c1"># as expected.</span>
+            <span class="c1">#if isinstance(item_id, basestring):</span>
+            <span class="c1">#    item_id = item_id,</span>
+            <span class="n">parsed_logs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="s1">&#39;args&#39;</span><span class="p">][</span><span class="s1">&#39;id&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="n">item_id</span><span class="p">),</span> <span class="n">parsed_logs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Parsed log output: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">parsed_logs</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">parsed_logs</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.wait_for_filtered_log"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.wait_for_filtered_log">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_filtered_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">smapi</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">calls</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;setPlayedSeconds&quot;</span><span class="p">],</span> <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+                              <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">expected_items</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+        <span class="n">final_logs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">smapi</span><span class="o">.</span><span class="n">get_smapi_call_logs</span><span class="p">(</span><span class="n">smapi_call</span><span class="o">=</span><span class="n">calls</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="n">item_id</span><span class="p">))</span>
+        <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+        <span class="n">elapsed_secs</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+        <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">expected_items</span> <span class="ow">and</span> <span class="n">elapsed_secs</span> <span class="o">&lt;</span> <span class="n">timeout</span><span class="p">:</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="n">iteration_delay</span><span class="p">)</span>
+            <span class="n">final_logs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">smapi</span><span class="o">.</span><span class="n">get_smapi_call_logs</span><span class="p">(</span><span class="n">smapi_call</span><span class="o">=</span><span class="n">calls</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="n">item_id</span><span class="p">))</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+            <span class="n">elapsed_secs</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+
+        <span class="k">if</span> <span class="n">expected_items</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">expected_items</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Received </span><span class="si">{}</span><span class="s2"> entries, expected </span><span class="si">{}</span><span class="s2"> for </span><span class="si">{}</span><span class="s2"> method &quot;</span>
+                                <span class="s2">&quot;on item &#39;</span><span class="si">{}</span><span class="s2">&#39; after waiting </span><span class="si">{}</span><span class="s2"> seconds.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">),</span>
+                                                                                <span class="n">expected_items</span><span class="p">,</span>
+                                                                                <span class="n">calls</span><span class="p">,</span>
+                                                                                <span class="n">item_id</span><span class="p">,</span>
+                                                                                <span class="n">elapsed_secs</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">final_logs</span><span class="p">,</span> <span class="n">elapsed_secs</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.get_track"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.get_track">[docs]</a>    <span class="k">def</span> <span class="nf">get_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_id</span><span class="p">):</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">GET_METADATA_URI</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span> <span class="n">item_id</span><span class="p">)))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">(),</span> <span class="n">encoding</span><span class="o">=</span><span class="s1">&#39;utf8&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span><span class="p">,</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Received HTTP </span><span class="si">{0}</span><span class="s2"> error attempting to get track for item </span><span class="si">{1}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">,</span> <span class="n">item_id</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.set_track"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.set_track">[docs]</a>    <span class="k">def</span> <span class="nf">set_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_id</span><span class="p">,</span> <span class="n">track</span><span class="p">):</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">GET_METADATA_URI</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span> <span class="n">item_id</span><span class="p">)),</span>
+            <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/json&#39;</span><span class="p">},</span> <span class="n">data</span><span class="o">=</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span><span class="s1">&#39;value&#39;</span><span class="p">:</span> <span class="n">track</span><span class="p">}))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span><span class="p">,</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Received HTTP </span><span class="si">{0}</span><span class="s2"> error attempting to set track for item </span><span class="si">{1}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">,</span> <span class="n">item_id</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.set_track_attribute"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.set_track_attribute">[docs]</a>    <span class="k">def</span> <span class="nf">set_track_attribute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_id</span><span class="p">,</span> <span class="n">attribute</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">GET_METADATA_URI</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_URI</span><span class="p">,</span> <span class="n">item_id</span><span class="p">))</span> <span class="o">+</span>
+            <span class="s1">&#39;/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attribute</span><span class="p">),</span> <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/json&#39;</span><span class="p">},</span>
+            <span class="n">data</span><span class="o">=</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span><span class="s1">&#39;value&#39;</span><span class="p">:</span> <span class="n">value</span><span class="p">}))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span><span class="p">,</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Received HTTP </span><span class="si">{0}</span><span class="s2"> error attempting to set track attribute for item </span><span class="si">{1}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">,</span> <span class="n">item_id</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="NodeSmapiControl.refresh_auth_token"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.NodeSmapiControl.refresh_auth_token">[docs]</a>    <span class="k">def</span> <span class="nf">refresh_auth_token</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="n">expire_token</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_SERVER_EXPIRE_TOKEN</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">expire_token</span><span class="p">)</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="n">wait</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Successfully expired account auth token(s)&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">HTTPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Attempt to expire tokens failed!&quot;</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl">[docs]</a><span class="k">class</span> <span class="nc">JavaNodeSmapiControl</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">JavaNodeSmapiControl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;SONOS.tests.webserver.helpers.NodeSmapiControl&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">network</span> <span class="o">=</span> <span class="n">Network</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">network</span><span class="o">.</span><span class="n">get_external_non_virtual_ips</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span> <span class="o">=</span> <span class="mi">200</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SERVICE_NAME</span> <span class="o">=</span> <span class="s1">&#39;JAVA MOCK SMAPI&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_SID</span> <span class="o">=</span> <span class="mi">253</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:8081/v2.1&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_SECURE_URI</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_AUTHTYPE</span> <span class="o">=</span> <span class="s1">&#39;UserId&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_STRINGS_VERSION</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_PRESENTATION_MAP_VERSION</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_STRINGS_VERSION</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_CONTAINER_TYPE</span> <span class="o">=</span> <span class="s1">&#39;MService&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_CAPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;search&#39;</span><span class="p">,</span> <span class="s1">&#39;trFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;alFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;ucPlaylists&#39;</span><span class="p">,</span> <span class="s1">&#39;logging&#39;</span><span class="p">,</span>
+                       <span class="s1">&#39;playbackLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;accountLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;extendedMD&#39;</span><span class="p">,</span> <span class="s1">&#39;mediaUriActions&#39;</span><span class="p">,</span>
+                       <span class="s1">&#39;contextHeaders&#39;</span><span class="p">,</span> <span class="s1">&#39;contextReporting&#39;</span><span class="p">,</span> <span class="s1">&#39;userInfo&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)</span> <span class="o">+</span> <span class="s1">&#39;/resources/&#39;</span>
+        <span class="n">download_jar</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">check_output</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{0}</span><span class="s1">get_mocksmapi.sh </span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_PATH</span><span class="p">),</span> <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">executable</span><span class="o">=</span><span class="s2">&quot;/bin/bash&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">download_jar</span><span class="p">)</span>
+        <span class="nb">print</span> <span class="s1">&#39;a&#39;</span>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.is_mock_smapi_running"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.is_mock_smapi_running">[docs]</a>    <span class="k">def</span> <span class="nf">is_mock_smapi_running</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        Check if Mocksmapi is already running</span>
+<span class="sd">        :return: bool</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="n">ping_endpoint</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;v2.1&#39;</span><span class="p">,</span> <span class="s1">&#39;ping&#39;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+          <span class="k">if</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ping_endpoint</span><span class="p">)</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">:</span>
+              <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Failed to get mocksmapi status.&quot;</span><span class="p">)</span>  
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.start_java_mocksmapi_server"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.start_java_mocksmapi_server">[docs]</a>    <span class="k">def</span> <span class="nf">start_java_mocksmapi_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_mock_smapi_running</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Mocksmapi: </span><span class="si">{}</span><span class="s2"> is already running&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span><span class="p">))</span>
+            <span class="k">return</span>
+        <span class="n">f</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;console_log.txt&quot;</span><span class="p">,</span> <span class="s2">&quot;w&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span><span class="s1">&#39;java -jar </span><span class="si">{0}</span><span class="s1">mockSmapiWithDB.jar -p </span><span class="si">{0}</span><span class="s1">automation_sessionId_mockSmapi.properties&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_PATH</span><span class="p">),</span>
+                                                  <span class="n">cwd</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SMAPI_PATH</span><span class="p">,</span> <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">f</span><span class="p">,</span> <span class="n">close_fds</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_ready</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.server_ready"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.server_ready">[docs]</a>    <span class="k">def</span> <span class="nf">server_ready</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">server_uri</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        In order to verify that the server has launched as is ready for use, we wait 7 seconds,</span>
+<span class="sd">        hit the &#39;/ping&#39; and verify that we get the expected response from the server</span>
+<span class="sd">        :param server_uri: The uri of the Java mockSMAPI server being used</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="n">ping_endpoint</span> <span class="o">=</span> <span class="n">server_uri</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;v2.1&#39;</span><span class="p">,</span> <span class="s1">&#39;ping&#39;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ping_endpoint</span><span class="p">)</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="mi">200</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Server is ready for use?&#39;</span><span class="p">,</span> <span class="n">start_delay</span><span class="o">=</span><span class="mf">7.0</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.java_mock_smapi_account_setup"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.java_mock_smapi_account_setup">[docs]</a>    <span class="k">def</span> <span class="nf">java_mock_smapi_account_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                                <span class="n">service_id</span><span class="o">=</span><span class="mi">253</span><span class="p">,</span>
+                                <span class="n">add_account</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">caps</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper method for adding a Java MockSMAPI account to a given ZP.</span>
+
+<span class="sd">        :param zp: player object</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int sid: smapi server ID</span>
+<span class="sd">        :param bool add_account: (Default: True) Add an account for</span>
+<span class="sd">            the service?</span>
+<span class="sd">        :param list caps: smapi server capabilities, will use default</span>
+<span class="sd">            if unspecified.</span>
+
+<span class="sd">        :return bool: Account added successfully?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">caps</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">caps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_CAPS</span>
+
+        <span class="c1"># Add service to ZP.</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_customsd</span><span class="p">(</span><span class="n">service_id</span><span class="p">,</span>
+                                    <span class="n">name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SERVICE_NAME</span><span class="p">,</span>
+                                    <span class="n">uri</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_URI</span><span class="p">,</span>
+                                    <span class="n">secure_uri</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_SECURE_URI</span><span class="p">,</span>
+                                    <span class="n">auth_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_AUTHTYPE</span><span class="p">,</span>
+                                    <span class="n">container_type</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_CONTAINER_TYPE</span><span class="p">,</span>
+                                    <span class="n">caps</span><span class="o">=</span><span class="n">caps</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">res</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; set_customsd failed!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="n">account_type</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">JAVA_SMAPI_SERVER_SID</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="mi">7</span>
+
+        <span class="c1"># Add account to ZP for service.</span>
+        <span class="k">if</span> <span class="n">add_account</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">AddAccountX</span><span class="p">(</span><span class="n">account_type</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="s2">&quot;c&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="n">account_type</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; failed to add account for SMAPI service!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.stop_java_mocksmapi_server"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.stop_java_mocksmapi_server">[docs]</a>    <span class="k">def</span> <span class="nf">stop_java_mocksmapi_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># We kill the server in this manner as we ran into issues where mockSmapiWithDB wasn&#39;t</span>
+            <span class="c1"># being destroyed when using self.JAVA_SMAPI_SERVER.pid or self.JAVA_SMAPI_SERVER.kill() we used</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">system</span><span class="p">(</span><span class="s1">&#39;pkill -f mockSmapiWithDB.jar&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Failed to kill server.&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="JavaNodeSmapiControl.java_smapi_account_teardown"><a class="viewcode-back" href="../../../webserver.helpers.html#upnp.api.systemproperties.test_edit_account_md.JavaNodeSmapiControl.java_smapi_account_teardown">[docs]</a>    <span class="k">def</span> <span class="nf">java_smapi_account_teardown</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sid</span><span class="o">=</span><span class="mi">253</span><span class="p">,</span> <span class="n">remove_account</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove the mock SMAPI service and account from a given zp.</span>
+
+<span class="sd">        :param zp: player object</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int sid: (Default: 253) smapi server ID</span>
+<span class="sd">        :param bool remove_account: (Default: True) Remove any account</span>
+<span class="sd">            associated with the service?</span>
+
+<span class="sd">        :return bool: Account successfully removed?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_java_mocksmapi_server</span><span class="p">()</span>
+        <span class="n">account_type</span> <span class="o">=</span> <span class="p">(</span><span class="n">sid</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">)</span> <span class="o">+</span> <span class="mi">7</span>
+        <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="k">if</span> <span class="n">remove_account</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">RemoveAccount</span><span class="p">(</span><span class="n">account_type</span><span class="p">,</span> <span class="s2">&quot;b&quot;</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="n">account_type</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; failed to remove account </span><span class="si">{}</span><span class="s2"> for SMAPI service!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">account_type</span><span class="p">))</span>
+                    <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">except</span> <span class="n">UPnPError</span><span class="p">,</span> <span class="n">err</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; UPnP remove account command failed (</span><span class="si">{}</span><span class="s2">) to remove account </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">err</span><span class="p">,</span> <span class="n">account_type</span><span class="p">))</span>
+                <span class="n">account_removed</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_customsd</span><span class="p">(</span><span class="n">sid</span><span class="o">=</span><span class="n">sid</span><span class="p">)</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">HTTP_OK</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; set_customsd failed!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">return</span> <span class="n">account_removed</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

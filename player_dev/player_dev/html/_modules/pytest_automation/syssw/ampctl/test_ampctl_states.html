@@ -1,0 +1,439 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.ampctl.test_ampctl_states &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.ampctl.test_ampctl_states</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test is used to verify the ampctl driver state machine by</span>
+<span class="sd">verifying devices can transition through all supported states. Because</span>
+<span class="sd">this is specific to the ampctl driver, only devices which use this driver</span>
+<span class="sd">are supported. Note: the use of &quot;error states&quot; in this test refers to both the</span>
+<span class="sd">fsm_error and fsm_amp_fault states a device&#39;s amps can be in.</span>
+
+<span class="sd">This design is based on the following documents:</span>
+<span class="sd">https://confluence.sonos.com/x/4sYqBw</span>
+<span class="sd">https://confluence.sonos.com/x/piIPBQ</span>
+
+<span class="sd">Because we verify all of the ampctl settings on a device are expected for</span>
+<span class="sd">each state, we can just use one command to transition the device through</span>
+<span class="sd">states instead of keeping track of a state machine map containing</span>
+<span class="sd">the functions required to transition a device from one state to the next.</span>
+<span class="sd">This is because the transition commands we use will try to toggle several</span>
+<span class="sd">ampctl settings, but only one will actually change depending on the device&#39;s</span>
+<span class="sd">state and this is verified by the test inherently (see the links above</span>
+<span class="sd">for more information).</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">HIGH_POWER_DEVICES</span>
+<span class="kn">from</span> <span class="nn">pytest_automation.syssw.common</span> <span class="k">import</span> <span class="n">DEVICES_WITH_UNIQUE_AMPCTL_STATES</span>
+<span class="kn">from</span> <span class="nn">common</span> <span class="k">import</span> <span class="p">(</span><span class="n">AmpctlState</span><span class="p">,</span> <span class="n">put_device_in_state</span><span class="p">,</span> <span class="n">clear_error_state</span><span class="p">,</span>
+                    <span class="n">get_expected_ampctl_settings</span><span class="p">,</span> <span class="n">ERROR_STATES</span><span class="p">)</span>
+
+<span class="c1"># These fixtures are used to clean/clear any ampctl settings that could</span>
+<span class="c1"># affect other tests at the end of all testing and check for unexpected dmesg</span>
+<span class="c1"># errors after each test case. Anacapa is killed because it is not required</span>
+<span class="c1"># for ampctl testing and useful for avoiding unwanted interference scenarios.</span>
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s2">&quot;cleanup_ampctl&quot;</span><span class="p">,</span> <span class="s2">&quot;check_and_clear_dmesg&quot;</span><span class="p">,</span>
+                                     <span class="s2">&quot;kill_anacapa_with_stopanacapa&quot;</span><span class="p">)</span>
+
+<span class="c1"># Max amount of time needed to transition states</span>
+<span class="n">STATE_TRANSITION_TIMEOUT_SEC</span> <span class="o">=</span> <span class="mi">5</span>
+
+
+<div class="viewcode-block" id="state_transition"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.state_transition">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">state_transition</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This fixture yields parametrized state transitions of the form</span>
+<span class="sd">    (start_state, end_state). This yields all possible state transitions</span>
+<span class="sd">    with the exception of error -&gt; non-error which are covered separately.</span>
+
+<span class="sd">    :returns: An ampctl state transition</span>
+<span class="sd">    :rtype: :obj:`Tuple` of :obj:`sonos.client.base.Ampctl` provided as</span>
+<span class="sd">            (start_state, end_state)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># This fixture is parametrized by pytest_generate_tests</span>
+    <span class="c1"># which can be found in the local conftest.py</span>
+    <span class="k">yield</span> <span class="n">request</span><span class="o">.</span><span class="n">param</span></div>
+
+
+<div class="viewcode-block" id="non_error_to_error_state_transition"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.non_error_to_error_state_transition">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">non_error_to_error_state_transition</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This fixture yields parametrized non-error -&gt; error state transitions</span>
+<span class="sd">    of the form (start_state, end_state). In these scenarios the transition out</span>
+<span class="sd">    of the error is also tested. Because transitioning out of an error state</span>
+<span class="sd">    requires knowledge of the state the device was in before reaching the error</span>
+<span class="sd">    state, a different test case and this fixture is needed to cover these</span>
+<span class="sd">    cases.</span>
+
+<span class="sd">    :returns: An ampctl state transition</span>
+<span class="sd">    :rtype: :obj:`Tuple` of :obj:`sonos.client.base.Ampctl` provided as</span>
+<span class="sd">            (start_state, end_state)</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># This fixture is parametrized by pytest_generate_tests</span>
+    <span class="c1"># which can be found in the local conftest.py</span>
+    <span class="k">yield</span> <span class="n">request</span><span class="o">.</span><span class="n">param</span></div>
+
+
+<div class="viewcode-block" id="ampctl_device_in_non_error_state"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.ampctl_device_in_non_error_state">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">ampctl_device_in_non_error_state</span><span class="p">(</span><span class="n">ampctl_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parametrized fixture that returns an ampctl supported</span>
+<span class="sd">    device that is not in an error state.</span>
+
+<span class="sd">    :returns: An ampctl device in a non-error state</span>
+<span class="sd">    :rtype: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Get the device out of any error states if it is in one</span>
+    <span class="n">device_state</span> <span class="o">=</span> <span class="n">ampctl_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_ampctl</span><span class="p">()</span><span class="o">.</span><span class="n">state</span>
+    <span class="k">for</span> <span class="n">error_state</span> <span class="ow">in</span> <span class="n">ERROR_STATES</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">device_state</span> <span class="o">==</span> <span class="n">error_state</span><span class="o">.</span><span class="n">value</span><span class="p">:</span>
+            <span class="n">clear_error_state</span><span class="p">(</span><span class="n">ampctl_device</span><span class="p">,</span> <span class="n">error_state</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">ampctl_device</span></div>
+
+
+<div class="viewcode-block" id="state_transition_case"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.state_transition_case">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">state_transition_case</span><span class="p">(</span><span class="n">state_transition</span><span class="p">,</span> <span class="n">ampctl_device_in_non_error_state</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parametrized fixture that returns a state transition</span>
+<span class="sd">    test case. The fixture is used to skip any test cases</span>
+<span class="sd">    that are not supported by a device.</span>
+
+<span class="sd">    :returns: An ampctl device, the start state, and the end state</span>
+<span class="sd">    :rtype: :obj:`Tuple` of (:obj:`sonos.client.internal.SonosZoneComponent`,</span>
+<span class="sd">                           :obj:`AmpctlState`, :obj:`AmpctlState`)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">state_transition</span> <span class="o">=</span> <span class="n">state_transition</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span> <span class="o">=</span> <span class="n">generate_state_transition_case</span><span class="p">(</span>
+            <span class="n">ampctl_device_in_non_error_state</span><span class="p">,</span> <span class="n">state_transition</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span></div>
+
+
+<div class="viewcode-block" id="non_error_to_error_state_transition_case"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.non_error_to_error_state_transition_case">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">non_error_to_error_state_transition_case</span><span class="p">(</span>
+        <span class="n">non_error_to_error_state_transition</span><span class="p">,</span> <span class="n">ampctl_device_in_non_error_state</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parametrized fixture that returns a non-error -&gt; error transition</span>
+<span class="sd">    test case. The fixture is used to skip any test cases</span>
+<span class="sd">    that are not suppored by a device.</span>
+
+<span class="sd">    :returns: An ampctl device, the start state, and the end state</span>
+<span class="sd">    :rtype: :obj:`Tuple` of (:obj:`sonos.client.internal.SonosZoneComponent`,</span>
+<span class="sd">                           :obj:`AmpctlState`, :obj:`AmpctlState`)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">state_transition</span> <span class="o">=</span> <span class="n">non_error_to_error_state_transition</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span> <span class="o">=</span> <span class="n">generate_state_transition_case</span><span class="p">(</span>
+            <span class="n">ampctl_device_in_non_error_state</span><span class="p">,</span> <span class="n">state_transition</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span></div>
+
+
+<div class="viewcode-block" id="generate_state_transition_case"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.generate_state_transition_case">[docs]</a><span class="k">def</span> <span class="nf">generate_state_transition_case</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">state_transition</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function used to generate an ampctl state transition test</span>
+<span class="sd">    case for a device. Skips high power state testing if the device</span>
+<span class="sd">    does not support high power.</span>
+
+<span class="sd">    :param device: A Sonos Zone Player</span>
+<span class="sd">    :type device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param state_transition: The start and end states to put the device in</span>
+<span class="sd">    :type state_transition: :obj:`Tuple` of (</span>
+<span class="sd">        :obj:`sonos.client.internal.SonosZoneComponent`,</span>
+<span class="sd">        :obj:`AmpctlState`, :obj:`AmpctlState`)</span>
+<span class="sd">    :returns: A device, the start state, and the end state</span>
+<span class="sd">    :rtype: :obj:`Tuple` of (:obj:`sonos.client.internal.SonosZoneComponent`,</span>
+<span class="sd">                           :obj:`AmpctlState`, :obj:`AmpctlState`)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span> <span class="o">=</span> <span class="n">state_transition</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">HIGH_POWER_DEVICES</span>
+            <span class="ow">and</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">RUN_HIGH</span> <span class="ow">in</span> <span class="n">state_transition</span><span class="p">):</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Skipping state transition case because device is not a &quot;</span>
+                    <span class="s2">&quot;high power device.&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span></div>
+
+
+<div class="viewcode-block" id="get_expected_state_after_error_clear"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.get_expected_state_after_error_clear">[docs]</a><span class="k">def</span> <span class="nf">get_expected_state_after_error_clear</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">state_before_error</span><span class="p">,</span>
+                                         <span class="n">error_state</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This function is used to get a device&#39;s expected state after</span>
+<span class="sd">    an error or fault is cleared from the device.</span>
+
+<span class="sd">    :param device: A Sonos Zone Player</span>
+<span class="sd">    :type device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param state_before_error: The device&#39;s state before reaching the error</span>
+<span class="sd">    :type state_before_error: :obj:`AmpctlState`</span>
+<span class="sd">    :param error_state: The error state the device was in</span>
+<span class="sd">                        (AmpctlState.FAULT or AmpctlState.ERROR)</span>
+<span class="sd">    :type error_state: :obj:`AmpctlState`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">DEVICES_WITH_UNIQUE_AMPCTL_STATES</span>
+            <span class="ow">and</span> <span class="n">error_state</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">FAULT</span><span class="p">):</span>
+        <span class="c1"># Unique ampctl devices will return to the RUN_LOW state</span>
+        <span class="c1"># after a fault regardless of the initial state</span>
+        <span class="n">expected_state</span> <span class="o">=</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">RUN_LOW</span>
+    <span class="k">elif</span> <span class="p">(</span><span class="n">state_before_error</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">POWER_STABLE</span>
+            <span class="ow">and</span> <span class="n">error_state</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">FAULT</span><span class="p">):</span>
+        <span class="c1"># Devices that start in the power stable state will</span>
+        <span class="c1"># return to the RUN_LOW state after a fault is cleared</span>
+        <span class="n">expected_state</span> <span class="o">=</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">RUN_LOW</span>
+    <span class="k">elif</span> <span class="p">(</span><span class="n">state_before_error</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">IDLE</span>
+            <span class="ow">and</span> <span class="n">error_state</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">ERROR</span><span class="p">):</span>
+        <span class="c1"># Devices that start in the idle state will return to the</span>
+        <span class="c1"># POWER_STABLE state after an error is cleared</span>
+        <span class="n">expected_state</span> <span class="o">=</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">POWER_STABLE</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># For all other cases after clearing the error/fault</span>
+        <span class="c1"># the device should return to it&#39;s initial state</span>
+        <span class="n">expected_state</span> <span class="o">=</span> <span class="n">state_before_error</span>
+    <span class="k">return</span> <span class="n">expected_state</span></div>
+
+
+<div class="viewcode-block" id="verify_device_in_state"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.verify_device_in_state">[docs]</a><span class="k">def</span> <span class="nf">verify_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">state</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies a device is in a given state and all expected ampctl</span>
+<span class="sd">    settings match the settings set on the device.</span>
+
+<span class="sd">    :param device: A Sonos Zone Player</span>
+<span class="sd">    :type device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param state: The state to verify</span>
+<span class="sd">    :type state: :obj:`AmpctlState`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Get current device settings and expected settings</span>
+    <span class="n">device_ampctl_settings</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_ampctl</span><span class="p">()</span>
+    <span class="n">expected_ampctl_settings</span> <span class="o">=</span> <span class="n">get_expected_ampctl_settings</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">state</span><span class="p">)</span>
+
+    <span class="c1"># We don&#39;t care about the state of the override setting</span>
+    <span class="c1"># and faults/errors do not cause the override value to change</span>
+    <span class="c1"># so copy the device&#39;s current override setting</span>
+    <span class="n">expected_override</span> <span class="o">=</span> <span class="n">device_ampctl_settings</span><span class="o">.</span><span class="n">override</span>
+    <span class="n">expected_ampctl_settings</span> <span class="o">=</span> <span class="n">expected_ampctl_settings</span><span class="o">.</span><span class="n">_replace</span><span class="p">(</span>
+            <span class="n">override</span><span class="o">=</span><span class="n">expected_override</span><span class="p">)</span>
+
+    <span class="c1"># Verify all settings, including device state, are expected by</span>
+    <span class="c1"># waiting for the settings to be correct. This is necessary because</span>
+    <span class="c1"># some devices require time for the amps to power on/off</span>
+    <span class="c1"># from different states or for when transitioning from high -&gt; low</span>
+    <span class="c1"># and vice versa</span>
+    <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_ampctl</span><span class="p">()</span> <span class="o">==</span> <span class="n">expected_ampctl_settings</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Failed to put device into state &#39;</span><span class="si">{}</span><span class="s2">&#39;. &quot;</span>
+                    <span class="s2">&quot;Current ampctl information: </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                    <span class="s2">&quot;Expected ampctl information: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">device_ampctl_settings</span><span class="p">,</span>
+                            <span class="n">expected_ampctl_settings</span><span class="p">)),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">STATE_TRANSITION_TIMEOUT_SEC</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="verify_state_transition"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.verify_state_transition">[docs]</a><span class="k">def</span> <span class="nf">verify_state_transition</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies a device can transition from a start state to an end state</span>
+<span class="sd">    by putting the device into the start state, verifying, and then putting</span>
+<span class="sd">    the device into an end state and verifying.</span>
+
+<span class="sd">    :param device: A Sonos Zone Player</span>
+<span class="sd">    :type device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param start_state: The initial state to transition from</span>
+<span class="sd">    :type start_state: :obj:`AmpctlState`</span>
+<span class="sd">    :param end_state: The state to transition to</span>
+<span class="sd">    :type end_state: :obj:`AmpctlState`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Put device into start state and verify state</span>
+    <span class="n">put_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">)</span>
+    <span class="n">verify_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">)</span>
+
+    <span class="c1"># Verify transition from start state to end state</span>
+    <span class="n">put_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">end_state</span><span class="p">)</span>
+    <span class="n">verify_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">end_state</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_state_transitions"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.test_state_transitions">[docs]</a><span class="k">def</span> <span class="nf">test_state_transitions</span><span class="p">(</span><span class="n">state_transition_case</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests all ampctl state transition cases supported by a device</span>
+<span class="sd">    except for cases where the start state is an error state and the</span>
+<span class="sd">    end state is a non-error state; these are covered by the</span>
+<span class="sd">    `test_clear_error_state` test case because information about the</span>
+<span class="sd">    state before the error state is needed.</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Put device into start state</span>
+<span class="sd">    2. Verify transition to end state</span>
+
+<span class="sd">    :param state_transition_case: Parametrized fixture that provides</span>
+<span class="sd">                                  an ampctl device and start/end states</span>
+<span class="sd">    :type state_transition_case: Function scoped fixture</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span> <span class="o">=</span> <span class="n">state_transition_case</span>
+
+    <span class="c1"># Put device into starting state and verify transition to end state</span>
+    <span class="n">verify_state_transition</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">end_state</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_clear_error_state"><a class="viewcode-back" href="../../../../pytest_automation.syssw.ampctl.html#pytest_automation.syssw.ampctl.test_ampctl_states.test_clear_error_state">[docs]</a><span class="k">def</span> <span class="nf">test_clear_error_state</span><span class="p">(</span><span class="n">non_error_to_error_state_transition_case</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests all ampctl state transitions supported by a device that</span>
+<span class="sd">    start in a non-error state and transition to an error state</span>
+<span class="sd">    (fault or error). After the transition is verified, the error state</span>
+<span class="sd">    is cleared and the device&#39;s post error state is verified because</span>
+<span class="sd">    it is dependent on the state the device was in before it reached</span>
+<span class="sd">    an error state. Currently this test does not cover the case of</span>
+<span class="sd">    non-error -&gt; error -&gt; error -&gt; (clear error) -&gt; non-error. This is,</span>
+<span class="sd">    however, inherently verified because the state transitions are</span>
+<span class="sd">    shuffled.</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Put device into start state</span>
+<span class="sd">    2. Verify transition to end state (in this case an error)</span>
+<span class="sd">    3. Clear the error state</span>
+<span class="sd">    4. Verify transition to the expected post-error state</span>
+
+<span class="sd">    :param non_error_to_error_state_transition_case:</span>
+<span class="sd">        Parametrized fixture that provides an ampctl device</span>
+<span class="sd">        and start/end states</span>
+<span class="sd">    :type non_error_to_error_state_transition_case: Function scoped fixture</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">error_state</span> <span class="o">=</span> <span class="n">non_error_to_error_state_transition_case</span>
+
+    <span class="c1"># Put device into starting state and verify transition to end state</span>
+    <span class="n">verify_state_transition</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">start_state</span><span class="p">,</span> <span class="n">error_state</span><span class="p">)</span>
+
+    <span class="c1"># FIXME SWPBL-116791 - don&#39;t skip clearing the error state</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">start_state</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span> <span class="n">error_state</span> <span class="o">==</span> <span class="n">AmpctlState</span><span class="o">.</span><span class="n">ERROR</span>
+            <span class="ow">and</span> <span class="n">device</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">DEVICES_WITH_UNIQUE_AMPCTL_STATES</span><span class="p">):</span>
+        <span class="c1"># There is a state machine issue where transitioning from</span>
+        <span class="c1"># idle -&gt; error and then clearing can result in an unexpected state</span>
+        <span class="c1"># if the device has been in the fault state previously, so skip</span>
+        <span class="c1"># the rest of this test case. See SWPBL-116791 for more information.</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Not clearing the error due to SWPBL-116791.&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># In this test the error_state is an ERROR or FAULT</span>
+        <span class="c1"># and has to be cleared</span>
+        <span class="n">clear_error_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">error_state</span><span class="p">)</span>
+
+        <span class="c1"># Verify the device returns to the expected state</span>
+        <span class="n">expected_state</span> <span class="o">=</span> <span class="n">get_expected_state_after_error_clear</span><span class="p">(</span><span class="n">device</span><span class="p">,</span>
+                                                              <span class="n">start_state</span><span class="p">,</span>
+                                                              <span class="n">error_state</span><span class="p">)</span>
+        <span class="n">verify_device_in_state</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">expected_state</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,805 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.autoplay.autoplay_base &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.autoplay.autoplay_base</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">gaierror</span>
+<span class="kn">import</span> <span class="nn">shutil</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">custom_enums</span> <span class="k">import</span> <span class="n">StringEnum</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">,</span>
+                                    <span class="n">AssertionLevel</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.avtransport</span> <span class="k">import</span> <span class="n">AVTransportStateTransitionTimer</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.tos_link_stream_helper</span> <span class="k">import</span> <span class="p">(</span><span class="n">TosLinkStreamHelper</span><span class="p">,</span>
+                                                 <span class="n">LineInStartHelper</span><span class="p">)</span>
+
+<span class="n">WEB_SRV_PORT</span> <span class="o">=</span> <span class="mi">8080</span>
+<span class="n">WEB_SRV_PATH</span> <span class="o">=</span> <span class="s2">&quot;.&quot;</span>
+<span class="n">LINEIN_TRACK_PATH</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba/Automation/cpu/MaggieFarm/&#39;</span>
+<span class="n">LINE_IN_TRACK</span> <span class="o">=</span> <span class="n">LINEIN_TRACK_PATH</span> <span class="o">+</span> <span class="s1">&#39;MaggieFarm.mp3&#39;</span>
+
+<span class="n">TV_TRACK</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;/srv/samba/Automation/long_tracks/AC-3/&#39;</span>
+            <span class="s1">&#39;X-Men Days of Future Past.ac3&#39;</span><span class="p">)</span>
+<span class="c1"># music track and path</span>
+<span class="n">TRACKS_PATH</span> <span class="o">=</span> <span class="s1">&#39;/Automation/cpu/MaggieFarm/&#39;</span>
+<span class="n">TRACKS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;mp3&#39;</span><span class="p">:</span> <span class="s1">&#39;MaggieFarm.mp3&#39;</span><span class="p">}</span>
+
+<span class="c1"># diagcs to turn on when running test</span>
+<span class="n">DIAGCS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;buttons&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;zp&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;chsnk&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;chsrc&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;ai_implzp&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;rc_impl&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;avt_impl&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;topology&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+          <span class="s1">&#39;SLI&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+          <span class="s1">&#39;upnp&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+          <span class="s1">&#39;mixthrd&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;mixer&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;htap&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;ai_impl&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;ai_impl_base&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;htap_autostop&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+          <span class="s1">&#39;htsnk&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;htsrc&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+          <span class="s1">&#39;spdif&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">}</span>
+
+<span class="n">LINEIN_SOURCE</span> <span class="o">=</span> <span class="s1">&#39;linein_source&#39;</span>
+<span class="n">PLAYBACK_PLAYER</span> <span class="o">=</span> <span class="s1">&#39;playback_player&#39;</span>
+<span class="n">LINEIN_AND_PLAYBACK_PLAYER</span> <span class="o">=</span> <span class="s1">&#39;linein_and_playback_player&#39;</span>
+
+<span class="c1"># playback state</span>
+<span class="n">PLAYING</span> <span class="o">=</span> <span class="s1">&#39;playing_music&#39;</span>
+<span class="n">IDLE</span> <span class="o">=</span> <span class="s1">&#39;idle&#39;</span>
+
+<span class="c1"># Keep linked on autoplay ?</span>
+<span class="n">LINKED_ON_AUTOPLAY</span> <span class="o">=</span> <span class="s1">&#39;linked_on_autoplay&#39;</span>
+<span class="n">UNLINK_ON_AUTOPLAY</span> <span class="o">=</span> <span class="s1">&#39;unlink_on_autoplay&#39;</span>
+
+<span class="c1"># line in or tv content start before or after autoplay enabled</span>
+<span class="n">AUTOPLAY_ENABLED_BEFORE_CONTENT_START</span> <span class="o">=</span> <span class="s1">&#39;autoplay_enabled_before_content_start&#39;</span>
+<span class="n">AUTOPLAY_ENABLED_AFTER_CONTENT_START</span> <span class="o">=</span> <span class="s1">&#39;autoplay_enabled_after_content_start&#39;</span>
+
+<span class="c1"># Autostop for HT device spdif content. Default is 10 minutes. Autostop</span>
+<span class="c1"># engages after 601 seconds. For test purpose, we can set a reduced autostop</span>
+<span class="c1"># time in player&#39;s localsettings.txt file in jffs. After this players</span>
+<span class="c1"># avt is reset to nothing or whatever it was playing previously.</span>
+<span class="n">HT_AUTOSTOP_THRESHOLD</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">HT_AUTOSTOP_STEADY_STATE_BUFFER_TIME</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">HT_AUTOSTOP_SILENCE_ACCUMULATION_TIME</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="c1"># log detection string</span>
+<span class="n">HT_AUTOSTOP</span> <span class="o">=</span> <span class="s1">&#39;(?:\d+) seconds of silence detected. Engaging auto stop&#39;</span>
+
+<span class="c1"># allow playback for 20 seconds before verifying avt, playback state etc.</span>
+<span class="n">ALLOW_PLAYBACK_TIME</span> <span class="o">=</span> <span class="mi">20</span>
+
+<span class="n">SRC_DETECT_TIMEOUT</span> <span class="o">=</span> <span class="mi">20</span>
+
+<span class="c1"># for detecting wav, mp3 or sbc playback start Diagc: chsnk level 2</span>
+<span class="n">STARTING_AUDIO_DECODER</span> <span class="o">=</span> <span class="s1">&#39;starting (?:sbc|wav|mp3) audio decoder&#39;</span>
+
+<span class="c1"># for detecting when device goes in idle state when there is no content from</span>
+<span class="c1"># line in</span>
+<span class="n">ENTER_IDLE_STATE</span> <span class="o">=</span> <span class="s1">&#39;entering idle state&#39;</span>
+
+<span class="c1"># for ht_master devices. Diagc : htap level 2</span>
+<span class="n">PLAYING_CHSNK</span> <span class="o">=</span> <span class="s1">&#39;Change of source requested: new chsnk&#39;</span>
+<span class="n">PLAYING_SPDIF</span> <span class="o">=</span> <span class="s1">&#39;Change of source requested: new spdif&#39;</span>
+
+<span class="c1"># codecs</span>
+<span class="n">WAV</span> <span class="o">=</span> <span class="s1">&#39;wav&#39;</span>
+<span class="n">MP3</span> <span class="o">=</span> <span class="s1">&#39;mp3&#39;</span>
+<span class="n">SBC</span> <span class="o">=</span> <span class="s1">&#39;sbc&#39;</span>
+
+
+<span class="c1"># Allow playback from SPDIF source to continue for 60 seconds before proceeding</span>
+<span class="c1"># to next test</span>
+<span class="n">SPDIF_PLAYBACK_TIME</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="n">STREAM_TYPE</span> <span class="o">=</span> <span class="s2">&quot;Dolby Digital 5.1&quot;</span>
+<span class="n">SPDIF_SILENCE_THRESHOLD_SECS</span> <span class="o">=</span> <span class="mi">10</span>
+
+
+<span class="c1"># for autostop test</span>
+<span class="n">LOCAL</span> <span class="o">=</span> <span class="s1">&#39;local&#39;</span>
+<span class="n">REMOTE</span> <span class="o">=</span> <span class="s1">&#39;remote&#39;</span>
+<span class="c1"># user stop action</span>
+<span class="n">CONTROLLER</span> <span class="o">=</span> <span class="s1">&#39;controller&#39;</span>
+<span class="n">BUTTON</span> <span class="o">=</span> <span class="s1">&#39;button&#39;</span>
+
+
+<div class="viewcode-block" id="AutoPlaySource"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlaySource">[docs]</a><span class="k">class</span> <span class="nc">AutoPlaySource</span><span class="p">(</span><span class="n">StringEnum</span><span class="p">):</span>
+    <span class="n">LINEIN</span> <span class="o">=</span> <span class="s1">&#39;RCA&#39;</span>
+    <span class="n">SPDIF</span> <span class="o">=</span> <span class="s1">&#39;TV&#39;</span></div>
+
+
+<div class="viewcode-block" id="AutoPlayBase"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase">[docs]</a><span class="k">class</span> <span class="nc">AutoPlayBase</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Autoplay tests base class for linein and spdif autoplay</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="AutoPlayBase.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">playback_device</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">line_in_devices</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;AudioIn&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">AudioIn</span><span class="o">.</span><span class="n">LineInConnected</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">line_in_devices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">line_in_devices</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                                 <span class="s2">&quot;Number of line-in devices &gt; 0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span>
+                           <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                                 <span class="s2">&quot;Number of HT maters &gt; 0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">local_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_path</span> <span class="o">+</span> <span class="s1">&#39;/resource/&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_tracks</span><span class="p">(</span><span class="n">tracks</span><span class="o">=</span><span class="n">TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span> <span class="n">path</span><span class="o">=</span><span class="n">TRACKS_PATH</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_webserver</span><span class="p">(</span><span class="n">handlers</span><span class="o">=</span><span class="n">TRACKS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_track_uris</span><span class="p">(</span><span class="n">TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_diagcs</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">setup_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup test. Cleanup devices and set initial values.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup test&quot;</span><span class="p">)</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_idle_state</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_sbc</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_wav</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_mp3</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_chsnk</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_spdif</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">autostopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_sbc</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_wav</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_mp3</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Teardown fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Teardown fixture&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;websrv&#39;</span><span class="p">):</span>
+            <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Stopping web server&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_diagcs</span><span class="p">(</span><span class="n">clear</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.set_diagcs"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.set_diagcs">[docs]</a>    <span class="k">def</span> <span class="nf">set_diagcs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">clear</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set diagcs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting diagc&#39;s&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">clear</span><span class="p">:</span>
+                <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="n">DIAGCS</span><span class="p">[</span><span class="n">diagc</span><span class="p">])</span>
+                 <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.setup_webserver"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.setup_webserver">[docs]</a>    <span class="k">def</span> <span class="nf">setup_webserver</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">handlers</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup local web server</span>
+<span class="sd">        :param handlers: Basically dictionary of tracks to serve up</span>
+<span class="sd">        :type handlers: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting web server&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">WEB_SRV_PORT</span><span class="p">,</span>
+                              <span class="bp">self</span><span class="o">.</span><span class="n">local_path</span><span class="p">,</span>
+                              <span class="n">handlers</span><span class="o">=</span><span class="n">handlers</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Could not start web server&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started web server&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.get_track_uris"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.get_track_uris">[docs]</a>    <span class="k">def</span> <span class="nf">get_track_uris</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tracks</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get track uri list for tracks given the source (local webserver or</span>
+<span class="sd">        nas</span>
+<span class="sd">        :param tracks: List of tracks</span>
+<span class="sd">        :type tracks: :`list`</span>
+<span class="sd">        :return: List of uris</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Getting </span><span class="si">{}</span><span class="s2"> uris&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tracks</span><span class="p">))</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="n">tracks</span><span class="p">:</span>
+            <span class="n">uri</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/resource/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">track</span><span class="p">)</span>
+            <span class="n">track_uris</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">uri</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">track_uris</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.setup_udp_logger"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.setup_udp_logger">[docs]</a>    <span class="k">def</span> <span class="nf">setup_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup udp logger and pass in callbacks for strings we are looking for</span>
+<span class="sd">        :param zp: sonos zone player for which to setup udp logger</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up udp logger on : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">gaierror</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger port error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">ENTER_IDLE_STATE</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_enter_idle_state</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">HT_AUTOSTOP</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_autostop</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">STARTING_AUDIO_DECODER</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_detected_playing</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="n">PLAYING_CHSNK</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_detected_playing</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="n">PLAYING_SPDIF</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_detected_playing</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.restore_udplogger_diagcs"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.restore_udplogger_diagcs">[docs]</a>    <span class="k">def</span> <span class="nf">restore_udplogger_diagcs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Restore udplogger and diagc after reboot of zps. Turn of amps</span>
+
+<span class="sd">        :param list zps: List of sonos zone components on which to restore</span>
+<span class="sd">            udplogger and diags</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">setup_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="n">DIAGCS</span><span class="p">[</span><span class="n">diagc</span><span class="p">])</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.get_tracks"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.get_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">get_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tracks</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Copy tracks from local disc for web hosting</span>
+<span class="sd">        :param list tracks: List of tracks to copy, default CPU tracks</span>
+<span class="sd">        :param str path: Path to copy tracks from. Default CPU track location</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Getting </span><span class="si">{}</span><span class="s2"> from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tracks</span><span class="p">,</span> <span class="n">path</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="n">sftp</span><span class="o">.</span><span class="n">chdir</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Available tracks on nas : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sftp</span><span class="o">.</span><span class="n">listdir</span><span class="p">()))</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="n">tracks</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Copying test track: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">track</span><span class="p">))</span>
+                    <span class="n">src</span> <span class="o">=</span> <span class="n">path</span> <span class="o">+</span> <span class="n">track</span>
+                    <span class="n">dst</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">+</span> <span class="n">track</span>
+                    <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">IOError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Required tracks not available&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.cleanup"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.cleanup">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear avt and queue, remove bonded config if it exists</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing cleanup&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">(</span><span class="n">timeout_standalone_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">SPDIF_SILENCE_THRESHOLD_SECS</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s1">&#39;TV&#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="s1">&#39;RCA&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.cb_enter_idle_state"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.cb_enter_idle_state">[docs]</a>    <span class="k">def</span> <span class="nf">cb_enter_idle_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on detecting error string</span>
+<span class="sd">        :param str msg: idle state log message</span>
+<span class="sd">        :param zp: Sonos zone component on which idle state log message found</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Detected : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_idle_state</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.cb_autostop"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.cb_autostop">[docs]</a>    <span class="k">def</span> <span class="nf">cb_autostop</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on detecting autostop for zp</span>
+<span class="sd">        :param str msg: autostop log message</span>
+<span class="sd">        :param zp: Sonos zone component on which autostop message found</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Detected : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">autostopped</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.cb_detected_playing"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.cb_detected_playing">[docs]</a>    <span class="k">def</span> <span class="nf">cb_detected_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on detecting tv or linein (sbc) or music playback</span>
+<span class="sd">        :param str msg: anacapa trace line containing detected string</span>
+<span class="sd">        :param zp: Sonos zone component from which to submit</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected playing: </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">WAV</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_wav</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">elif</span> <span class="n">SBC</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_sbc</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">elif</span> <span class="n">MP3</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_mp3</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="c1"># conditions below only occur for HT master devices</span>
+        <span class="k">if</span> <span class="n">PLAYING_SPDIF</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_spdif</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">elif</span> <span class="n">PLAYING_CHSNK</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_chsnk</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.collect_anacapa_trace_from_devices"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.collect_anacapa_trace_from_devices">[docs]</a>    <span class="k">def</span> <span class="nf">collect_anacapa_trace_from_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">devices</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Collect anacapa trace from &#39;devices&#39;</span>
+<span class="sd">        :param list devices: List of sonos zone components to collect trace from</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># get anacapa log from the player.</span>
+        <span class="n">date_time_str</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s1">&#39;%H_%M_%S&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">:</span>
+            <span class="n">trace_log</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_anacapa.trace&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span>
+                                                     <span class="n">date_time_str</span><span class="p">)</span>
+            <span class="n">trace</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_anacapa_trace</span><span class="p">()</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">trace_log</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">trace</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Anacapa trace saved to: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">trace_log</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.add_tracks_to_queue"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.add_tracks_to_queue">[docs]</a>    <span class="k">def</span> <span class="nf">add_tracks_to_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add tracks to queue.</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Adding tracks to queue on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="c1"># tracks</span>
+        <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">track</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.start_playback"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start playback</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Beginning playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_tracks_to_queue</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">set_queue_position</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;REPEAT_ALL&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.verify_autoplay"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.verify_autoplay">[docs]</a>    <span class="k">def</span> <span class="nf">verify_autoplay</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                        <span class="n">source_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">autoplay_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">gms</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">source</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">autoplay_linked_config</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify autoplay on autoplay zone player as well as group members</span>
+<span class="sd">        depending on autoplay link config</span>
+
+<span class="sd">        :param source_zp: linein or spdif source player</span>
+<span class="sd">        :type source_zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param autoplay_zp: Line in or spdif autoplay player</span>
+<span class="sd">        :type autoplay_zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param list gms: List of sonos zone component</span>
+<span class="sd">        :param str source: Line in or spdif</span>
+<span class="sd">        :param str autoplay_linked_config: AutoPlay Linked Zones config</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying autoplay and linked state&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Source ZP: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">Autoplay ZP: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">Source: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">GMs: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">AutoplayOnLinkedZones: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_zp</span><span class="p">,</span> <span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span>
+                                 <span class="n">gms</span><span class="p">,</span> <span class="n">autoplay_linked_config</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">LINEIN</span><span class="p">:</span>
+            <span class="n">expected_uri</span> <span class="o">=</span> <span class="s1">&#39;x-rincon-stream:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">SPDIF</span><span class="p">:</span>
+            <span class="n">expected_uri</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;x-sonos-htastream:</span><span class="si">{}</span><span class="s1">:spdif&#39;</span>
+                            <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span>
+        <span class="c1"># verify autoplay on autoplay zp.</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">ALLOW_PLAYBACK_TIME</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span> <span class="ow">and</span>
+                         <span class="n">expected_uri</span> <span class="o">==</span>
+                         <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Playing state: </span><span class="si">{}</span><span class="s2">. Current URI: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span>
+                        <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()))</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Playing state: </span><span class="si">{}</span><span class="s2">. Current URI: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span>
+                                     <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                                     <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span>
+                                     <span class="n">get_avtransport_uri</span><span class="p">()))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">collect_anacapa_trace_from_devices</span><span class="p">([</span><span class="n">source_zp</span><span class="p">,</span> <span class="n">autoplay_zp</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expect to be playing </span><span class="si">{}</span><span class="s2"> but device is &quot;</span>
+                      <span class="s2">&quot;not in playing state&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">source</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Playing expected source: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                            <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">source</span><span class="p">))</span>
+            <span class="c1"># verify autoplay on zps grouped to autoplay_zp if configured so</span>
+            <span class="c1"># verify codec being played on autoplay zps.</span>
+            <span class="k">if</span> <span class="n">gms</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">autoplay_linked_config</span> <span class="o">==</span> <span class="n">UNLINK_ON_AUTOPLAY</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">are_all_zps_unlinked</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span>
+                            <span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                            <span class="s2">&quot;GMs not playing Line in content.&quot;</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Expect no zps linked to autoplay zp: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">))</span>
+                <span class="k">elif</span> <span class="n">autoplay_linked_config</span> <span class="o">==</span> <span class="n">LINKED_ON_AUTOPLAY</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">LINEIN</span><span class="p">:</span>
+                        <span class="c1"># if number of remotes meaning non source player are</span>
+                        <span class="c1"># 3 or more, we switch to SBC codec. Else we use WAV</span>
+                        <span class="c1"># get number of gms to hit threshold to switch codec</span>
+                        <span class="k">if</span> <span class="n">source_zp</span> <span class="o">==</span> <span class="n">autoplay_zp</span><span class="p">:</span>
+                            <span class="n">wav_threshold</span> <span class="o">=</span> <span class="mi">2</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="n">wav_threshold</span> <span class="o">=</span> <span class="mi">1</span>
+                            <span class="c1"># in this case, if number of wired gms are 3 of more</span>
+                            <span class="c1"># we expect SBC codec to be used.</span>
+                        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">wav_threshold</span><span class="p">:</span>
+                            <span class="n">codec</span> <span class="o">=</span> <span class="n">SBC</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="n">codec</span> <span class="o">=</span> <span class="n">WAV</span>
+                    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">SPDIF</span><span class="p">:</span>
+                        <span class="n">codec</span> <span class="o">=</span> <span class="n">SBC</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">are_all_zps_linked</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                                        <span class="s2">&quot;All GMs linked to </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">))</span>
+                        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_devices_playing</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="n">codec</span><span class="p">):</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span>
+                                <span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                                <span class="s2">&quot;All line devices playing </span><span class="si">{}</span><span class="s2"> content&quot;</span>
+                                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source</span><span class="p">))</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Some or all devices not playing </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                      <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source</span><span class="p">))</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;All zps not linked&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.verify_devices_playing"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.verify_devices_playing">[docs]</a>    <span class="k">def</span> <span class="nf">verify_devices_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">devices</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify devices are playing specified codec</span>
+
+<span class="sd">        :param list devices: List of sonos zone component</span>
+<span class="sd">        :param str codec: Codec</span>
+<span class="sd">        :return: Did devices play specified codec ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying if devices playing </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">codec</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Devices: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">devices</span><span class="p">))</span>
+        <span class="n">devices_playing</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">codec</span> <span class="o">==</span> <span class="n">MP3</span><span class="p">:</span>
+            <span class="n">devices_playing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_mp3</span>
+        <span class="k">elif</span> <span class="n">codec</span> <span class="o">==</span> <span class="n">SBC</span><span class="p">:</span>
+            <span class="n">devices_playing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_sbc</span>
+        <span class="k">elif</span> <span class="n">codec</span> <span class="o">==</span> <span class="n">WAV</span><span class="p">:</span>
+            <span class="n">devices_playing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_wav</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">all</span><span class="p">([</span><span class="n">devices_playing</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span>
+                                         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">]),</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+
+            <span class="c1"># print which devices are NOT playing for easier debugging</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;All devices not playing codec </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span>
+                             <span class="s2">&quot;devices_playing: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span>
+                             <span class="s2">&quot;Devices playing SBC: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span>
+                             <span class="s2">&quot;Devices playing WAV: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span>
+                             <span class="s2">&quot;Devices playing MP3: &quot;</span>
+                             <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">codec</span><span class="p">,</span> <span class="n">devices_playing</span><span class="p">,</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">playing_sbc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_wav</span><span class="p">,</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">playing_mp3</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.get_num_zps_linked"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.get_num_zps_linked">[docs]</a>    <span class="k">def</span> <span class="nf">get_num_zps_linked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get number of zps from gms list linked to gc</span>
+
+<span class="sd">        :param gc: Sonos zone component that is group coordinator</span>
+<span class="sd">        :type gc: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param list gms: List of sonos zone components expected to be group</span>
+<span class="sd">            members</span>
+<span class="sd">        :return: Number of zones from gms linked to gc</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">num_zps_linked</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">():</span>
+                <span class="n">num_zps_linked</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: in group with GC: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">gc</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Not in group with GC: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">gc</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">num_zps_linked</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">gms</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;All GMs linked to GC&quot;</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">num_zps_linked</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No ZPs linked to GC&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">num_zps_linked</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.are_all_zps_linked"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.are_all_zps_linked">[docs]</a>    <span class="k">def</span> <span class="nf">are_all_zps_linked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check if all zone players in gms list are linked to gc</span>
+
+<span class="sd">        :param gc: Sonos zone component that is group coordinator</span>
+<span class="sd">        :type gc: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param list gms: List of sonos zone components that are gms</span>
+<span class="sd">        :return: are all zps from gms list linked to gc</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                            <span class="nb">len</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_num_zps_linked</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.are_all_zps_unlinked"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.are_all_zps_unlinked">[docs]</a>    <span class="k">def</span> <span class="nf">are_all_zps_unlinked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check none of zone players in gms list are linked to gc</span>
+
+<span class="sd">        :param gc: Sonos zone component that is group coordinator</span>
+<span class="sd">        :type gc: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param list gms: List of sonos zone components that are gms</span>
+<span class="sd">        :return: are all zps from gms list unlinked from gc</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="mi">0</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_num_zps_linked</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.do_test"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.do_test">[docs]</a>    <span class="k">def</span> <span class="nf">do_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                <span class="n">when_autoplay_enabled</span><span class="p">,</span>
+                <span class="n">source_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">autoplay_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">mplayer</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">track</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">source</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">playback_state</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="n">gms</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">autoplay_linked_config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">verify_ht_state</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Do autoplay test</span>
+
+<span class="sd">        :param str when_autoplay_enabled: Autoplay enabled before or after</span>
+<span class="sd">            content start</span>
+<span class="sd">        :param source_zp: Sonos zone component that is source of linein/spdif</span>
+<span class="sd">            content</span>
+<span class="sd">        :type source_zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param autoplay_zp: Sonos zone component that plays lines/spdif content</span>
+<span class="sd">        :param autoplay_zp: Sonos zone component that is source of linein/spdif</span>
+<span class="sd">            content</span>
+<span class="sd">        :param mplayer: mplayer context manager to play linein/spdif content</span>
+<span class="sd">        :type mplayer: :class:`~MplayerPlayback`</span>
+<span class="sd">        :param str track: Track to play using mplayer</span>
+<span class="sd">        :param str source: Source linein or spdif</span>
+<span class="sd">        :param str playback_state: Initial playback state of autoplay zp</span>
+<span class="sd">        :param list gms: List of sonos zone componets that are GMs</span>
+<span class="sd">        :param str autoplay_linked_config: AutoplayLinkedZone config</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing autoplay test&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Group members: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gms</span><span class="p">))</span>
+            <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">autoplay_linked_config</span> <span class="o">==</span> <span class="n">LINKED_ON_AUTOPLAY</span><span class="p">:</span>
+            <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayLinkedZones</span><span class="p">(</span>
+                <span class="kc">True</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">autoplay_linked_config</span> <span class="o">==</span> <span class="n">UNLINK_ON_AUTOPLAY</span><span class="p">:</span>
+            <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayLinkedZones</span><span class="p">(</span>
+                <span class="kc">False</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">playback_state</span> <span class="o">==</span> <span class="n">PLAYING</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">when_autoplay_enabled</span> <span class="o">==</span> <span class="n">AUTOPLAY_ENABLED_BEFORE_CONTENT_START</span><span class="p">:</span>
+            <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span>
+                <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">==</span> <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetAutoplayRoomUUID</span><span class="p">(</span><span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">),</span>
+                <span class="s2">&quot;Expect autoplay to be set on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_zp</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">LINEIN</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting mplayer playback to line in source&quot;</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">SPDIF</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting mplayer ac3 playback to ht master&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unexpected source </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source</span><span class="p">))</span>
+        <span class="k">with</span> <span class="n">mplayer</span><span class="p">(</span><span class="n">track</span><span class="p">)</span> <span class="k">as</span> <span class="n">mplayer_h</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">when_autoplay_enabled</span> <span class="o">==</span> <span class="n">AUTOPLAY_ENABLED_AFTER_CONTENT_START</span><span class="p">:</span>
+                <span class="c1"># play content for couple of seconds before setting autoplay</span>
+                <span class="c1"># room</span>
+                <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+                <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span>
+                    <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                    <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">==</span>
+                    <span class="n">source_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetAutoplayRoomUUID</span><span class="p">(</span>
+                        <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="o">.</span><span class="n">value</span><span class="p">),</span>
+                    <span class="s2">&quot;Expect autoplay to be set on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_zp</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">AutoPlaySource</span><span class="o">.</span><span class="n">LINEIN</span><span class="p">:</span>
+                <span class="n">LineInStartHelper</span><span class="p">(</span><span class="n">mplayer_h</span><span class="p">,</span> <span class="n">source_zp</span><span class="p">,</span> <span class="n">autoplay_zp</span><span class="p">,</span>
+                                  <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span><span class="o">.</span><span class="n">verify_linein_start</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">TosLinkStreamHelper</span><span class="p">(</span>
+                    <span class="n">mplayer_h</span><span class="p">,</span>
+                    <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span><span class="o">.</span><span class="n">verify_tos_link_stream_type</span><span class="p">(</span>
+                        <span class="n">autoplay_zp</span><span class="p">,</span>
+                        <span class="n">STREAM_TYPE</span><span class="p">,</span>
+                        <span class="mi">10</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_autoplay</span><span class="p">(</span><span class="n">source_zp</span><span class="o">=</span><span class="n">source_zp</span><span class="p">,</span>
+                                 <span class="n">autoplay_zp</span><span class="o">=</span><span class="n">autoplay_zp</span><span class="p">,</span>
+                                 <span class="n">gms</span><span class="o">=</span><span class="n">gms</span><span class="p">,</span>
+                                 <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span>
+                                 <span class="n">autoplay_linked_config</span><span class="o">=</span><span class="n">autoplay_linked_config</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">verify_ht_state</span><span class="p">:</span>
+                <span class="n">stream_type</span> <span class="o">=</span> <span class="n">autoplay_zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                    <span class="n">stream_type</span> <span class="o">==</span> <span class="n">STREAM_TYPE</span><span class="p">,</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expected stream type: </span><span class="si">{}</span><span class="s2">. Actual stream type: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">,</span> <span class="n">STREAM_TYPE</span><span class="p">,</span> <span class="n">stream_type</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verify_avts_not_changed</span><span class="p">(</span><span class="n">autoplay_zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayBase.verify_avts_not_changed"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.autoplay_base.AutoPlayBase.verify_avts_not_changed">[docs]</a>    <span class="k">def</span> <span class="nf">verify_avts_not_changed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify no avt state change on ht master device ht_master to continue</span>
+<span class="sd">        playing for atleast SPDIF_PLAYBACK_TIME</span>
+<span class="sd">        :param ht_master: Sonos zone component - New gc of group</span>
+<span class="sd">        :type ht_master: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :return: avts_unchanged</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying avt state has not changed on </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+        <span class="n">avts</span> <span class="o">=</span> <span class="n">AVTransportStateTransitionTimer</span><span class="p">(</span><span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="p">)</span>
+        <span class="n">avts_unchanged</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">avts</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">SPDIF_PLAYBACK_TIME</span> <span class="o">+</span> <span class="mi">2</span><span class="p">,</span> <span class="n">SPDIF_PLAYBACK_TIME</span> <span class="o">-</span> <span class="mi">2</span><span class="p">,</span>
+                   <span class="n">user_defined_start_states</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;PLAYING&quot;</span><span class="p">,</span> <span class="s2">&quot;TRANSITIONING&quot;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Elapsed time without change in avt state: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">avts</span><span class="o">.</span><span class="n">elapsed</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">avts</span><span class="o">.</span><span class="n">expiry</span><span class="p">:</span>
+            <span class="n">avts_unchanged</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> did not stay in &quot;Playing&quot; state for at least </span><span class="si">{}</span><span class="s1"> secs.&#39;</span>
+                      <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">SPDIF_PLAYBACK_TIME</span> <span class="o">-</span> <span class="mi">2</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">avts</span><span class="o">.</span><span class="n">state_changed</span><span class="p">:</span>
+            <span class="n">avts_unchanged</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&#39;s TransportState changed unexpectedly expected &quot;</span>
+                      <span class="s2">&quot;after </span><span class="si">{}</span><span class="s2"> secs.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">avts</span><span class="o">.</span><span class="n">elapsed</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">avts_unchanged</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

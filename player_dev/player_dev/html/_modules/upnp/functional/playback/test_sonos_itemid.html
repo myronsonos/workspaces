@@ -1,0 +1,387 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.playback.test_sonos_itemid &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.playback.test_sonos_itemid</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This is a test script to verify playback of SMAPI tracks that use of flags</span>
+<span class="sd">after RSonosItemId has been refactored. This test considers backward compatibility</span>
+<span class="sd">for tracks that make use of any new flags</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">sonos.subnet</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">import</span> <span class="nn">webserver.helpers.node_smapi_control</span>
+<span class="kn">from</span> <span class="nn">xml.sax.saxutils</span> <span class="k">import</span> <span class="n">escape</span>
+<span class="kn">import</span> <span class="nn">upnp.helpers</span>
+<span class="kn">import</span> <span class="nn">re</span>
+
+<span class="n">RSONOSCP_FLAG_AUTHREQUIRED</span>  <span class="o">=</span> <span class="mh">0x00000001</span>
+<span class="n">RSONOSCP_FLAG_CANSCROLL</span>     <span class="o">=</span> <span class="mh">0x00000002</span>
+<span class="n">RSONOSCP_FLAG_CANENUMERATE</span>  <span class="o">=</span> <span class="mh">0x00000004</span>
+<span class="n">RSONOSCP_FLAG_CANPLAY</span>       <span class="o">=</span> <span class="mh">0x00000008</span>
+<span class="n">RSONOSCP_FLAG_RESTRICTED</span>    <span class="o">=</span> <span class="mh">0x00000010</span>
+<span class="n">RSONOSCP_FLAG_CANADD</span>        <span class="o">=</span> <span class="mh">0x00000020</span>
+<span class="n">RSONOSCP_FLAG_CANCACHE</span>      <span class="o">=</span> <span class="mh">0x00000040</span>
+<span class="n">RSONOSCP_FLAG_NOSKIP</span>        <span class="o">=</span> <span class="mh">0x00000080</span>
+<span class="n">RSONOSCP_FLAG_OOB_METADATA</span>  <span class="o">=</span> <span class="mh">0x00000100</span>
+<span class="n">RSONOSCP_FLAG_WRITEABLE</span>     <span class="o">=</span> <span class="mh">0x00000200</span>
+<span class="n">RSONOSCP_FLAG_USERCONTENT</span>   <span class="o">=</span> <span class="mh">0x00000400</span>
+<span class="n">RSONOSCP_FLAG_CANRENAME</span>     <span class="o">=</span> <span class="mh">0x00000800</span>
+<span class="n">RSONOSCP_FLAG_ISEPHEMERAL</span>   <span class="o">=</span> <span class="mh">0x00001000</span>
+<span class="n">RSONOSCP_FLAG_CANREMOVE</span>     <span class="o">=</span> <span class="mh">0x00002000</span>
+<span class="n">RSONOSCP_FLAG_CANRESUME</span>     <span class="o">=</span> <span class="mh">0x00004000</span>
+<span class="n">RSONOSCP_FLAG_NOSEEK</span>        <span class="o">=</span> <span class="mh">0x00008000</span>
+<span class="n">RSONOSCP_FLAG_ISEXPLICIT</span>    <span class="o">=</span> <span class="mh">0x00010000</span>
+
+<span class="n">NODE_SID</span> <span class="o">=</span> <span class="mi">245</span>
+<span class="n">EXPECTED_EXPLICIT_FLAG</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="mi">73760</span><span class="p">)</span>
+<span class="n">EXPECTED_CLEAN_FLAG</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="mi">8224</span><span class="p">)</span>
+<span class="n">TRACK_LEGACY_FLAGS</span> <span class="o">=</span> <span class="s1">&#39;0x2020&#39;</span>
+<span class="n">RSONOSCP_LEGACY_FLAGS_MASK</span> <span class="o">=</span> <span class="mh">0x0000ffff</span>
+<span class="n">EXPLICIT_TRACK</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;x-sonos-http:5.mp3?sid=&#39;</span><span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">NODE_SID</span><span class="p">)</span><span class="o">+</span><span class="s1">&#39;&amp;flags=&#39;</span><span class="o">+</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;100360205&quot; parentID=&quot;100e206cbrowse</span><span class="si">%3a</span><span class="s1">longform&quot; restricted=&quot;true&quot;&gt;&lt;dc:title&gt;Breaker 1-2&lt;/dc:title&gt;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&lt;r:tags&gt;1&lt;/r:tags&gt;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;SA_RINCON62727_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="p">]</span>
+<span class="n">CLEAN_TRACK</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;x-sonos-http:1.mp3?sid=&#39;</span> <span class="o">+</span> <span class="nb">str</span><span class="p">(</span><span class="n">NODE_SID</span><span class="p">),</span> <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;100320201&quot; parentID=&quot;100e206cbrowse</span><span class="si">%3a</span><span class="s1">tracks&quot; restricted=&quot;true&quot;&gt;&lt;dc:title&gt;Old Enough&lt;/dc:title&gt;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;SA_RINCON62727_&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span><span class="p">]</span>
+
+<span class="n">smapi_ctl</span> <span class="o">=</span> <span class="n">webserver</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">node_smapi_control</span><span class="o">.</span><span class="n">NodeSmapiControl</span><span class="p">()</span>
+
+<div class="viewcode-block" id="TestRSonosItemID"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID">[docs]</a><span class="k">class</span> <span class="nc">TestRSonosItemID</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="n">port</span> <span class="o">=</span> <span class="mi">3000</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;CONTENT&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="TestRSonosItemID.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;test_sonos_itemId: setUpFixture&quot;</span><span class="p">)</span>
+        <span class="n">unique_device_collection</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">unique_device_collection</span><span class="p">:</span>
+                <span class="n">unique_device_collection</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span> <span class="o">=</span> <span class="n">zp</span>
+                <span class="k">continue</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span> <span class="o">=</span> <span class="n">unique_device_collection</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Verify players in the household&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi</span> <span class="o">=</span> <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">start_node_smapi_server</span><span class="p">(</span><span class="n">server_port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">port</span><span class="p">,</span> <span class="n">server_sid</span> <span class="o">=</span> <span class="n">NODE_SID</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_node_mocksmapi</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">test_zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">:</span>
+            <span class="n">test_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="n">test_zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">helpers</span> <span class="o">=</span> <span class="n">upnp</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Helpers</span><span class="p">()</span>
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">get_num_sonos_playlists</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_sonos_playlists</span><span class="p">()</span>
+
+        <span class="c1">#Favorite data for explicit track</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_favorite_data</span> <span class="o">=</span> <span class="p">(</span>
+             <span class="s1">&#39;&lt;dc:title&gt;&#39;</span> <span class="o">+</span> <span class="n">escape</span><span class="p">(</span><span class="s1">&#39;Breaker 1-2 &#39;</span><span class="p">)</span><span class="o">+</span><span class="s1">&#39;&lt;/dc:title&gt;&#39;</span>
+             <span class="s1">&#39;&lt;r:type&gt;instantPlay&lt;/r:type&gt;&#39;</span>
+             <span class="s1">&#39;&lt;r:description&gt;By The Impossebulls&lt;/r:description&gt;&#39;</span>
+             <span class="s1">&#39;&lt;res protocolInfo=&quot;sonos.com-http:*:audio/mpeg3:*&quot;&gt;&#39;</span><span class="o">+</span><span class="n">escape</span><span class="p">(</span><span class="s1">&#39;x-sonos-http:5.mp3?sid=245&amp;flags=&#39;</span><span class="p">)</span><span class="o">+</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span> <span class="o">+</span><span class="s1">&#39;&#39;</span><span class="o">+</span><span class="s1">&#39;&lt;/res&gt;&#39;</span>
+             <span class="s1">&#39;&lt;r:resMD&gt;&#39;</span><span class="o">+</span> <span class="n">escape</span><span class="p">(</span><span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;100360205&quot; parentID=&quot;100e206cbrowse</span><span class="si">%3a</span><span class="s1">longform&quot; restricted=&quot;true&quot;&gt;&lt;dc:title&gt;Breaker 1-2&lt;/dc:title&gt;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&lt;r:tags&gt;1&lt;/r:tags&gt;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;SA_RINCON62727_&lt;/desc&gt;&lt;/item&gt;&#39;</span><span class="p">)</span><span class="o">+</span><span class="s1">&#39;&lt;/r:resMD&gt;&#39;</span>
+             <span class="s1">&#39;&lt;upnp:albumArtURI&gt;&#39;</span> <span class="o">+</span> <span class="n">escape</span><span class="p">(</span><span class="s1">&#39;http://www.socialserendip.com/wp-content/uploads/2012/07/obsessive-girlfriend-3.jpg&#39;</span><span class="p">)</span> <span class="o">+</span> <span class="s1">&#39;&lt;/upnp:albumArtURI&gt;&lt;upnp:class&gt;object.itemobject.item.sonos-favorite&lt;/upnp:class&gt;&#39;</span>
+        <span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestRSonosItemID.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_queue</span><span class="p">()</span>
+        <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">smapi_account_teardown</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">NODE_SID</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">account_id</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;does_service_account_exist should return False&quot;</span><span class="p">))</span>
+        <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">stop_node_smapi_server</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">smapi</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestRSonosItemID.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_queue</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_clear_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_number_of_tracks_in_queue</span><span class="p">():</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span> <span class="o">!=</span> <span class="s2">&quot; &quot;</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_setup_node_mocksmapi</span> <span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># mock SMAPI server setup</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">account_id</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">NODE_SID</span><span class="p">)</span> <span class="o">+</span> <span class="s1">&#39;07&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_customsd</span><span class="p">(</span><span class="n">NODE_SID</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_NAME</span><span class="p">,</span>
+                                    <span class="n">uri</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_URI</span><span class="p">,</span>
+                                    <span class="n">secure_uri</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_SECURE_URI</span><span class="p">,</span>
+                                    <span class="n">auth_type</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_AUTHTYPE</span><span class="p">,</span>
+                                    <span class="n">strings_version</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">strings_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">presentation_map_version</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">presentation_map_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                    <span class="n">container_type</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_CONTAINER_TYPE</span><span class="p">,</span>
+                                    <span class="n">caps</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">SMAPI_SERVER_CAPS</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">HTTP_OK</span><span class="p">,</span> <span class="s2">&quot;set_customsd should return 200&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">AddAccountX</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">account_id</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">does_service_account_exist</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">account_id</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="s2">&quot;Does node MockSmapi service account exist?&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_item_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_string</span><span class="p">,</span> <span class="n">playlist</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">playlist</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">found</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="s1">&#39;flags</span><span class="si">%3d</span><span class="s1">(\d+)&#39;</span><span class="p">,</span> <span class="n">item_string</span><span class="p">)</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+                <span class="n">found</span> <span class="o">=</span> <span class="s1">&#39;No flags found&#39;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">found</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="s1">&#39;flags=(\d+)&#39;</span><span class="p">,</span> <span class="n">item_string</span><span class="p">)</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+                <span class="n">found</span> <span class="o">=</span> <span class="s1">&#39;No flags found&#39;</span>
+        <span class="k">return</span> <span class="n">found</span>
+
+    <span class="k">def</span> <span class="nf">_get_playlist_explicit_bit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_string</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">item_string</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">_get_legacy_flags</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">flag</span><span class="p">):</span>
+        <span class="k">return</span> <span class="nb">hex</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_LEGACY_FLAGS_MASK</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_smapi_playback_policies</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">flags</span><span class="p">):</span>
+        <span class="n">track_flag</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">flags</span><span class="p">)</span>
+        <span class="n">playback_policies</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_AUTHREQUIRED</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_AUTHREQUIRED &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANSCROLL</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANSCROLL &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANENUMERATE</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANENUMERATE &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANPLAY</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANPLAY &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_RESTRICTED</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_RESTRICTED &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANADD</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANADD, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANCACHE</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANCACHE, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_NOSKIP</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_NOSKIP, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_OOB_METADATA</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_OOB_METADATA, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_WRITEABLE</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_WRITEABLE, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_USERCONTENT</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_USERCONTENT, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANRENAME</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANRENAME, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_ISEPHEMERAL</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_ISEPHEMERAL, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANREMOVE</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANREMOVE, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_CANRESUME</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_CANRESUME, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_NOSEEK</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_NOSEEK, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">track_flag</span> <span class="o">&amp;</span> <span class="n">RSONOSCP_FLAG_ISEXPLICIT</span><span class="p">):</span>
+            <span class="n">playback_policies</span> <span class="o">+=</span> <span class="s1">&#39;RSONOSCP_FLAG_ISEXPLICIT, &#39;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">playback_policies</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">playback_policies</span><span class="p">[:</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="s1">&#39;Invalid Playback Policies&#39;</span>
+
+<div class="viewcode-block" id="TestRSonosItemID.test_flags_during_playback"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.test_flags_during_playback">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_flags_during_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Function: Play an explicit track</span>
+<span class="sd">        Expected Outcome: Playback is successfully, the the track&#39;s metadata contains the expected flags (and legacy flags for backward compatibility)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">EXPLICIT_TRACK</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">EXPLICIT_TRACK</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">sonos</span><span class="o">.</span><span class="n">exception</span><span class="o">.</span><span class="n">UPnPError</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span> <span class="o">==</span> <span class="mi">701</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Caught UPNP ERROR. Verify that Content Filtering is disabled.&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Caught UPNP ERROR: </span><span class="si">{0}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_transport_state</span><span class="p">()</span> <span class="o">==</span> <span class="s1">&#39;PLAYING&#39;</span><span class="p">,</span> <span class="s1">&#39;Playback of explicit track initiated&#39;</span><span class="p">)</span>
+        <span class="n">explicit_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track_metadata</span><span class="p">()))</span>
+        <span class="n">explicit_track_legacy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_legacy_flags</span><span class="p">(</span><span class="n">explicit_track_flags</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrWarn</span><span class="p">(</span><span class="n">explicit_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected flags returned for explicit track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span> <span class="n">explicit_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">explicit_track_legacy</span> <span class="o">==</span> <span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected legacy flags returned for explicit track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span> <span class="n">explicit_track_legacy</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Explicit track flags: &quot;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_smapi_playback_policies</span><span class="p">(</span><span class="n">flags</span><span class="o">=</span><span class="n">explicit_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">CLEAN_TRACK</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">CLEAN_TRACK</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_transport_state</span><span class="p">()</span> <span class="o">==</span> <span class="s1">&#39;PLAYING&#39;</span><span class="p">,</span> <span class="s1">&#39;Playback of explicit track initiated&#39;</span><span class="p">)</span>
+        <span class="n">clean_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track_metadata</span><span class="p">()))</span>
+        <span class="n">clean_track_legacy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_legacy_flags</span><span class="p">(</span><span class="n">clean_track_flags</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrWarn</span><span class="p">(</span><span class="n">clean_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_CLEAN_FLAG</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected flags returned for clean track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_CLEAN_FLAG</span><span class="p">,</span> <span class="n">clean_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">clean_track_legacy</span> <span class="o">==</span> <span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected legacy flags returned for clean track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span> <span class="n">clean_track_legacy</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Clean track flags: &quot;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_smapi_playback_policies</span><span class="p">(</span><span class="n">flags</span><span class="o">=</span><span class="n">clean_track_flags</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestRSonosItemID.test_explicit_sonos_favorite"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.test_explicit_sonos_favorite">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_explicit_sonos_favorite</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Function: Add an explicit track to Sonos Favorites</span>
+<span class="sd">        Expected Outcome: The track is successfully added to Sonos Favorites, the track&#39;s resURI contains the expected flags</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">create_favorite</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_favorite_data</span><span class="p">)</span>
+        <span class="n">explicit_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">get_favorite_content</span><span class="p">()))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">explicit_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected flags returned. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span> <span class="n">explicit_track_flags</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_favorites</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestRSonosItemID.test_explicit_sonos_playlist"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_sonos_itemid.TestRSonosItemID.test_explicit_sonos_playlist">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_explicit_sonos_playlist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Function: Create a new Sonos Playlist that contains an explicit track</span>
+<span class="sd">        Expected Outcome: The Sonos Playlist is successfully created, the track&#39;s resMD contains the expected flags</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">EXPLICIT_TRACK</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">EXPLICIT_TRACK</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">track_num</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">CLEAN_TRACK</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">CLEAN_TRACK</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">track_num</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="n">playlistId</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SaveQueue</span><span class="p">(</span><span class="s1">&#39;Explicit Track&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">does_sonos_playlist_exist</span><span class="p">(</span><span class="n">playlistId</span><span class="p">),</span> <span class="s1">&#39;Playlist created&#39;</span><span class="p">)</span>
+        <span class="n">favorite</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">get_sonos_playlist</span><span class="p">(</span><span class="n">playlistId</span><span class="p">)</span>
+        <span class="n">explicit_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]),</span> <span class="n">playlist</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">explicit_track_explicit_bit</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_playlist_explicit_bit</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]))</span>
+        <span class="n">explicit_track_legacy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_legacy_flags</span><span class="p">(</span><span class="n">explicit_track_flags</span><span class="p">)</span>
+        <span class="n">clean_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]),</span> <span class="n">playlist</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">clean_track_explicit_bit</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_playlist_explicit_bit</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]))</span>
+        <span class="nb">print</span> <span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]))</span>
+        <span class="nb">print</span> <span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">favorite</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">element</span><span class="o">.</span><span class="n">attrib</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">explicit_track_legacy</span> <span class="o">==</span> <span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected legacy flags returned for explicit track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span> <span class="n">explicit_track_legacy</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrWarn</span><span class="p">(</span><span class="n">explicit_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span>
+                          <span class="s1">&#39;Expected flags returned for explicit track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span> <span class="n">explicit_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrWarn</span><span class="p">(</span><span class="n">explicit_track_explicit_bit</span> <span class="o">==</span> <span class="s1">&#39;1&#39;</span><span class="p">,</span>
+                                  <span class="s1">&#39;Playlist track explicit bit returned. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;1&#39;</span><span class="p">,</span> <span class="n">explicit_track_explicit_bit</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">clean_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_CLEAN_FLAG</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected flags returned for clean track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_CLEAN_FLAG</span><span class="p">,</span> <span class="n">clean_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">clean_track_explicit_bit</span> <span class="o">==</span> <span class="s1">&#39;0&#39;</span><span class="p">,</span>
+                                  <span class="s1">&#39;Playlist track clean bit returned. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;0&#39;</span><span class="p">,</span> <span class="n">clean_track_explicit_bit</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_sonos_playlist</span><span class="p">(</span><span class="n">playlistId</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_transport_state</span><span class="p">()</span> <span class="o">==</span> <span class="s1">&#39;PLAYING&#39;</span><span class="p">,</span> <span class="s1">&#39;Playback of explicit track initiated&#39;</span><span class="p">)</span>
+        <span class="n">explicit_track_flags</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_item_flags</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track_metadata</span><span class="p">()))</span>
+        <span class="n">explicit_track_legacy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_legacy_flags</span><span class="p">(</span><span class="n">explicit_track_flags</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrWarn</span><span class="p">(</span><span class="n">explicit_track_flags</span> <span class="o">==</span> <span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected flags returned (Playback). Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXPECTED_EXPLICIT_FLAG</span><span class="p">,</span> <span class="n">explicit_track_flags</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">explicit_track_legacy</span> <span class="o">==</span> <span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span>
+                                  <span class="s1">&#39;Expected legacy flags returned for explicit track. Expected: </span><span class="si">{0}</span><span class="s1">, Returned: </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TRACK_LEGACY_FLAGS</span><span class="p">,</span> <span class="n">explicit_track_legacy</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_sonos_playlist</span><span class="p">(</span><span class="n">playlistId</span><span class="p">)</span></div></div>
+
+<span class="c1"># section:main</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="c1"># section: suite</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Sonos ItemID Tests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">TestRSonosItemID</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

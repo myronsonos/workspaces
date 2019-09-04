@@ -1,0 +1,634 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.indexing.test_shadow_rm_32m_player &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.indexing.test_shadow_rm_32m_player</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">itertools</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="p">(</span><span class="n">run_concurrent_processes</span><span class="p">,</span>
+    <span class="n">run_concurrent_zone_player_processes</span><span class="p">)</span>
+
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span><span class="n">PLAYBACK_PLATFORMS</span><span class="p">,</span>
+                                      <span class="n">LEGACY_PLAYBACK_PLATFORMS</span><span class="p">,</span>
+                                      <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">)</span>
+
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.indexing.baseindexingtest</span> <span class="k">import</span> <span class="n">BaseIndexingTest</span>
+
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    TODO:</span>
+<span class="sd">        - need to have lsof on all duts, currently missing on sh4, can be</span>
+<span class="sd">          manually grabbed from</span>
+<span class="sd">          http://builds.sonos.com/20160707.player_dev/platforms-out/&lt;arch&gt;/out/</span>
+<span class="sd">          for now...</span>
+
+<span class="sd">    SWPBL-55702 - When re-indexing is initiated on a 32M player, the Player</span>
+<span class="sd">    first removes the index from flash.</span>
+<span class="sd">    SWPBL-55703 - When an index is replicated to a 32M player, the 32M players</span>
+<span class="sd">    first removes the index before committing the new index.</span>
+<span class="sd">    Anacapa - On 32M players (sh4 and ppc), change the behavior to remove the</span>
+<span class="sd">    /jffs/shadow/ directory and any related open file descriptors, prior to</span>
+<span class="sd">    re-indexing or replication events instead of the current behavior which</span>
+<span class="sd">    waits for the new index directory (/jffs/shadow2/) to be complete before</span>
+<span class="sd">    deletion. While greatly reducing the amount of /jffs space required, this</span>
+<span class="sd">    change introduces a risk to a reboot/power cycle event in the middle of</span>
+<span class="sd">    re-indexing/replication. When this happens, the player now has a</span>
+<span class="sd">    /jffs/settings/shares.xml file with version number, but no /jffs/shadow/</span>
+<span class="sd">    contents. Using SWPBL-51644 as a guide, detect this discrepancy, notify</span>
+<span class="sd">    other players that our index is stale, and allow same or better version</span>
+<span class="sd">    replications to occur in this state.</span>
+
+<span class="sd">    Verify 32M players (sh4, ppc) remove their index before re-indexing or</span>
+<span class="sd">    replicating (/jffs/shadow removed when indexing to working index</span>
+<span class="sd">    /jffs/shadow2)</span>
+<span class="sd">    Verify 32M players (sh4, ppc) with valid index do not replicate to a lower</span>
+<span class="sd">    version index (in /jffs/settings/shares.xml Version=N)</span>
+<span class="sd">    Verify 32M players (sh4, ppc) with invalid index (reboot during index)</span>
+<span class="sd">    replicate to a lower version, valid index (in /jffs/settings/shares.xml</span>
+<span class="sd">    Version=N)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="n">SHARE_PATH</span> <span class="o">=</span> <span class="s1">&#39;Indexing_scheduled/test.mp3&#39;</span>
+
+<span class="c1"># determined by observing wired players re-indexing the 10K share</span>
+<span class="n">INDEX_OR_REPLICATION_TIME</span> <span class="o">=</span> <span class="mi">70</span>
+<span class="n">TIME_TO_ALLOW_INDEXING</span> <span class="o">=</span> <span class="n">INDEX_OR_REPLICATION_TIME</span> <span class="o">*</span> <span class="mf">1.5</span>
+<span class="n">TIME_TO_ALLOW_REPLICATION</span> <span class="o">=</span> <span class="n">TIME_TO_ALLOW_INDEXING</span> <span class="o">*</span> <span class="mf">1.5</span>
+<span class="n">TIME_TO_ALLOW_SMALL_SHARE_INDEXING</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">TIME_TO_ALLOW_SMALL_REPLICATION</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">PREMATURE_POWER_HIT_TIME_DURING_INDEXING</span> <span class="o">=</span> <span class="n">INDEX_OR_REPLICATION_TIME</span> <span class="o">*</span> <span class="mf">0.3</span>
+
+<span class="c1"># devices with large capacitance take 6-10 seconds to fully discharge</span>
+<span class="n">POWER_CYCLE_TIME</span> <span class="o">=</span> <span class="mi">10</span>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture">[docs]</a><span class="k">class</span> <span class="nc">IndexShareLowMemTestFixture</span><span class="p">(</span><span class="n">BaseIndexingTest</span><span class="p">):</span>
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span>
+                 <span class="s1">&#39;INDEXING_RELEASE&#39;</span><span class="p">,</span>
+                 <span class="p">]</span>
+    <span class="n">SMALL_SHARE</span> <span class="o">=</span> <span class="s1">&#39;//camb-sqa-nas2/Indexing/Indexing_newfiles&#39;</span>
+    <span class="n">LARGE_SHARE</span> <span class="o">=</span> <span class="s1">&#39;//camb-sqa-nas2/Indexing/Indexing_10k&#39;</span>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_playback_devices</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">testbed_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">allDevices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">dut_generator</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">low_mem_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span> <span class="k">if</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">high_mem_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span> <span class="k">if</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">clear_play_states</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.wait_for_content_directories"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.wait_for_content_directories">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_content_directories</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        waits for all playback devices to have a ContentDirectory attribute</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;waiting for all ContentDirectories&#39;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="nb">all</span><span class="p">([</span><span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;ContentDirectory&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span>
+                         <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">]),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;all test_zones should have ContentDirectory attributes &#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_content_directories</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_all_shares_and_set_share_ver_to_one</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.remove_share_files"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.remove_share_files">[docs]</a>    <span class="k">def</span> <span class="nf">remove_share_files</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        calls the following to clear share state on all playback devices</span>
+
+<span class="sd">        rm /jffs/shadow/shares.xml</span>
+<span class="sd">        rm -rf /jffs/shadow/*</span>
+<span class="sd">        rm -rf /jffs/shadow2/*</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;removing shares.xml files&#39;</span><span class="p">)</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">(),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+            <span class="s1">&#39;rm /jffs/settings/shares.xml;&#39;</span><span class="p">)</span>
+            <span class="c1"># &#39;rm -rf /jffs/shadow/*;&#39;</span>
+            <span class="c1"># &#39;rm -rf /jffs/shadow2/*;&#39;)</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">]</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_content_directories</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.remove_all_shares_and_set_share_ver_to_one"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.remove_all_shares_and_set_share_ver_to_one">[docs]</a>    <span class="k">def</span> <span class="nf">remove_all_shares_and_set_share_ver_to_one</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;removing all shares&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_shares</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_share_files</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;adding share and waiting for replication&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMALL_SHARE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;added share being removed&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_shares</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.clear_play_states"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.clear_play_states">[docs]</a>    <span class="k">def</span> <span class="nf">clear_play_states</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        cleans up what could be a broken index version state on any of the</span>
+<span class="sd">        testbeds playback devices</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_all_shares_and_set_share_ver_to_one</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_content_directories</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_content_directories</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.dut_generator"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.dut_generator">[docs]</a>    <span class="k">def</span> <span class="nf">dut_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">dut</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">dut</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">dut</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="p">(</span><span class="n">PLAYBACK_PLATFORMS</span> <span class="o">+</span>
+                                      <span class="n">LEGACY_PLAYBACK_PLATFORMS</span><span class="p">):</span>
+                    <span class="k">yield</span> <span class="n">dut</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.dut_generator_32m"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.dut_generator_32m">[docs]</a>    <span class="k">def</span> <span class="nf">dut_generator_32m</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">dut</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">dut</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">dut</span></div>
+    
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.memory_dut_pair_generator"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.memory_dut_pair_generator">[docs]</a>    <span class="k">def</span> <span class="nf">memory_dut_pair_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">mem_pairs</span> <span class="o">=</span> <span class="p">[</span><span class="n">pair</span> <span class="k">for</span> <span class="n">pair</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">([</span><span class="s1">&#39;low&#39;</span><span class="p">,</span> <span class="s1">&#39;high&#39;</span><span class="p">],</span>
+                                                        <span class="n">repeat</span><span class="o">=</span><span class="mi">2</span><span class="p">)]</span>
+        <span class="k">for</span> <span class="n">indexer_mem</span><span class="p">,</span> <span class="n">indexee_mem</span> <span class="ow">in</span> <span class="n">mem_pairs</span><span class="p">:</span>
+            <span class="c1"># remain &#39;None&#39; if inadequate number of low-mem devices</span>
+            <span class="c1"># test will handle when &#39;None&#39; is given</span>
+            <span class="n">indexer</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">indexee</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="k">if</span> <span class="n">indexer_mem</span> <span class="o">==</span> <span class="s1">&#39;low&#39;</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">low_mem_devices</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="n">indexer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">low_mem_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">elif</span> <span class="n">indexer_mem</span> <span class="o">==</span> <span class="s1">&#39;high&#39;</span><span class="p">:</span>
+                <span class="n">indexer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">high_mem_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">indexee_mem</span> <span class="o">==</span> <span class="s1">&#39;low&#39;</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">low_mem_devices</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="n">indexee</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">low_mem_devices</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="k">elif</span> <span class="n">indexee_mem</span> <span class="o">==</span> <span class="s1">&#39;high&#39;</span><span class="p">:</span>
+                <span class="n">indexee</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">high_mem_devices</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="k">yield</span> <span class="n">indexer</span><span class="p">,</span> <span class="n">indexee</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_share_and_get_share_version</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">share</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add a share and get the share version.</span>
+
+<span class="sd">        :param str share: share locatiton string</span>
+<span class="sd">        :return: the share settings verison</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="n">share</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">res</span><span class="p">,</span>
+                              <span class="s2">&quot;Expect the share &lt;</span><span class="si">{}</span><span class="s2">&gt; to add &quot;</span>
+                              <span class="s2">&quot;successfully&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">share</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.setup_share_and_start_reindex"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.setup_share_and_start_reindex">[docs]</a>    <span class="k">def</span> <span class="nf">setup_share_and_start_reindex</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up or reindexes the small share to increment the valid version</span>
+<span class="sd">        number and starts an add_share on the large index which can be</span>
+<span class="sd">        interrupted</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+            <span class="n">expect_shadow_removed</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">expect_shadow_removed</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">initial_share_ver</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+        <span class="n">small_share_str</span> <span class="o">=</span> <span class="s1">&#39;S:&#39;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">SMALL_SHARE</span>
+        <span class="k">if</span> <span class="nb">any</span><span class="p">([</span><span class="n">small_share_str</span> <span class="ow">in</span> <span class="n">share</span> <span class="k">for</span> <span class="n">share</span> <span class="ow">in</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">get_indexed_shares</span><span class="p">()]):</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">refresh_share</span><span class="p">(</span><span class="s1">&#39;FULL&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMALL_SHARE</span><span class="p">)</span>
+        <span class="n">post_bump_ver</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">initial_share_ver</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+                <span class="n">post_bump_ver</span><span class="p">,</span>
+                <span class="s1">&#39;zps share version should increase after adding or reindexing&#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LARGE_SHARE</span><span class="p">,</span>
+                                      <span class="n">wait_for_done</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">expect_shadow_removed</span><span class="p">,</span> <span class="n">post_bump_ver</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.shadow_as_expected"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.shadow_as_expected">[docs]</a>    <span class="k">def</span> <span class="nf">shadow_as_expected</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">shadow_expected</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks for presence of /jffs/shadow and while indexing and compares its</span>
+<span class="sd">        presence to the expectation</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="kc">True</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;ls -A /jffs/shadow&#39;</span><span class="p">)</span> <span class="k">else</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">res</span> <span class="o">!=</span> <span class="n">shadow_expected</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="c1"># SWPBL-58642 Platforms - Add lsof utility, missing for sh4 so skip for</span>
+        <span class="c1"># now, all devices will have to have the utility deployed for this to</span>
+        <span class="c1"># work</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        if zp.cli.get_arch() != &#39;sh4&#39;:</span>
+<span class="sd">            res = (True if zp.cli.command(&#39;/jffs/lsof +d /jffs/shadow&#39;)</span>
+<span class="sd">                   else False)</span>
+<span class="sd">            return res == shadow_expected</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.get_stripped_shadow"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.get_stripped_shadow">[docs]</a>    <span class="k">def</span> <span class="nf">get_stripped_shadow</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a list of lines returned from zp when returning ls -l</span>
+<span class="sd">        /jffs/shadow after removing the potentially unique &#39;abstract&#39; and</span>
+<span class="sd">        &#39;stats&#39; line as well as all date values as uptime and index time</span>
+<span class="sd">        varies</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to get shadow of</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: stripped list of lines resulting from &#39;ls -l /jffs/shadow&#39;</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;ls -l /jffs/shadow&#39;</span><span class="p">)</span>
+        <span class="n">shadow_ls_no_abstract</span> <span class="o">=</span> <span class="p">[</span><span class="n">line</span> <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">res</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()</span> <span class="k">if</span>
+                                 <span class="s1">&#39;abstract&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">line</span><span class="p">]</span>
+        <span class="n">shadow_ls_no_stats</span> <span class="o">=</span> <span class="p">[</span><span class="n">line</span> <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">shadow_ls_no_abstract</span> <span class="k">if</span>
+                              <span class="s1">&#39;stats&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">line</span><span class="p">]</span>
+        <span class="n">shadow_ls_no_date</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39; &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">()[:</span><span class="o">-</span><span class="mi">4</span><span class="p">]</span> <span class="o">+</span>
+                                      <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="o">-</span><span class="mi">1</span><span class="p">:])</span> <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span>
+                             <span class="n">shadow_ls_no_stats</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">shadow_ls_no_date</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.all_players_have_same_share"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.all_players_have_same_share">[docs]</a>    <span class="k">def</span> <span class="nf">all_players_have_same_share</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">check_shadow_contents</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks if all share versions for each playback device on the subnet are</span>
+<span class="sd">        the same</span>
+
+<span class="sd">        :return: do all version shares match</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">devices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span>
+        <span class="n">some_version</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+        <span class="n">some_shadow_ls_l</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_stripped_shadow</span><span class="p">(</span><span class="n">devices</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">all_versions</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span>
+                        <span class="n">devices</span><span class="p">]</span>
+        <span class="n">all_shadows_ls_l</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">get_stripped_shadow</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">all_versions</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">all_shadows_ls_l</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">check_shadow_contents</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span>
+                <span class="nb">all</span><span class="p">([</span><span class="n">version</span> <span class="o">==</span> <span class="n">some_version</span> <span class="k">for</span> <span class="n">version</span> <span class="ow">in</span> <span class="n">all_versions</span><span class="p">])</span> <span class="ow">and</span>
+                <span class="nb">all</span><span class="p">([</span><span class="n">size</span> <span class="o">==</span> <span class="n">some_shadow_ls_l</span> <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">all_shadows_ls_l</span><span class="p">])</span>
+                <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">all</span><span class="p">([</span><span class="n">version</span> <span class="o">==</span> <span class="n">some_version</span> <span class="k">for</span> <span class="n">version</span> <span class="ow">in</span> <span class="n">all_versions</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.index_device_until_ver"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.index_device_until_ver">[docs]</a>    <span class="k">def</span> <span class="nf">index_device_until_ver</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">ver</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Continues to reindex the zp until its share version matches ver</span>
+
+<span class="sd">        :param zp: SonosZoneComponent under test to re-index</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param ver: version number to match zp version to</span>
+<span class="sd">        :type ver: :&#39;int&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">while</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span> <span class="o">&lt;</span>
+                   <span class="n">ver</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">is_indexing</span><span class="p">():</span>
+                <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrStop</span><span class="p">(</span>
+                    <span class="n">ver</span><span class="p">,</span>
+                    <span class="nb">int</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">()),</span>
+                    <span class="s1">&#39;device index should not replicate to version higher than &#39;</span>
+                    <span class="s1">&#39;specified by loop&#39;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">refresh_share</span><span class="p">(</span><span class="s1">&#39;FULL&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.verify_device_does_not_index"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.verify_device_does_not_index">[docs]</a>    <span class="k">def</span> <span class="nf">verify_device_does_not_index</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        monitors device to see if it begins indexing when it is not expected to</span>
+
+<span class="sd">        :param device: SonosZoneComponent which should not index</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param wait_time: seconds to wait to ensure device does not index</span>
+<span class="sd">        :type wait_time: :&#39;int&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">is_indexing</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">wait_time</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;not_dut should not replicate broken shadow&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s1">&#39;TimeoutError not reached while monitoring not_dut &#39;</span>
+                      <span class="s1">&#39;to ensure no replication of broken shadow from dut&#39;</span><span class="p">)</span></div>
+
+    <span class="c1"># disabled until SWPBL-59110 is fixed, currently this case causes anacapa</span>
+    <span class="c1"># to crash on 32M players</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    @combinatorial(&#39;dut_generator&#39;)</span>
+<span class="sd">    def test_attempt_indexed_play_while_indexing(self, dut):</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-59110 ancapad crash when attempting to play indexed music on 32M</span>
+<span class="sd">        players during replication</span>
+
+<span class="sd">        Starts indexing and attempts to start playback of a track in the index</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+<span class="sd">        # TODO: figure out how to grab a reverence to track data for stale play</span>
+<span class="sd">        dut.add_share_and_verify(self.music_shares, self.SHARE_KEY)</span>
+<span class="sd">        dut.setup_share_and_start_reindex(self.SHARE_KEY, dut)</span>
+<span class="sd">        # TODO: figure out how to tell player to play stale indexed_track</span>
+<span class="sd">        # TODO: monitor anacapa for a crash or other unexpected logs</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.test_broken_index_wait_for_greater_equal_ver"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.test_broken_index_wait_for_greater_equal_ver">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_playback_device_per_platform&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_broken_index_wait_for_greater_equal_ver</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a 32M dut that has a higher version number but an incomplete</span>
+<span class="sd">        /jffs/shadow does not push its replication to other devices and instead</span>
+<span class="sd">        accepts the version of other devices once they reach the previous</span>
+<span class="sd">        version number of greater. to do this devices must be powered off  or</span>
+<span class="sd">        otherwise disabled (stopanacapa) to allow a mixed index version to</span>
+<span class="sd">        occur. Duts with greater than 32M retain jffs/shadow while indexing and</span>
+<span class="sd">        thus replicate to others to the last good version. Using a small share</span>
+<span class="sd">        size speeds up the test the a large share must be used to allow partial</span>
+<span class="sd">        writing to shadow2 during index/reindex</span>
+
+<span class="sd">        The flow is as follows, version numbers dont have to be exact but follow</span>
+<span class="sd">        the same flow:</span>
+<span class="sd">            hh has share index version 1</span>
+<span class="sd">            power off all but dut</span>
+<span class="sd">            dut re-indexes twice to version 3</span>
+<span class="sd">            dut begins re-index to what would be version 4</span>
+<span class="sd">            power off dut before re-index version 4 is complete</span>
+<span class="sd">            power on all devices</span>
+<span class="sd">            non dut devices are on version 1</span>
+<span class="sd">            re-index non dut until 1 version below dut</span>
+<span class="sd">            dut does not accept index from non dut as non dut ver not &gt;= dut_ver</span>
+<span class="sd">            re-index non dut until same version as dut</span>
+<span class="sd">            dut replicates non dut index</span>
+
+<span class="sd">        anacapa should log when /jffs/settings/shares.xml version is present but</span>
+<span class="sd">        shadow is incomplete</span>
+
+<span class="sd">        :param dut: SonosZoneComponent under test to re-index on broken shadow</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># [SWPBL-130201] - We want to skip this test run if running on a sh4</span>
+        <span class="k">if</span> <span class="n">dut</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skipTest</span><span class="p">(</span><span class="s2">&quot;Do not run this test on a low memory player.&quot;</span><span class="p">)</span>
+
+        <span class="n">not_duts</span> <span class="o">=</span> <span class="p">[</span><span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">testbed_devices</span> <span class="k">if</span> <span class="n">zc</span> <span class="o">!=</span> <span class="n">dut</span><span class="p">]</span>
+        <span class="n">not_dut</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span> <span class="k">if</span> <span class="n">zp</span> <span class="o">!=</span> <span class="n">dut</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">initial_share_ver</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_add_share_and_get_share_version</span><span class="p">(</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SMALL_SHARE</span><span class="p">,</span> <span class="n">dut</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_players_have_same_share</span><span class="p">(),</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;all players should have share version </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                            <span class="n">initial_share_ver</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;all devices indexed to version </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                            <span class="n">initial_share_ver</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;stopping anacapa on all but dut&#39;</span><span class="p">)</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">(),</span>
+                                 <span class="n">not_duts</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">index_device_until_ver</span><span class="p">(</span><span class="n">dut</span><span class="p">,</span> <span class="n">initial_share_ver</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="c1"># adding the large share bumps ver to 3* which is broken indexing to 4</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_share_and_start_reindex</span><span class="p">(</span><span class="n">dut</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">dut</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">is_indexing</span><span class="p">(),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;DUT should be indexing LARGE_SHARE&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;rebooting DUT to break shadow2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut</span><span class="p">))</span>
+        <span class="n">dut</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+        <span class="n">last_good_dut_ver</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">dut</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;dut index to version </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_good_dut_ver</span><span class="p">))</span>
+        <span class="c1"># added to mitigate long DHCP renew time on corp vlan as devices renew</span>
+        <span class="c1"># when their path goes down SN_B to SN_W as a result of rebooting the</span>
+        <span class="c1"># DUT in a 2 device testbed and may be unreachable until renew comlpetes</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">not_duts</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">slow_corp_dhcp_delay</span> <span class="o">=</span> <span class="mi">90</span>
+            <span class="n">not_dut</span><span class="o">.</span><span class="n">wait_for_cli_available</span><span class="p">(</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">slow_corp_dhcp_delay</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should reconnect after </span><span class="si">{}</span><span class="s1"> seconds due to slow corp &#39;</span>
+                <span class="s1">&#39;DHCP server in the event only one other device which is not &#39;</span>
+                <span class="s1">&#39;the dut is on the testbed&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">not_dut</span><span class="p">,</span>
+                                                   <span class="n">slow_corp_dhcp_delay</span><span class="p">))</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="n">not_duts</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">dut</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+            <span class="n">replication_time</span> <span class="o">=</span> <span class="n">TIME_TO_ALLOW_SMALL_REPLICATION</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_device_does_not_index</span><span class="p">(</span><span class="n">not_dut</span><span class="p">,</span> <span class="n">replication_time</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">all_players_have_same_share</span><span class="p">(),</span>
+                <span class="s1">&#39;not_dut should not be indexing to broken dut version as dut &#39;</span>
+                <span class="s1">&#39;should not be advertising&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">index_device_until_ver</span><span class="p">(</span><span class="n">not_dut</span><span class="p">,</span> <span class="n">last_good_dut_ver</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;not_dut indexed to </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">not_dut</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">()))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_device_does_not_index</span><span class="p">(</span><span class="n">dut</span><span class="p">,</span> <span class="n">replication_time</span><span class="p">)</span>
+            <span class="n">current_dut_ver</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">dut</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">last_good_dut_ver</span><span class="p">,</span>
+                <span class="n">current_dut_ver</span><span class="p">,</span>
+                <span class="s1">&#39;dut should remain at last good ver </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                            <span class="n">last_good_dut_ver</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">all_players_have_same_share</span><span class="p">(),</span>
+                <span class="s1">&#39;dut should still be on broken shadow with last good &#39;</span>
+                <span class="s1">&#39;ver </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_good_dut_ver</span><span class="p">))</span>
+            <span class="n">not_dut</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">refresh_share</span><span class="p">(</span><span class="s1">&#39;FULL&#39;</span><span class="p">)</span>
+
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">replication_time</span> <span class="o">=</span> <span class="n">TIME_TO_ALLOW_REPLICATION</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;dut has greater than 32M, index is not broken&#39;</span><span class="p">)</span>
+        <span class="n">not_dut_ver</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">not_dut</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_share_settings_version</span><span class="p">())</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">all_players_have_same_share</span><span class="p">,</span>
+            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">replication_time</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;not_dut should index to last_good_dut_ver </span><span class="si">{}</span><span class="s1">, dut and all &#39;</span>
+            <span class="s1">&#39;other devices should replicate </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">not_dut_ver</span><span class="p">,</span>
+                                                      <span class="n">last_good_dut_ver</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.test_shadow_while_reindexing_share"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.test_shadow_while_reindexing_share">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_playback_device_per_platform&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_shadow_while_reindexing_share</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify if the dut is a 32M player when a re-index is performed the</span>
+<span class="sd">        Player first closes any open file descriptors (once SWPBL-58642)to</span>
+<span class="sd">        /jffs/shadow and removes the index from flash. If the dut is not a 32M</span>
+<span class="sd">        player the index is not removed. When re-index completes /jffs/shadow2</span>
+<span class="sd">        is removed</span>
+
+<span class="sd">        :param dut: SonosZoneComponent under test to re-index</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">setup_share_and_start_reindex</span><span class="p">(</span><span class="n">dut</span><span class="p">)</span>
+        <span class="n">expect_shadow_removed</span><span class="p">,</span> <span class="n">initial_share_ver</span> <span class="o">=</span> <span class="n">res</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">shadow_as_expected</span><span class="p">(</span><span class="n">dut</span><span class="p">,</span> <span class="ow">not</span><span class="p">(</span><span class="n">expect_shadow_removed</span><span class="p">)),</span>
+            <span class="s1">&#39;dut </span><span class="si">{}</span><span class="s1"> shadow should be as removed (</span><span class="si">{}</span><span class="s1">) as expected while &#39;</span>
+            <span class="s1">&#39;indexing&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut</span><span class="p">,</span> <span class="n">expect_shadow_removed</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;bouncing dut anacapa to avoid unnecessarily waiting &#39;</span>
+                         <span class="s1">&#39;for full index&#39;</span><span class="p">)</span>
+        <span class="n">dut</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="IndexShareLowMemTestFixture.test_replication_memory_mux"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.test_shadow_rm_32m_player.IndexShareLowMemTestFixture.test_replication_memory_mux">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;memory_dut_pair_generator&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_replication_memory_mux</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">indexor</span><span class="p">,</span> <span class="n">indexee</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that devices of all memory size can both index and replicate a</span>
+<span class="sd">        share to all memory size devices</span>
+
+<span class="sd">        :param indexor: SonosZoneComponent under test to indexing to replication</span>
+<span class="sd">        :type indexor: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param indexee: SonosZoneComponent under test to replicate to</span>
+<span class="sd">        :type indexee: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">indexor</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">indexee</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skipTest</span><span class="p">(</span><span class="s1">&#39;Skipping test case for low memory players as&#39;</span>
+                          <span class="s1">&#39; less than 2 are connected.&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">indexor</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+            <span class="n">indexor_mem</span> <span class="o">=</span> <span class="s1">&#39;32M&#39;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">indexor_mem</span> <span class="o">=</span> <span class="s1">&#39;greater than 32M&#39;</span>
+        <span class="k">if</span> <span class="n">indexee</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="n">LOW_MEMORY_PLAYBACK_PLATFORMS</span><span class="p">:</span>
+            <span class="n">indexee_mem</span> <span class="o">=</span> <span class="s1">&#39;32M&#39;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">indexee_mem</span> <span class="o">=</span> <span class="s1">&#39;greater than 32M&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;testing replication from </span><span class="si">{}</span><span class="s1"> to </span><span class="si">{}</span><span class="s1"> device&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                    <span class="n">indexor_mem</span><span class="p">,</span> <span class="n">indexee_mem</span><span class="p">))</span>
+        <span class="n">indexor</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SMALL_SHARE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">all_players_have_same_share</span><span class="p">(),</span>
+                          <span class="s1">&#39;all devices should start with same share version&#39;</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s1">&#39;IndexShareLowMemTestFixture&#39;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">IndexShareLowMemTestFixture</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

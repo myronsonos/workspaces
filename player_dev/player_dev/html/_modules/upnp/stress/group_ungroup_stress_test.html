@@ -1,0 +1,393 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.stress.group_ungroup_stress_test &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.stress.group_ungroup_stress_test</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">from</span> <span class="nn">random</span> <span class="k">import</span> <span class="n">randint</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">AssertionLevel</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">upnp.stress.stress_tests_base</span> <span class="k">import</span> <span class="p">(</span><span class="n">StressTestsBaseNew</span><span class="p">,</span>
+                               <span class="n">CPU_TRACKS_PATH</span><span class="p">,</span>
+                               <span class="n">LOCAL_WEB_SERVER</span>
+                               <span class="p">)</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.musicservices.spotify.spotify_base</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">ContainerFormat</span><span class="p">,</span> <span class="n">SPOTIFY</span><span class="p">)</span>
+
+<span class="n">TRACKS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;ogg&#39;</span><span class="p">:</span> <span class="s1">&#39;MaggieFarm.ogg&#39;</span><span class="p">}</span>
+
+<span class="n">LEAVE_GROUP_WAIT_TIME</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">GROUPING_WAIT_TIME</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">MUSIC_DETECT_TIMEOUT</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">PLAYING_MUSIC</span> <span class="o">=</span> <span class="s1">&#39;starting ogg audio decoder&#39;</span>
+<span class="n">ROCK_BALLADS</span> <span class="o">=</span> <span class="n">ContainerFormat</span><span class="p">(</span><span class="s2">&quot;x-rincon-cpcontainer:1006206cspotify</span><span class="si">%3a</span><span class="s2">user</span><span class="si">%3a</span><span class="s2">spotify</span><span class="si">%3a</span><span class="s2">playlist</span><span class="si">%3a</span><span class="s2">37i9dQZF1DWXs1L3AC0Xio&quot;</span><span class="p">,</span> <span class="s2">&quot;Rock Ballads&quot;</span><span class="p">)</span>
+
+<span class="n">NEW_MEMBER_PLAYING_STATE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;new_gm_playing&#39;</span><span class="p">,</span> <span class="s1">&#39;new_gm_not_playing&#39;</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="GroupUnGroupStressTest"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest">[docs]</a><span class="k">class</span> <span class="nc">GroupUnGroupStressTest</span><span class="p">(</span><span class="n">StressTestsBaseNew</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Purpose of this test is to stress grouping and ungrouping. GC is stressed</span>
+<span class="sd">    when zones are grouped and ungrouped. In this test, single gm is ungrouped</span>
+<span class="sd">    from a group and after waiting few seconds, is re-added to group. This</span>
+<span class="sd">    sequence is rotated amongst all the gms for &#39;num_iterations&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">PLAYING_MUSIC_EVENT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;chsnk&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">:</span> <span class="p">[</span><span class="n">PLAYING_MUSIC</span><span class="p">]}}</span>
+    <span class="n">DEFAULT_ITERATIONS</span> <span class="o">=</span> <span class="mi">5</span>
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.gc_gms_and_state_generator"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.gc_gms_and_state_generator">[docs]</a>    <span class="k">def</span> <span class="nf">gc_gms_and_state_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate gc.</span>
+<span class="sd">        :return: Tuple of Sonos zone component which will serve as a</span>
+<span class="sd">            group coordinator and is new group member already playing ?</span>
+<span class="sd">        :rtype: :obj:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="n">gms</span> <span class="o">=</span> <span class="p">[</span><span class="n">gms</span> <span class="k">for</span> <span class="n">gms</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span>
+                   <span class="k">if</span> <span class="n">gms</span> <span class="o">!=</span> <span class="n">device</span><span class="p">][:</span><span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">new_member_playing</span> <span class="ow">in</span> <span class="n">NEW_MEMBER_PLAYING_STATE</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">new_member_playing</span></div>
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.parse_test_args"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.parse_test_args">[docs]</a>    <span class="k">def</span> <span class="nf">parse_test_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Parse command line args</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--num_iterations&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">DEFAULT_ITERATIONS</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;number of times to rotate gm addition and&quot;</span>
+                            <span class="s2">&quot;removal&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--spotify&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run on Spotify playlist - requires account&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--num_group_members&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Number of group members Default: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)))</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">unknown_args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">unknown_args</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_iterations</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">num_iterations</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">num_group_members</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spotify</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">spotify</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Number of iterations: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_iterations</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Number of group members: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Test with Spotify : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">spotify</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.setUpFixture"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup web server</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;SetupFixture: Copy tracks and Setup webserver&quot;</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">GroupUnGroupStressTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">parse_test_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Need atleast 1 group member for this test&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">spotify</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_tracks</span><span class="p">(</span><span class="n">TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span> <span class="n">path</span><span class="o">=</span><span class="n">CPU_TRACKS_PATH</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">setup_webserver</span><span class="p">(</span><span class="n">handlers</span><span class="o">=</span><span class="n">TRACKS</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_track_uris</span><span class="p">(</span><span class="n">TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                                                 <span class="n">source</span><span class="o">=</span><span class="n">LOCAL_WEB_SERVER</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">_</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                                <span class="o">.</span><span class="n">SystemProperties</span>
+                                <span class="o">.</span><span class="n">get_service_account_from_music_service</span><span class="p">(</span><span class="n">SPOTIFY</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.setUpTest"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup test</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">GroupUnGroupStressTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">(</span>
+            <span class="n">trigger_events</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">PLAYING_MUSIC_EVENT</span><span class="p">,</span>
+            <span class="n">trigger_cb</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cb_playing_event</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_tracks_to_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add tracks to queue on this zp</span>
+<span class="sd">        :param test_zone: Sonos zone component</span>
+<span class="sd">        :type test zone: :`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Adding tracks to queue on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">spotify</span><span class="p">:</span>
+            <span class="n">metadata</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">(</span>
+                <span class="n">title</span><span class="o">=</span><span class="n">ROCK_BALLADS</span><span class="o">.</span><span class="n">title</span><span class="p">,</span>
+                <span class="n">svc_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">service_id</span><span class="p">,</span>
+                <span class="n">acct_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">username</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span>
+                <span class="n">ROCK_BALLADS</span><span class="o">.</span><span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">remove_restricted_tracks</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">uri</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_number_of_tracks_in_queue</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Number of tracks in queue: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">))</span>
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.cb_playing_event"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.cb_playing_event">[docs]</a>    <span class="k">def</span> <span class="nf">cb_playing_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">expr</span><span class="p">,</span> <span class="n">l</span><span class="p">,</span> <span class="n">counters</span><span class="p">)):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on detecting music playback</span>
+<span class="sd">        :param zp: Sonos zone component from which to submit</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected playing music on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+    <span class="k">def</span> <span class="nf">_did_all_gms_play</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check if all gms played TV</span>
+<span class="sd">        :param list gms: List of Sonos zone components as group members</span>
+<span class="sd">        :return: Did all devices play tv ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Played music state values: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">all</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">_verify_all_gms_playing_music</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait until all gms are playing on timeout, stop the test</span>
+<span class="sd">        :param list gms: List of Sonos zone components as group members</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_did_all_gms_play</span><span class="p">(</span><span class="n">gms</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">MUSIC_DETECT_TIMEOUT</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;Did not play music on all players&#39;</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">:</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">[</span><span class="n">zp</span><span class="p">]:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;Did not detect music playing on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span>
+                                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                            <span class="s2">&quot;Playing music on all gms: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gms</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_verify_all_zps_linked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">num_gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify expected number of gms linked to gc</span>
+<span class="sd">        :param zp: Sonos zone component - Group coordinator</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param int num_gms: expected number of gms</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">gc</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">get_num_linked_zones</span><span class="p">()</span>
+                            <span class="o">==</span> <span class="n">num_gms</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s2">&quot;All zps not linked&quot;</span>
+            <span class="n">expected_uuids</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+            <span class="n">actual_uuids</span> <span class="o">=</span> <span class="n">gc</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">get_zone_player_uuids_in_group</span><span class="p">()</span>
+            <span class="n">missing_uuids</span> <span class="o">=</span> <span class="p">[</span><span class="n">uuid</span> <span class="k">for</span> <span class="n">uuid</span> <span class="ow">in</span> <span class="n">expected_uuids</span>
+                             <span class="k">if</span> <span class="n">uuid</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">actual_uuids</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span>
+                <span class="s2">&quot;Current UUID&#39;s in group: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">get_zone_player_uuids_in_group</span><span class="p">()))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;Missing UUIDs: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">missing_uuids</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                            <span class="s2">&quot;All zps linked to: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_run_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">new_gm_playing</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param zp: Sonos zone component - Group coordinator</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param bool new_member_playing;is new added member playing</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Linking zones to gc: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_add_tracks_to_queue</span><span class="p">(</span><span class="n">gc</span><span class="p">)</span>
+        <span class="n">qpos</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">spotify</span> <span class="k">else</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">qpos</span><span class="o">=</span><span class="n">qpos</span><span class="p">,</span> <span class="n">play_mode</span><span class="o">=</span><span class="s2">&quot;REPEAT_ALL&quot;</span><span class="p">)</span>
+        <span class="c1"># verify all gms playing music</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Checking if all GM players is playing music&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_all_gms_playing_music</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span>
+        <span class="n">q</span> <span class="o">=</span> <span class="n">deque</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Running test for: </span><span class="si">{}</span><span class="s2"> rotations&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_iterations</span><span class="p">))</span>
+        <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_iterations</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">gms</span><span class="p">)):</span>
+            <span class="n">gm</span> <span class="o">=</span> <span class="n">q</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; leaving group&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">gm</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">leave_group_and_wait</span><span class="p">(</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">LEAVE_GROUP_WAIT_TIME</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">new_gm_playing</span> <span class="o">==</span> <span class="s1">&#39;new_gm_playing&#39;</span><span class="p">:</span>
+                <span class="c1"># new gm in playing state</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting playback on new gm candidate </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                 <span class="s2">&quot;before joining to group with GC: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm</span><span class="p">,</span> <span class="n">gc</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_add_tracks_to_queue</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span>
+                <span class="n">qpos</span> <span class="o">=</span> <span class="p">(</span><span class="n">i</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">gm</span><span class="p">,</span> <span class="n">qpos</span><span class="o">=</span><span class="n">qpos</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">playing_music</span><span class="p">[</span><span class="n">gm</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expect gc &lt;</span><span class="si">{}</span><span class="s2">&gt; in playing state&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">GROUPING_WAIT_TIME</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; joining group&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">gm</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="n">gc</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_all_zps_linked</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">gms</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expect gc &lt;</span><span class="si">{}</span><span class="s2">&gt; in playing state&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_all_gms_playing_music</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">GROUPING_WAIT_TIME</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">continue_on_errors</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">)</span>
+            <span class="n">q</span><span class="o">.</span><span class="n">rotate</span><span class="p">()</span>
+            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+
+
+
+<div class="viewcode-block" id="GroupUnGroupStressTest.test_grouping_ungrouping"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.group_ungroup_stress_test.GroupUnGroupStressTest.test_grouping_ungrouping">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;gc_gms_and_state_generator&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_grouping_ungrouping</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">new_gm_playing</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Form a group, remove a player, add a player rotate thru the gms for</span>
+<span class="sd">        &#39;ITERATIONS&#39;. New GM playing&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;GC: </span><span class="si">{}</span><span class="s2">. New GM playing state -Playing ?: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">new_gm_playing</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_test</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">new_gm_playing</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Group ungroup Stress Test&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">GroupUnGroupStressTest</span><span class="p">()])</span>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,902 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>cloud.test_connections_against_mock_lechmere &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for cloud.test_connections_against_mock_lechmere</h1><div class="highlight"><pre>
+<span></span><span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">Copyright (c) 2016-2018, Sonos, Inc.  All rights reserved.</span>
+<span class="sd">&#39;&#39;&#39;</span>
+
+<span class="kn">from</span> <span class="nn">sonos.cloud.base_player_cert_fixture</span> <span class="k">import</span> <span class="n">BasePlayerCertTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span><span class="p">,</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.mock_player_cloud_services_control</span> <span class="k">import</span> <span class="n">MockPlayerCloudServicesControl</span> <span class="k">as</span> <span class="n">MPCSC</span><span class="p">,</span> <span class="n">get_open_ports</span>
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="n">MuseClientFixtureMixin</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">contextlib</span> <span class="k">import</span> <span class="n">contextmanager</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">from</span> <span class="nn">base64</span> <span class="k">import</span> <span class="n">b64encode</span>
+<span class="kn">from</span> <span class="nn">hashlib</span> <span class="k">import</span> <span class="n">md5</span>
+<span class="kn">from</span> <span class="nn">sonos.client.rest.status_scraper</span> <span class="k">import</span> <span class="n">StatusRoutes</span><span class="p">,</span> <span class="n">get_status_page</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">SessionState</span><span class="p">)</span>
+<span class="kn">import</span> <span class="nn">webserver.helpers.muse_api_helpers</span>
+
+<span class="n">muse_helper</span> <span class="o">=</span> <span class="n">webserver</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">muse_api_helpers</span><span class="o">.</span><span class="n">MuseApiHelpers</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="fragmentation_generator"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.fragmentation_generator">[docs]</a><span class="k">def</span> <span class="nf">fragmentation_generator</span><span class="p">():</span>
+    <span class="k">for</span> <span class="n">frag</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;true&quot;</span><span class="p">,</span> <span class="s2">&quot;false&quot;</span><span class="p">):</span>
+        <span class="k">yield</span> <span class="n">frag</span></div>
+
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture">[docs]</a><span class="k">class</span> <span class="nc">BaseLechmereRegistrationFixture</span><span class="p">(</span><span class="n">BasePlayerCertTestFixture</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base fixture for lechmere registration message tests.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">CS_RECONNECT</span> <span class="o">=</span> <span class="s1">&#39;MillisecondsToNextConnect&#39;</span>
+
+    <span class="c1"># V6 Protocol fields</span>
+    <span class="n">REG_FIELDS_V6</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;sonosId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;playerId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;groupId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;groupName&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;householdLocationId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;householdId&#39;</span><span class="p">,</span> <span class="c1"># mock Lechmere adds this to the registration message</span>
+                     <span class="s1">&#39;roomName&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;serial&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;model&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;ipAddr&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;port&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;isCoordinator&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;isVisible&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;isSatellite&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;isSecure&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;hwVersion&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;swVersion&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;bootSequenceId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;sessionId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;museHouseholdId&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;dhcpMac&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;networkIPAddress&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;networkMask&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;systemUptimeSeconds&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;anacapaUptimeSeconds&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;apiVersion&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;minApiVersion&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;modelDisplayName&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;color&#39;</span><span class="p">,</span>
+                     <span class="s1">&#39;capabilities&#39;</span><span class="p">)</span>
+
+    <span class="n">REG_FIELDS_V6</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">REG_FIELDS_V6</span><span class="p">))</span>
+    <span class="n">PROTOCOLS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;lechmere.6&#39;</span><span class="p">:</span>  <span class="n">REG_FIELDS_V6</span><span class="p">}</span>
+
+    <span class="n">DEVICE_STATUS_FIELDS_V6</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;ZoneName&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;HouseholdLocationID&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;DHCPServerMac&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;NetworkIPAddress&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;NetworkMask&#39;</span><span class="p">)</span>
+
+    <span class="n">ZP_STATUS_FIELDS_V6</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;HouseholdControlID&#39;</span><span class="p">,)</span>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.setUpFixture"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">BaseLechmereRegistrationFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_playback_devices</span><span class="p">()],</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="c1"># Show full sequence diffs</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">maxDiff</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># Wait for householdLocationId generation.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_trial_zp_serial</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="c1"># ZP regstate 3?</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_secure_registered</span><span class="p">(),</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> is not RegState 3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+        <span class="n">http_port</span><span class="p">,</span> <span class="n">ssl_port</span><span class="p">,</span> <span class="n">mutual_ssl_port</span> <span class="o">=</span> <span class="n">get_open_ports</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_default_args</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;protocols&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">supported_protocols</span><span class="p">,</span>
+                                  <span class="s1">&#39;http_port&#39;</span><span class="p">:</span> <span class="n">http_port</span><span class="p">,</span>
+                                  <span class="s1">&#39;ssl_port&#39;</span><span class="p">:</span> <span class="n">ssl_port</span><span class="p">,</span>
+                                  <span class="s1">&#39;mutual_ssl_port&#39;</span><span class="p">:</span> <span class="n">mutual_ssl_port</span><span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span> <span class="o">=</span> <span class="n">MPCSC</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">mock_default_args</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_player_connect_override_mutual_ssl</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                      <span class="n">report</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.teardownFixture"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.teardownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">teardownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="n">MPCSC</span><span class="o">.</span><span class="n">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.setUpTest"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.tearDownTest"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span></div>
+
+    <span class="c1"># ---- helpers ---- #</span>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.protocol_generator"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.protocol_generator">[docs]</a>    <span class="k">def</span> <span class="nf">protocol_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">protocol</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">PROTOCOLS</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">yield</span> <span class="n">protocol</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">supported_protocols</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="s1">&#39;lechmere.4&#39;</span><span class="p">,</span> <span class="s1">&#39;lechmere.6&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.restart_mock"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.restart_mock">[docs]</a>    <span class="k">def</span> <span class="nf">restart_mock</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">opts</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Restart mock lechmere with different settings</span>
+
+<span class="sd">        :param dict opts: Arguments for mock lechmere</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;mock_lechmere&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">shutdown</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span> <span class="o">=</span> <span class="n">MPCSC</span><span class="p">(</span><span class="o">**</span><span class="n">opts</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">LM_SERVER_URI</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.restart_mock_cm"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.restart_mock_cm">[docs]</a>    <span class="nd">@contextmanager</span>
+    <span class="k">def</span> <span class="nf">restart_mock_cm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">opts</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Contextmanager for restarting mock lechmere with different settings.</span>
+<span class="sd">        Will restart the mock with the desired settings, then restart it again</span>
+<span class="sd">        with default settings when exiting the contextmanager.</span>
+
+<span class="sd">        :param dict opts: Arguments for mock lechmere</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">restart_mock</span><span class="p">(</span><span class="o">**</span><span class="n">opts</span><span class="p">)</span>
+            <span class="k">yield</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">restart_mock</span><span class="p">(</span><span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">mock_default_args</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.get_lechmere_v6_attributes_from_status"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.get_lechmere_v6_attributes_from_status">[docs]</a>    <span class="k">def</span> <span class="nf">get_lechmere_v6_attributes_from_status</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the following tags from status page:</span>
+<span class="sd">            HouseholdControlID</span>
+<span class="sd">            HouseholdLocationID</span>
+<span class="sd">            DHCPServerMac</span>
+<span class="sd">            NetworkIPAddress</span>
+<span class="sd">            NetworkMask</span>
+
+<span class="sd">        Returns an empty dictionary if the status page can&#39;t be accessed.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: Dictionary of tag name: value</span>
+<span class="sd">        :rtype: :obj: `dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_status_page</span> <span class="o">=</span> <span class="n">get_status_page</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">StatusRoutes</span><span class="o">.</span><span class="n">ZP</span><span class="p">)</span>
+        <span class="n">zp_status</span> <span class="o">=</span> <span class="p">{</span><span class="n">attr</span><span class="p">:</span> <span class="n">zp_status_page</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="n">attr</span><span class="p">)</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">attr</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ZP_STATUS_FIELDS_V6</span><span class="p">}</span> <span class="k">if</span> <span class="n">zp_status_page</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">{}</span>
+        <span class="n">device_status_page</span> <span class="o">=</span> <span class="n">get_status_page</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">StatusRoutes</span><span class="o">.</span><span class="n">DEVICE</span><span class="p">)</span>
+        <span class="n">device_status</span> <span class="o">=</span> <span class="p">{</span><span class="n">attr</span><span class="p">:</span> <span class="n">device_status_page</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="n">attr</span><span class="p">)</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">attr</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">DEVICE_STATUS_FIELDS_V6</span><span class="p">}</span> <span class="k">if</span> <span class="n">device_status_page</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">{}</span>
+        <span class="n">zp_status</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">device_status</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">zp_status</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.wait_for_connected_and_registration_message_sent"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.wait_for_connected_and_registration_message_sent">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                         <span class="n">zp</span><span class="p">,</span>
+                                                         <span class="n">iteration_delay</span><span class="o">=.</span><span class="mi">5</span><span class="p">,</span>
+                                                         <span class="n">registration_timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+                                                         <span class="n">cloud_connected_timeout</span><span class="o">=</span><span class="mi">65</span><span class="p">,</span>
+                                                         <span class="n">expected_protocol</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                                         <span class="n">verifier</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for the player to connect and send registration message.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param float iteration_delay: Delay in seconds to poll</span>
+<span class="sd">        :param int cloud_connected_timeout: Timeout in seconds to wait for</span>
+<span class="sd">            cloud connection.</span>
+<span class="sd">        :param int registration_timeout: Timeout in seconds to wait for</span>
+<span class="sd">            the player to send registration message after connecting.</span>
+<span class="sd">        :param str expected_protocol: (optional) String to match against</span>
+<span class="sd">            the protocol to verify the player connected with the correct</span>
+<span class="sd">            protocol.</span>
+<span class="sd">        :param func verifier: (optional) verifier to perform additional</span>
+<span class="sd">            verifications on the registration message.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Conditionally wait for the player to connect to the cloud</span>
+        <span class="k">if</span> <span class="n">cloud_connected_timeout</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_for_cloud_connected</span><span class="p">(</span><span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">cloud_connected_timeout</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for &lt;</span><span class="si">{}</span><span class="s2">&gt; to connect&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="c1"># Conditionally wait for registration message</span>
+        <span class="k">if</span> <span class="n">registration_timeout</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+                                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">registration_timeout</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for &lt;</span><span class="si">{}</span><span class="s2">&gt; to send registration message.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="c1"># Verify the registration message.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                              <span class="n">expected_protocol</span><span class="o">=</span><span class="n">expected_protocol</span><span class="p">,</span>
+                                              <span class="n">verifier</span><span class="o">=</span><span class="n">verifier</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.verify_registration_message_sent"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.verify_registration_message_sent">[docs]</a>    <span class="k">def</span> <span class="nf">verify_registration_message_sent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                         <span class="n">zp</span><span class="p">,</span>
+                                         <span class="n">expected_protocol</span><span class="o">=</span><span class="n">supported_protocols</span><span class="p">,</span>
+                                         <span class="n">verifier</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the ZP sent the registration message with the expected fields.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str expected_protocol: (optional) String to match against</span>
+<span class="sd">            the protocol to verify the player connected with the correct</span>
+<span class="sd">            protocol.</span>
+<span class="sd">        :param func verifier: (optional) verifier to perform additional</span>
+<span class="sd">            verifications on the registration message.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Get and check registration status</span>
+        <span class="n">registration</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">registration</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; not registered!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="c1"># Get and check protocol</span>
+        <span class="n">protocol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_connected_protocol</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">protocol</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; not connected with a protocol!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">elif</span> <span class="n">protocol</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">PROTOCOLS</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; connected protocol &lt;</span><span class="si">{}</span><span class="s2">&gt; not supported!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">protocol</span><span class="p">))</span>
+
+        <span class="c1"># Conditionally verify protocol</span>
+        <span class="k">if</span> <span class="n">expected_protocol</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">expected_protocol</span><span class="p">,</span> <span class="n">protocol</span><span class="p">,</span>
+                <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; connected with expected protocol?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="n">my_expected_keys</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PROTOCOLS</span><span class="p">[</span><span class="n">protocol</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">roomName</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">roomName</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;ROOM NAME=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">roomName</span><span class="p">))</span>
+            <span class="c1"># filter out the roomName key for products without a name</span>
+            <span class="n">my_expected_keys</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">!=</span> <span class="s1">&#39;roomName&#39;</span><span class="p">,</span> <span class="n">my_expected_keys</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">color</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">color</span> <span class="o">==</span> <span class="s2">&quot;None&quot;</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">color</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;COLOR=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">color</span><span class="p">))</span>
+            <span class="c1"># filter out the color key for old products without color information</span>
+            <span class="n">my_expected_keys</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="o">!=</span> <span class="s1">&#39;color&#39;</span><span class="p">,</span> <span class="n">my_expected_keys</span><span class="p">)</span>
+
+        <span class="c1"># Verify we got a non empty capabilities array</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">registration</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s1">&#39;capabilities&#39;</span><span class="p">])</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Empty capabilities array on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Registration message: &lt;</span><span class="si">{}</span><span class="s2">&gt;, (expected fields: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">registration</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                                                                     <span class="n">my_expected_keys</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifySequenceEqualOrStop</span><span class="p">(</span><span class="n">my_expected_keys</span><span class="p">,</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">registration</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">()),</span>
+            <span class="s2">&quot;Found all expected fields in registration message (ZP &lt;</span><span class="si">{}</span><span class="s2">&gt;, protocol &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">protocol</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">verifier</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">verifier</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.poll_and_verify_fields"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.poll_and_verify_fields">[docs]</a>    <span class="k">def</span> <span class="nf">poll_and_verify_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                               <span class="n">zp</span><span class="p">,</span>
+                               <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                               <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                               <span class="o">**</span><span class="n">expected_registration_fields</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Poll the mock endpoint and verify the specified fields in the registration message.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int iteration_delay: wait_until_true iteration delay</span>
+<span class="sd">        :param int timeout_seconds: wait_until_true timeout</span>
+<span class="sd">        :param dict expected_registration_fields: Registration fields to check</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">check_registration_fields</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                    <span class="o">**</span><span class="n">expected_registration_fields</span><span class="p">),</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Did not get registration message for ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; with expected fields &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span>
+                      <span class="nb">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="n">expected_registration_fields</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.check_registration_fields"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.check_registration_fields">[docs]</a>    <span class="k">def</span> <span class="nf">check_registration_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                  <span class="n">registration_message</span><span class="p">,</span>
+                                  <span class="o">**</span><span class="n">expected_registration_fields</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+
+<span class="sd">        :param registration_message:</span>
+<span class="sd">        :param expected_fields:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">field</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">expected_registration_fields</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">field</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">registration_message</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Field &lt;</span><span class="si">{}</span><span class="s1">&gt; not in registration message!&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">field</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">elif</span> <span class="n">registration_message</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="o">!=</span> <span class="n">value</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Field &lt;</span><span class="si">{}</span><span class="s1">&gt; does not match value &lt;</span><span class="si">{}</span><span class="s1">&gt; in registration message&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">registration_message</span><span class="p">[</span><span class="n">field</span><span class="p">],</span> <span class="n">value</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.verify_registration_message_session_id"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.verify_registration_message_session_id">[docs]</a>    <span class="k">def</span> <span class="nf">verify_registration_message_session_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                               <span class="n">zp</span><span class="p">,</span>
+                                               <span class="n">session_id</span><span class="p">,</span>
+                                               <span class="n">iteration_delay</span><span class="o">=.</span><span class="mi">5</span><span class="p">,</span>
+                                               <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validate the sessionId that is sent in with the player registration message is accurate to the sessionId</span>
+<span class="sd">        on the player</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param session_id: Should we validate the value of the sessionId header (the Muse sessionId)</span>
+<span class="sd">        :type session_id: :str: Value of the sessionId to validate</span>
+<span class="sd">        :param float iteration_delay: Polling iteration interval for wait_until_true</span>
+<span class="sd">        :param int timeout_seconds: Timeout in seconds to wait for the registration sessionId to match.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                              <span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                                                              <span class="n">registration_timeout</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">,</span>
+                                                              <span class="n">cloud_connected_timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                                              <span class="n">verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">szp</span><span class="p">:</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">poll_and_verify_fields</span><span class="p">(</span>
+                                                                      <span class="n">szp</span><span class="p">,</span>
+                                                                      <span class="n">sessionId</span><span class="o">=</span><span class="n">session_id</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.verify_registration_message_hhlocid"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.verify_registration_message_hhlocid">[docs]</a>    <span class="k">def</span> <span class="nf">verify_registration_message_hhlocid</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                            <span class="n">zps</span><span class="p">,</span>
+                                            <span class="n">expected_hhlocid</span><span class="p">,</span>
+                                            <span class="n">wait_timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a list of players (or one player) is registered with the expected</span>
+<span class="sd">        householdLocationId (which is actually the player&#39;s Trial ZP serial number,</span>
+<span class="sd">        just to confuse you.)</span>
+
+<span class="sd">        :param zps: ZonePlayer or list of ZonePlayers</span>
+<span class="sd">        :param zps: :class:`~sonos.client.internal.SonosZoneComponent` or</span>
+<span class="sd">            :obj:`list` of :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str expected_hhlocid: Expected householdLocationId.</span>
+<span class="sd">        :param int wait_timeout_seconds: (optional) Number of seconds to wait if</span>
+<span class="sd">            before timing out. 15 by default.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Handle the case where a single ZP was passed in instead</span>
+        <span class="c1"># of a list by converting it to a single-item list.</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="s1">&#39;__iter__&#39;</span><span class="p">):</span>
+            <span class="n">zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">zps</span><span class="p">]</span>
+
+        <span class="c1"># Go through the list and verify that each player is registered with</span>
+        <span class="c1"># the expected householdLocationId.</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="c1"># Wait if specified, but don&#39;t raise an exception if the timeout is hit.</span>
+            <span class="c1"># Subsequent verifications will fail immediately after in either case.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                  <span class="n">registration_timeout</span><span class="o">=</span><span class="n">wait_timeout_seconds</span><span class="p">,</span>
+                                                                  <span class="n">cloud_connected_timeout</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                                                  <span class="n">verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">poll_and_verify_fields</span><span class="p">(</span>
+                                                                      <span class="n">zp</span><span class="p">,</span>
+                                                                      <span class="n">householdLocationId</span><span class="o">=</span><span class="n">expected_hhlocid</span><span class="p">))</span></div>
+
+    <span class="c1"># ---- verifiers (v6) ---- #</span>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.verify_lechmere_v6_attributes"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.verify_lechmere_v6_attributes">[docs]</a>    <span class="k">def</span> <span class="nf">verify_lechmere_v6_attributes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="o">**</span><span class="n">attrs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check the status page against a dictionary of attributes.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param dict attrs:</span>
+<span class="sd">        :return: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">status_attrs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_lechmere_v6_attributes_from_status</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">info_str</span> <span class="o">=</span> <span class="s2">&quot;Matched (status page: &lt;</span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&gt; </span><span class="si">{}</span><span class="s2"> expected attribute: &lt;</span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&gt;)&quot;</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">attrs</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">status_attrs</span> <span class="ow">and</span> <span class="n">status_attrs</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">v</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">info_str</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">status_attrs</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="s2">&quot;==&quot;</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">))</span>
+                <span class="k">continue</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">info_str</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">status_attrs</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="s2">&quot;!=&quot;</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.wait_for_status_attrs"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.wait_for_status_attrs">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_status_attrs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="o">**</span><span class="n">attrs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for a given dictionary of attributes to match the values in the status page</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int iteration_delay: wait_until_true iteration delay</span>
+<span class="sd">        :param int timeout_seconds: wait_until_true timeout seconds</span>
+<span class="sd">        :param dict attrs: Attributes to check</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_lechmere_v6_attributes</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="o">**</span><span class="n">attrs</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for status attributes to match &lt;</span><span class="si">{}</span><span class="s2">&gt;!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attrs</span><span class="p">))</span></div>
+
+    <span class="c1"># ---- Registration message field tests ---- #</span>
+
+<div class="viewcode-block" id="BaseLechmereRegistrationFixture.test_player_resends_registration_message_on_reconnect"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.BaseLechmereRegistrationFixture.test_player_resends_registration_message_on_reconnect">[docs]</a>    <span class="k">def</span> <span class="nf">test_player_resends_registration_message_on_reconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the player re-sends the registration message on reconnect.</span>
+<span class="sd">        This covers the regression in SWPBL-58732.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Looking for &lt;</span><span class="si">{}</span><span class="s2">&gt;&#39;s registration message&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+        <span class="c1"># Close connection for ZP.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">disconnect_zp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests">[docs]</a><span class="k">class</span> <span class="nc">LechmereV6RegistrationTests</span><span class="p">(</span><span class="n">BaseLechmereRegistrationFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests for V6 protocol</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;CLOUD_CONNECTION_STATS&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.setUpFixture"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LechmereV6RegistrationTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># Turn syncing off to disable the logic where players update their museHouseholdIds</span>
+        <span class="c1"># to match that of other connected players based on uptime.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_sync_muse_hhids</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.teatDownFixture"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.teatDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">teatDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="n">MPCSC</span><span class="o">.</span><span class="n">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.tearDownTest"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">clear_last_check_alive</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LechmereV6RegistrationTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">supported_protocols</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="s1">&#39;lechmere.6&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.wait_and_verify_muse_household_id_in_localsettings"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.wait_and_verify_muse_household_id_in_localsettings">[docs]</a>    <span class="k">def</span> <span class="nf">wait_and_verify_muse_household_id_in_localsettings</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                           <span class="n">zp</span><span class="p">,</span>
+                                                           <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                                                           <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                                           <span class="n">expected</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait and verify that the museHouseholdId is present in localsettings.</span>
+
+<span class="sd">        Skip waiting by passing timeout seconds of 0.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int iteration_delay: wait_until_true iteration delay</span>
+<span class="sd">        :param int timeout_seconds: wait_until_true timeout</span>
+<span class="sd">        :param bool expected: Do we expect the museHouseholdId to be present or not?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_household_id_present</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># Conditionally wait</span>
+        <span class="k">if</span> <span class="n">timeout_seconds</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_muse_household_id</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+                                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">iteration_delay</span><span class="p">,</span>
+                                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="k">pass</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">muse_household_id_present</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># Check case where we expected the museHouseholdId</span>
+        <span class="k">if</span> <span class="n">expected</span><span class="p">:</span>
+            <span class="c1"># If the muse householdId is not present, fail</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">muse_household_id_present</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for museHouseholdId to &quot;</span>
+                          <span class="s2">&quot;be present in localsettings on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="c1"># Check case where we didn&#39;t expect the museHouseholdId</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># If the muse householdId is present, fail</span>
+            <span class="k">if</span> <span class="n">muse_household_id_present</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;museHouseholdId unexpectedly present in localsettings on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.calculate_household_location_id"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.calculate_household_location_id">[docs]</a>    <span class="k">def</span> <span class="nf">calculate_household_location_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Calculate the household location Id from the DHCPServerMac and NetworkIPAddress</span>
+<span class="sd">        fields on the device status page.</span>
+
+<span class="sd">        :return: household location Id</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">device_status_page</span> <span class="o">=</span> <span class="n">get_status_page</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">StatusRoutes</span><span class="o">.</span><span class="n">DEVICE</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">b64encode</span><span class="p">(</span><span class="n">md5</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">device_status_page</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="s1">&#39;DHCPServerMac&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">text</span><span class="p">,</span>
+            <span class="n">device_status_page</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="s1">&#39;NetworkIPAddress&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">text</span><span class="p">))</span><span class="o">.</span><span class="n">digest</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.verify_status_page_v6_fields"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.verify_status_page_v6_fields">[docs]</a>    <span class="k">def</span> <span class="nf">verify_status_page_v6_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">expected_muse_hhid</span><span class="p">,</span> <span class="n">expected_household_location_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the networkIPAddress, subnet mask and museHouseholdId in the status page.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str expected_muse_hhid: Expected muse householdId</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">expected_household_location_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">expected_household_location_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">calculate_household_location_id</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_status_attrs</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                   <span class="n">HouseholdControlID</span><span class="o">=</span><span class="n">expected_muse_hhid</span><span class="p">,</span>
+                                   <span class="n">NetworkIPAddress</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_network_ip_address</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">),</span>
+                                   <span class="n">NetworkMask</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_subnet_mask</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">),</span>
+                                   <span class="n">HouseholdLocationID</span><span class="o">=</span><span class="n">expected_household_location_id</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.verify_registration_v6_fields"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.verify_registration_v6_fields">[docs]</a>    <span class="k">def</span> <span class="nf">verify_registration_v6_fields</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                      <span class="n">zp</span><span class="p">,</span>
+                                      <span class="n">expected_muse_hhid</span><span class="p">,</span>
+                                      <span class="n">expected_household_location_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the networkIPAddress, subnet mask and museHouseholdId in the status page.</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str expected_muse_hhid: Expected muse householdId</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">expected_household_location_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">expected_household_location_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">calculate_household_location_id</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="c1"># Verify the player is registered with the correct museHouseholdId</span>
+        <span class="n">status_items</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_lechmere_v6_attributes_from_status</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">poll_and_verify_fields</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                    <span class="n">museHouseholdId</span><span class="o">=</span><span class="n">expected_muse_hhid</span><span class="p">,</span>
+                                    <span class="n">networkIPAddress</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_network_ip_address</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">),</span>
+                                    <span class="n">networkMask</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_subnet_mask</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">),</span>
+                                    <span class="n">dhcpMac</span><span class="o">=</span><span class="n">status_items</span><span class="p">[</span><span class="s1">&#39;DHCPServerMac&#39;</span><span class="p">],</span>
+                                    <span class="n">householdLocationId</span><span class="o">=</span><span class="n">expected_household_location_id</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.test_player_resends_registration_message_on_hhlocid_change"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.test_player_resends_registration_message_on_hhlocid_change">[docs]</a>    <span class="k">def</span> <span class="nf">test_player_resends_registration_message_on_hhlocid_change</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Placeholder</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_1</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">zp_2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">orig_location_id</span> <span class="o">=</span> <span class="n">zp_1</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">household_location_id</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_sync_muse_hhids</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">zp_2</span><span class="p">):</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+                                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Looking for &lt;</span><span class="si">{}</span><span class="s2">&gt;&#39;s registration message&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+            <span class="c1"># Verify both players got the same muse hhid</span>
+            <span class="n">current_muse_household_id</span> <span class="o">=</span> <span class="n">zp_1</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_muse_household_id</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+
+            <span class="c1"># Change the household location ID</span>
+            <span class="n">zp_1</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">household_location_id</span> <span class="o">=</span> <span class="s1">&#39;fun&#39;</span>
+
+            <span class="c1"># Verify location ID replicated and both players re-registered</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">,</span>
+                                              <span class="n">expected_household_location_id</span><span class="o">=</span><span class="s1">&#39;fun&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">,</span>
+                                               <span class="n">expected_household_location_id</span><span class="o">=</span><span class="s1">&#39;fun&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">,</span>
+                                              <span class="n">expected_household_location_id</span><span class="o">=</span><span class="s1">&#39;fun&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">,</span>
+                                               <span class="n">expected_household_location_id</span><span class="o">=</span><span class="s1">&#39;fun&#39;</span><span class="p">)</span>
+
+            <span class="c1"># Bounce anacapa on a ZP to force it to recalculate the householdLocationId</span>
+            <span class="n">zp_1</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+            <span class="c1"># Verify players connects and sends registration message.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">registration_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">registration_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_1</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_status_page_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_registration_v6_fields</span><span class="p">(</span><span class="n">zp_2</span><span class="p">,</span> <span class="n">current_muse_household_id</span><span class="p">)</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="n">zp_1</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">household_location_id</span> <span class="o">=</span> <span class="n">orig_location_id</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_sync_muse_hhids</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.test_player_sends_registration_message_on_muse_household_id_change"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.test_player_sends_registration_message_on_muse_household_id_change">[docs]</a>    <span class="k">def</span> <span class="nf">test_player_sends_registration_message_on_muse_household_id_change</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player re-sends the registration message when the</span>
+<span class="sd">        muse household ID changes.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Looking for &lt;</span><span class="si">{}</span><span class="s2">&gt;&#39;s registration message&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+        <span class="n">orig_muse_hhid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="s1">&#39;museHouseholdId&#39;</span><span class="p">]</span>
+
+        <span class="c1"># Send a setconfig with a new muse household id</span>
+        <span class="n">hhid_list</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">orig_muse_hhid</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">hhid_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;Z&quot;</span><span class="p">:</span>
+            <span class="n">hhid_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;0&quot;</span>
+        <span class="k">elif</span> <span class="n">hhid_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">&quot;Z&quot;</span><span class="p">:</span>
+            <span class="n">hhid_list</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Z&quot;</span>
+        <span class="n">new_muse_hhid</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">hhid_list</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_config</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="n">new_muse_hhid</span><span class="p">)</span>
+
+        <span class="c1"># Verify the player reregisters with the new muse household Id within a short window</span>
+        <span class="k">def</span> <span class="nf">check_muse_hhid</span><span class="p">():</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)[</span><span class="mi">0</span><span class="p">][</span><span class="s1">&#39;museHouseholdId&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">new_muse_hhid</span>
+            <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="n">check_muse_hhid</span><span class="p">,</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Player &lt;</span><span class="si">{}</span><span class="s2">&gt; failed to send new registration message when muse HHID updated!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_config</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="n">orig_muse_hhid</span><span class="p">)</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="n">check_muse_hhid</span><span class="p">,</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.test_get_config"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.test_get_config">[docs]</a>    <span class="k">def</span> <span class="nf">test_get_config</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the player behaves correctly when receiving a getConfig message (06)</span>
+<span class="sd">        over the websocket.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Looking for &lt;</span><span class="si">{}</span><span class="s2">&gt;&#39;s registration message&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+        <span class="c1"># Tell mock to send check alive to ZP</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">check_alive</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="c1"># Get the check alive response from the mock</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_last_check_alive</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="n">check_alive_response</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_last_check_alive</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="n">reg_msg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">get_zp_registered</span><span class="p">(</span><span class="n">zp</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="c1"># Verify check config message has the same fields as the registration message</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifySequenceEqualOrStop</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">check_alive_response</span><span class="o">.</span><span class="n">keys</span><span class="p">()),</span>
+                                       <span class="nb">sorted</span><span class="p">(</span><span class="n">reg_msg</span><span class="o">.</span><span class="n">keys</span><span class="p">()),</span>
+            <span class="s2">&quot;Found all expected fields in registration message (ZP &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="c1"># Strip uptimeSeconds out of both objects, don&#39;t compare them</span>
+        <span class="k">del</span> <span class="n">reg_msg</span><span class="p">[</span><span class="s1">&#39;systemUptimeSeconds&#39;</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">check_alive_response</span><span class="p">[</span><span class="s1">&#39;systemUptimeSeconds&#39;</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">reg_msg</span><span class="p">[</span><span class="s1">&#39;anacapaUptimeSeconds&#39;</span><span class="p">]</span>
+        <span class="k">del</span> <span class="n">check_alive_response</span><span class="p">[</span><span class="s1">&#39;anacapaUptimeSeconds&#39;</span><span class="p">]</span>
+
+        <span class="c1"># Verify everything in the check config response matches the registration except the uptimeSeconds</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">check_registration_fields</span><span class="p">(</span><span class="n">reg_msg</span><span class="p">,</span> <span class="o">**</span><span class="n">check_alive_response</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.test_send_muse_command_to_mock_lechmere"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.test_send_muse_command_to_mock_lechmere">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">fragmentation_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_send_muse_command_to_mock_lechmere</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">fragmented</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-86366</span>
+<span class="sd">        Verify that the player is able to support continuation frames from the mock lechmere</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Static values</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;cloudrequest&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="c1"># # Verify player connects and sends registration message.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="n">hhid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span>
+        <span class="n">gid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span>
+        <span class="n">appId</span> <span class="o">=</span> <span class="s2">&quot;com.example.yourAppId&quot;</span>
+        <span class="n">appContext</span> <span class="o">=</span> <span class="s2">&quot;1a2b3c&quot;</span>
+        <span class="n">customData</span> <span class="o">=</span> <span class="s2">&quot;playlistid:12345&quot;</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[{</span><span class="s2">&quot;namespace&quot;</span><span class="p">:</span><span class="s2">&quot;playbackSession:1&quot;</span><span class="p">,</span>
+               <span class="s2">&quot;command&quot;</span><span class="p">:</span><span class="s2">&quot;createSession&quot;</span><span class="p">,</span>
+               <span class="s2">&quot;householdId&quot;</span><span class="p">:</span><span class="n">hhid</span><span class="p">,</span>
+               <span class="s2">&quot;groupId&quot;</span><span class="p">:</span><span class="n">gid</span><span class="p">},</span>
+               <span class="p">{</span><span class="s2">&quot;appId&quot;</span><span class="p">:</span><span class="n">appId</span><span class="p">,</span>
+                <span class="s2">&quot;appContext&quot;</span><span class="p">:</span><span class="n">appContext</span><span class="p">,</span>
+                <span class="s2">&quot;customData&quot;</span><span class="p">:</span><span class="n">customData</span><span class="p">}]</span>
+
+        <span class="c1"># Send the muse command to the mock lechmere</span>
+        <span class="n">resp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">send_lechmere_command</span><span class="p">(</span><span class="n">cmd</span><span class="o">=</span><span class="n">cmd</span><span class="p">,</span>
+                                                        <span class="n">serial</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                        <span class="n">fragmented</span><span class="o">=</span><span class="n">fragmented</span><span class="p">,</span>
+                                                        <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span>
+                                                        <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                                        <span class="n">request_type</span><span class="o">=</span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+                                                        <span class="n">command_type</span><span class="o">=</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span>
+                                                        <span class="n">request_json</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># stuff the response from the mock lechmere into the self.muse.test_events object</span>
+        <span class="c1"># so that we can use self.verify_event to look at the response event</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">_handle_message</span><span class="p">(</span><span class="n">resp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">test_events</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">event</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">iterations</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_created</span> <span class="ow">is</span> <span class="kc">True</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">custom_data</span> <span class="o">==</span> <span class="n">customData</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;cloudrequest&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LechmereV6RegistrationTests.test_send_upnp_command_to_mock_lechmere"><a class="viewcode-back" href="../../cloud.html#cloud.test_connections_against_mock_lechmere.LechmereV6RegistrationTests.test_send_upnp_command_to_mock_lechmere">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s2">&quot;Player now has muse submit diag command&quot;</span><span class="p">)</span>
+    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">fragmentation_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_send_upnp_command_to_mock_lechmere</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">fragmented</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-86366</span>
+<span class="sd">        Verify that the player is able to support continuation frames from the mock lechmere with</span>
+<span class="sd">        upnp passthrough commands</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Static values</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;cloudrequest&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="c1"># # Verify player connects and sends registration message.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_connected_and_registration_message_sent</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="c1"># Force a diag is the only command currently supported for passthrough</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="s2">&quot;X-Sonos-Method: POST</span><span class="se">\r\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;X-Sonos-URI: /ZoneGroupTopology/Control</span><span class="se">\r\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;Content-Type: text/xml; charset=</span><span class="se">\&quot;</span><span class="s2">utf-8</span><span class="se">\&quot;\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;Content-Length: 333</span><span class="se">\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;SOAPAction: </span><span class="se">\&quot;</span><span class="s2">urn:schemas-upnp-org:service:ZoneGroupTopology:1#SubmitDiagnostics</span><span class="se">\&quot;\r\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;</span><span class="se">\r\n</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;&lt;?xml version=</span><span class="se">\&quot;</span><span class="s2">1.0</span><span class="se">\&quot;</span><span class="s2"> encoding=</span><span class="se">\&quot;</span><span class="s2">utf-8</span><span class="se">\&quot;</span><span class="s2">?&gt;&quot;</span> \
+              <span class="s2">&quot;&lt;s:Envelope xmlns:s=</span><span class="se">\&quot;</span><span class="s2">http://schemas.xmlsoap.org/soap/envelope/</span><span class="se">\&quot;</span><span class="s2">&quot;</span> \
+              <span class="s2">&quot;  &lt;s:Body&gt;&quot;</span> \
+              <span class="s2">&quot;    &lt;u:SubmitDiagnostics xmlns:u=</span><span class="se">\&quot;</span><span class="s2">urn:schemas-upnp-org:service:ZoneGroupTopology:1</span><span class="se">\&quot;</span><span class="s2">&gt;&quot;</span> \
+              <span class="s2">&quot;      &lt;Type&gt;&lt;/Type&gt;&quot;</span> \
+              <span class="s2">&quot;      &lt;IncludeControllers&gt;1&lt;/IncludeControllers&gt;&quot;</span> \
+              <span class="s2">&quot;    &lt;/u:SubmitDiagnostics&gt;&quot;</span> \
+              <span class="s2">&quot; &lt;/s:Body&gt;&quot;</span> \
+              <span class="s2">&quot;&lt;/s:Envelope&gt;&quot;</span>
+
+        <span class="c1"># Send the muse command to the mock lechmere</span>
+        <span class="n">resp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">send_lechmere_command</span><span class="p">(</span><span class="n">cmd</span><span class="o">=</span><span class="n">cmd</span><span class="p">,</span>
+                                                        <span class="n">serial</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                        <span class="n">fragmented</span><span class="o">=</span><span class="n">fragmented</span><span class="p">,</span>
+                                                        <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;text/xml&quot;</span><span class="p">,</span>
+                                                        <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                                        <span class="n">request_type</span><span class="o">=</span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+                                                        <span class="n">command_type</span><span class="o">=</span><span class="s2">&quot;http&quot;</span><span class="p">,</span>
+                                                        <span class="n">request_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyInOrFailCase</span><span class="p">(</span><span class="s2">&quot;DiagnosticID&quot;</span><span class="p">,</span> <span class="n">resp</span><span class="p">,</span>
+                                <span class="s2">&quot;DiagnosticID should be in the xml response&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;cloudrequest&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">LechmereV6RegistrationTests</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">LechmereV6RegistrationTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

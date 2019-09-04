@@ -1,0 +1,434 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>syssw.jffs_maintain &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for syssw.jffs_maintain</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">namedtuple</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">tempfile</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">SimpleUpgradeTestFixture</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+
+<span class="n">LOW_ERASE_THRESHOLD</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">NUM_FILES</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">MAX_SIZE_KB</span> <span class="o">=</span> <span class="mi">128</span>
+<span class="n">FILE_BLOCK_SIZE_BYTES</span> <span class="o">=</span> <span class="mi">1048576</span>
+<span class="n">FILE_BLOCK_COUNT</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">TEST_FILE_LOCATION</span> <span class="o">=</span> <span class="s1">&#39;/tmp/&#39;</span>
+<span class="n">TEST_FILE_PREFIX</span> <span class="o">=</span> <span class="s1">&#39;jffsTest_&#39;</span>
+<span class="n">TEMP_ZP_LOCATION</span> <span class="o">=</span> <span class="s1">&#39;/jffs/test_maint/&#39;</span>
+<span class="n">KNOWN_FILE_KB</span> <span class="o">=</span> <span class="mi">512</span>
+<span class="n">ONE_KILO</span> <span class="o">=</span> <span class="mi">1024</span>
+
+<div class="viewcode-block" id="MaintainJffs"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs">[docs]</a><span class="k">class</span> <span class="nc">MaintainJffs</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This test verifies that files/directories created in JFFS are maintained</span>
+<span class="sd">    across reboots. To do so it creates files of random sizes on the test runner.</span>
+<span class="sd">    Each DUT then creates a directory in JFFS and downloads these files from the</span>
+<span class="sd">    test runner. The DUT is then rebooted and the existence of each file is</span>
+<span class="sd">    verified.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="MaintainJffs.setUpFixture"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Simple set up fixture that: creates a list of DUTS,</span>
+<span class="sd">        creates the files used for testing, starts the web server, places the</span>
+<span class="sd">        test files on each zp, then closes the files and stops the server</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Setting up Maintain JFFS&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">file_list</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">create_files</span><span class="p">(</span><span class="n">NUM_FILES</span><span class="p">,</span> <span class="n">MAX_SIZE_KB</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="mi">8080</span><span class="p">,</span> <span class="n">TEST_FILE_LOCATION</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.generate_unique_fenway_limelight"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.generate_unique_fenway_limelight">[docs]</a>    <span class="k">def</span> <span class="nf">generate_unique_fenway_limelight</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generator which yields only one instance of Play:3, Play:1, SUB, and</span>
+<span class="sd">        Limelight</span>
+
+<span class="sd">        :return: a playback device in the testbed</span>
+<span class="sd">        :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">models</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_fenway</span><span class="p">()</span> <span class="ow">or</span>
+                   <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_playbar</span><span class="p">()]:</span>
+            <span class="n">reboot_count</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="c1"># If we&#39;re already seen a device of this model, skip this device.</span>
+            <span class="c1"># Note: zp.modelNumber is actually a string, such as &quot;ZP100&quot;!</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">models</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">models</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;About to check for fix on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Devices that previously erased blocks that have already been erased</span>
+<span class="sd">            need to be rebooted twice for the fix to take effect.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="k">while</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_erased_block_count</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">LOW_ERASE_THRESHOLD</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">reboot_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s1">&#39;Unable to reset erased block count&#39;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">([</span><span class="n">zp</span><span class="p">])</span>
+                <span class="n">reboot_count</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="n">reboot_count</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="c1"># Reboot the DUT to so that the erased block count is low</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">([</span><span class="n">zp</span><span class="p">])</span>
+            <span class="k">yield</span> <span class="n">zp</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.get_files_from_server"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.get_files_from_server">[docs]</a>    <span class="k">def</span> <span class="nf">get_files_from_server</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        On each ZP in the testbed, uses wget to download each of the test files.</span>
+<span class="sd">        It will name these files test&lt;some index&gt;, where some index is a number</span>
+<span class="sd">        between 0 and one less than the number of files.</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;mkdir </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">file_list</span><span class="p">:</span>
+            <span class="n">file_location</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;wget -O </span><span class="si">{}{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                                                    <span class="n">file_location</span><span class="p">))</span>
+            <span class="c1"># Due to limited space in JFFS, DOCK should only grab the first file</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_dock</span><span class="p">():</span>
+                <span class="k">break</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.create_files"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.create_files">[docs]</a>    <span class="k">def</span> <span class="nf">create_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_count</span><span class="p">,</span> <span class="n">max_file_size</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        On the test runner, creates each of the files needed for testing. The</span>
+<span class="sd">        first file should be 512kB in size, the others will be of random size</span>
+<span class="sd">        between 1 and MAX_SIZE.</span>
+
+<span class="sd">        :return: A list of named tuples of type &#39;files&#39; with the field names</span>
+<span class="sd">            &#39;size&#39;, &#39;name&#39;, and &#39;file&#39;. &#39;file&#39; is a file object, &#39;size&#39; is the</span>
+<span class="sd">            size of the file in kilobytes, &#39;name&#39; is the file name</span>
+<span class="sd">        :rtype: :obj:`list` of :obj:`collections.namedtuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">file_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">file_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">make_file</span><span class="p">(</span><span class="n">KNOWN_FILE_KB</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">file_count</span><span class="p">):</span>
+            <span class="n">file_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">make_file</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">randrange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_file_size</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">file_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;At least one file should be &#39;</span>
+                              <span class="s1">&#39;available&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Created </span><span class="si">{}</span><span class="s1"> length list&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">file_list</span><span class="p">)))</span>
+        <span class="k">return</span> <span class="n">file_list</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.make_file"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.make_file">[docs]</a>    <span class="k">def</span> <span class="nf">make_file</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_size</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates a test file of size file_size</span>
+
+<span class="sd">        :param file_size: The size of the file to be created, in kilobytes</span>
+<span class="sd">        :return: A named tuple of type &#39;files&#39; with the field names</span>
+<span class="sd">            &#39;size&#39;, &#39;name&#39;, and &#39;file&#39;. &#39;file&#39; is a file object, &#39;size&#39; is the</span>
+<span class="sd">            size of the file in kilobytes, &#39;name&#39; is the file name</span>
+<span class="sd">        :rtype: :obj:`&#39;collections.namedtuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">files</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;files&#39;</span><span class="p">,</span> <span class="s1">&#39;size name file&#39;</span><span class="p">)</span>
+        <span class="n">f</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="n">TEST_FILE_PREFIX</span><span class="p">,</span>
+                                        <span class="nb">dir</span><span class="o">=</span><span class="n">TEST_FILE_LOCATION</span><span class="p">)</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="nb">bytearray</span><span class="p">(</span><span class="n">file_size</span> <span class="o">*</span> <span class="n">ONE_KILO</span><span class="p">))</span>
+        <span class="n">f</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">files</span><span class="p">(</span><span class="n">file_size</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">lstrip</span><span class="p">(</span><span class="n">TEST_FILE_LOCATION</span><span class="p">),</span> <span class="n">f</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.close_files"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.close_files">[docs]</a>    <span class="k">def</span> <span class="nf">close_files</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterates through the list of file objects and closes each temp file</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">each_file</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">file_list</span><span class="p">:</span>
+            <span class="n">each_file</span><span class="o">.</span><span class="n">file</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.remove_files"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.remove_files">[docs]</a>    <span class="k">def</span> <span class="nf">remove_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">n_files</span><span class="p">,</span> <span class="n">file_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes files from the ZP and the list of files</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param n_files: The number of files to remove from the zp</span>
+<span class="sd">        :type n_files: :obj:&#39;int&#39;</span>
+<span class="sd">        :param file_list: The list of files to check for removal</span>
+<span class="sd">        :type file_list: :obj:&#39;list&#39; of :obj:`collections.namedtuple`</span>
+<span class="sd">        :returns: The updated list of files, after removing n_files</span>
+<span class="sd">        :rtype: :obj:&#39;list&#39; of :obj:`collections.namedtuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_files</span><span class="p">):</span>
+                <span class="n">f</span> <span class="o">=</span> <span class="n">file_list</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;rm </span><span class="si">{}{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">,</span> <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+                <span class="n">file_list</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+                <span class="k">return</span> <span class="n">file_list</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s1">&#39;Caught exception at file index </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;length of file list: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">file_list</span><span class="p">)))</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.verify_files"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.verify_files">[docs]</a>    <span class="k">def</span> <span class="nf">verify_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">file_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks for the existence of each test file. If each file is found, it</span>
+<span class="sd">        checks the size of the file against the list of file sizes.</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param file_list: The list of files to check for removal</span>
+<span class="sd">        :type file_list: :obj:&#39;list&#39; of :obj:`collections.namedtuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">file_list</span><span class="p">:</span>
+            <span class="n">file_found</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_file_exist</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">,</span>
+                                                              <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">file_found</span><span class="p">,</span>
+                                      <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should exist&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">file_found</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">file_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_file_size</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">,</span>
+                                                             <span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">size</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">,</span> <span class="n">file_size</span><span class="p">,</span>
+                                       <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should be </span><span class="si">{}</span><span class="s1">kB&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                                                                  <span class="n">f</span><span class="o">.</span><span class="n">size</span><span class="p">))</span>
+            <span class="c1"># Due to limited space in JFFS, DOCK should only grab and verify</span>
+            <span class="c1"># the first file</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_dock</span><span class="p">():</span>
+                <span class="k">break</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.get_file_size"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.get_file_size">[docs]</a>    <span class="k">def</span> <span class="nf">get_file_size</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">path_to_file</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks for the existence of the file. If the file is found, it</span>
+<span class="sd">        gets and returns the size of the file.</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param list sizes: A list of the expected file sizes</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">file_found</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_file_exist</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">path_to_file</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">file_found</span><span class="p">,</span>
+                                  <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should exist&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">path_to_file</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">file_found</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="n">file_info</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;ls -l </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">path_to_file</span><span class="p">))</span>
+        <span class="n">file_info</span> <span class="o">=</span> <span class="n">file_info</span><span class="o">.</span><span class="n">split</span><span class="p">()</span>
+        <span class="n">file_size</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">file_info</span><span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">file_size</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.get_erased_block_count"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.get_erased_block_count">[docs]</a>    <span class="k">def</span> <span class="nf">get_erased_block_count</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Cats proc/vnb on Fenway products or PLAYBAR and gets the number of</span>
+<span class="sd">        erased blocks</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :returns: The number of erased blocks or None for unsupported devices</span>
+<span class="sd">        :rtype: :obj:&#39;int&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_fenway</span><span class="p">()</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_playbar</span><span class="p">():</span>
+            <span class="n">results</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/vnb&#39;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">ur</span><span class="s1">&#39;Blocks read/written/erased:\s+\d+/\d+/(\d+)&#39;</span><span class="p">,</span>
+                                 <span class="n">results</span><span class="p">)</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.verify_vnb_erases"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.verify_vnb_erases">[docs]</a>    <span class="k">def</span> <span class="nf">verify_vnb_erases</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">erased</span><span class="p">,</span> <span class="n">threshold</span><span class="p">,</span> <span class="n">erase_expected</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This method is written to test SWPBL-40647. It verifies that, on</span>
+<span class="sd">        Fenway products, JFFS is only erased when expected. In most cases,</span>
+<span class="sd">        catting /proc/vnb should only show a small number of erases. If files</span>
+<span class="sd">        have been added and removed from JFFS, it should show a much larger</span>
+<span class="sd">        number of erases. This test uses a loose set of criteria to verify this</span>
+<span class="sd">        is the case.</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param erase_expected: This shold be True in the case that a larger</span>
+<span class="sd">                                number of erases is expected</span>
+<span class="sd">        :type erase_expected: :obj:&#39;bool&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">erase_expected</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="n">erased</span><span class="p">,</span> <span class="n">threshold</span><span class="p">,</span> <span class="s1">&#39;A larger number of&#39;</span>
+                                         <span class="s1">&#39; erases is expected&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span><span class="n">erased</span><span class="p">,</span> <span class="n">threshold</span><span class="p">,</span> <span class="s1">&#39;A small number of&#39;</span>
+                                           <span class="s1">&#39; erases is expected&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.tearDownFixture"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes the temporary directory from each DUT</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;rm -rf </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">close_files</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.test_maintain_jffs"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.test_maintain_jffs">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_testbed_unique_devices&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_maintain_jffs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Combinatorial test that gets the test files from the sever, verifies the</span>
+<span class="sd">        DUT has the correct files and file sizes. It then reboots the DUT and</span>
+<span class="sd">        rechecks each of the files.</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">files_to_check</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">file_list</span><span class="p">[:]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_files_from_server</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_files</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">files_to_check</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">([</span><span class="n">zp</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_files</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">files_to_check</span><span class="p">)</span>
+        <span class="n">files_to_check</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">remove_files</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">files_to_check</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">([</span><span class="n">zp</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_files</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">files_to_check</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;rm </span><span class="si">{}</span><span class="s1">*&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MaintainJffs.test_vnb_erase"><a class="viewcode-back" href="../../syssw.html#syssw.jffs_maintain.MaintainJffs.test_vnb_erase">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_unique_fenway_limelight&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_vnb_erase</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-40647 -- This test verifies that already erased blocks in JFFS are</span>
+<span class="sd">        not re-erased during boot up. The number of erases should be very low,</span>
+<span class="sd">        unless there have been several files deleted from JFFS</span>
+
+<span class="sd">        :param zp: The receiver ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">erased</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_erased_block_count</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_vnb_erases</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">erased</span><span class="p">,</span> <span class="n">LOW_ERASE_THRESHOLD</span><span class="p">)</span>
+        <span class="c1"># Create and delete a 4MB random file in JFFS\</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;dd if=/dev/urandom of=</span><span class="si">{}</span><span class="s1">dummy bs=</span><span class="si">{}</span><span class="s1"> count=</span><span class="si">{}</span><span class="s1">&#39;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">,</span> <span class="n">FILE_BLOCK_SIZE_BYTES</span><span class="p">,</span>
+                               <span class="n">FILE_BLOCK_COUNT</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_file_exist</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">dummy&#39;</span><span class="o">.</span>
+                                                   <span class="nb">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">)),</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Creating dummy file: &#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;rm </span><span class="si">{}</span><span class="s1">dummy&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_ZP_LOCATION</span><span class="p">))</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Pause to not check proc before it&#39;s updated. 90% of the time</span>
+<span class="sd">        the 5 second sleep is long enough, wait_until_true catches the other</span>
+<span class="sd">        10%. Using wait_until_true without the sleep fails 100% of the</span>
+<span class="sd">        time</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_erased_block_count</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">erased</span><span class="p">,</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s1">&#39;Timed out waiting for the number of erased blocks to&#39;</span>
+                      <span class="s1">&#39; increase.&#39;</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s1">&#39;MaintainJffs&#39;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">SimpleUpgradeTestFixture</span><span class="p">(),</span> <span class="n">MaintainJffs</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

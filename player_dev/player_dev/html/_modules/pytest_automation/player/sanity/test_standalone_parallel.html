@@ -1,0 +1,654 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.sanity.test_standalone_parallel &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.sanity.test_standalone_parallel</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Test for verifying basic functionality of standalone players</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">audio_util</span> <span class="k">import</span> <span class="n">rms_helper</span><span class="p">,</span> <span class="n">fft_helper</span>
+<span class="kn">from</span> <span class="nn">audio_util.audiotap</span> <span class="k">import</span> <span class="n">AudioTap</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> \
+    <span class="n">DEVICES_WITH_8_BIT_ZERO_PADDING_IN_DSPOUT_AUDIOTAPS</span>
+<span class="kn">from</span> <span class="nn">pytest_automation.player.user_controls</span> <span class="k">import</span> <span class="n">test_crossfade</span>
+<span class="kn">from</span> <span class="nn">conftest</span> <span class="k">import</span> <span class="n">LOCAL_TEST_FILE_PATH</span><span class="p">,</span> <span class="n">TEST_FILE_METADATA</span><span class="p">,</span> \
+    <span class="n">TEST_FREQUENCY_HZ</span>
+
+<span class="c1"># some string constants for various sources and autoplay strings</span>
+<span class="n">TV</span> <span class="o">=</span> <span class="s1">&#39;TV&#39;</span>
+<span class="n">MUSIC</span> <span class="o">=</span> <span class="s1">&#39;MUSIC&#39;</span>
+<span class="n">LINEIN</span> <span class="o">=</span> <span class="s1">&#39;LINEIN&#39;</span>
+<span class="n">PLAYBACK_SOURCES</span> <span class="o">=</span> <span class="p">[</span><span class="n">MUSIC</span><span class="p">,</span> <span class="n">TV</span><span class="p">,</span> <span class="n">LINEIN</span><span class="p">]</span>
+
+<span class="c1"># see SWPBL-117753</span>
+<span class="n">SOURCES_CORRUPTED_AT_START_ON_TEST_RUNNER</span> <span class="o">=</span> <span class="p">[</span><span class="n">TV</span><span class="p">,</span> <span class="n">LINEIN</span><span class="p">]</span>
+
+<span class="c1"># time to wait between tests to account for audiotap propagation delay</span>
+<span class="n">PROPAGATION_DELAY_FOR_AUDIOTAP_SEC</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="c1"># time to wait after starting mplayer playback before directing the player</span>
+<span class="c1"># to play line-in or tv</span>
+<span class="n">SECONDS_AFTER_STARTING_MPLAYER_TO_SELECT_SOURCE</span> <span class="o">=</span> <span class="mi">6</span>
+
+<span class="c1"># some error and ok strings to use for verification</span>
+<span class="n">ERROR_FILE_NOT_FOUND</span> <span class="o">=</span> <span class="s2">&quot;File not found&quot;</span>
+<span class="n">ERROR_AUDIO_SIGNAL</span> <span class="o">=</span> <span class="s2">&quot;SNR too low starting at </span><span class="si">{}</span><span class="s2">s&quot;</span>
+<span class="n">OK</span> <span class="o">=</span> <span class="s2">&quot;OK&quot;</span>
+
+<span class="c1"># the difference in dB that the FFT bins of the signal should be to the</span>
+<span class="c1"># non-signal bins</span>
+<span class="n">TEST_SIGNAL_TO_NOISE_DB</span> <span class="o">=</span> <span class="mi">16</span>
+
+
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s1">&#39;disable_audio_output&#39;</span><span class="p">,</span>
+                            <span class="s1">&#39;disable_autoplay&#39;</span><span class="p">,</span>
+                            <span class="s1">&#39;conditionally_trueplay_all_players_for_session&#39;</span><span class="p">)</span>
+<span class="p">]</span>
+
+
+<div class="viewcode-block" id="get_woofer_channel_index"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.get_woofer_channel_index">[docs]</a><span class="k">def</span> <span class="nf">get_woofer_channel_index</span><span class="p">(</span><span class="n">model_number</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Given a model number, find an index of a channel that will play low</span>
+<span class="sd">    frequency content</span>
+
+<span class="sd">    :param str model_number: the model number of the player to lookup</span>
+<span class="sd">    :return: integer denoting the index of that channel</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># take the first woofer index that we have</span>
+    <span class="k">return</span> <span class="n">AudioTap</span><span class="o">.</span><span class="n">DSPOUT_WOOFER_CHANNEL_INDICES</span><span class="p">[</span><span class="n">model_number</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="get_tweeter_channel_index"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.get_tweeter_channel_index">[docs]</a><span class="k">def</span> <span class="nf">get_tweeter_channel_index</span><span class="p">(</span><span class="n">model_number</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Given a model number, find an index of a channel that will play high</span>
+<span class="sd">    frequency content</span>
+
+<span class="sd">    :param str model_number: the model number of the player to lookup</span>
+<span class="sd">    :return: integer denoting the index of that channel</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">model_number</span> <span class="o">==</span> <span class="s2">&quot;SUB&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Sub does not have a tweeter&quot;</span><span class="p">)</span>
+    <span class="c1"># take the first tweeter index that we have</span>
+    <span class="k">return</span> <span class="n">AudioTap</span><span class="o">.</span><span class="n">DSPOUT_TWEETER_CHANNEL_INDICES</span><span class="p">[</span><span class="n">model_number</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="get_channel_index_for_frequency_and_model"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.get_channel_index_for_frequency_and_model">[docs]</a><span class="k">def</span> <span class="nf">get_channel_index_for_frequency_and_model</span><span class="p">(</span><span class="n">frequency_hz</span><span class="p">,</span> <span class="n">model_number</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Given a frequency of a pure tone and a model number of a zone player,</span>
+<span class="sd">    return the index to an appropriate DSPOUT audiotap channel that will be</span>
+<span class="sd">    playing the frequency.</span>
+
+<span class="sd">    :param float frequency_hz: the frequency of the tone</span>
+<span class="sd">    :param str model_number: the model number of the zone player</span>
+<span class="sd">    :return: intteger denoting the index of the channel</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">frequency_hz</span> <span class="o">&gt;</span> <span class="mi">1000</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">get_tweeter_channel_index</span><span class="p">(</span><span class="n">model_number</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">get_woofer_channel_index</span><span class="p">(</span><span class="n">model_number</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="time_is_up"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.time_is_up">[docs]</a><span class="k">def</span> <span class="nf">time_is_up</span><span class="p">(</span><span class="n">timers</span><span class="p">,</span> <span class="n">duration_sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Given a map of form {&#39;serial_number&#39;: start time }, return True when the</span>
+<span class="sd">    current time minus the start_time for each value in the map is greater</span>
+<span class="sd">    than the given duration.</span>
+
+<span class="sd">    :param dict timers: dictionary of playback start times by player</span>
+<span class="sd">    :param float duration_sec: number of seconds that must expire before True</span>
+<span class="sd">    :return: True/False</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">timers</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">timers</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">duration_sec</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">return</span> <span class="kc">True</span></div>
+
+
+<div class="viewcode-block" id="get_zps_for_source"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.get_zps_for_source">[docs]</a><span class="k">def</span> <span class="nf">get_zps_for_source</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return all of the valid zone players for the given source</span>
+
+<span class="sd">    :param list zps: list of zone players</span>
+<span class="sd">    :param str source: the source that we&#39;re testing</span>
+<span class="sd">    :return: list of zone players that are appropriate for that source</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">valid_zps</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">TV</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">ht_master_capable</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Skipping TV capture on zp: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">continue</span>
+        <span class="n">valid_zps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">valid_zps</span></div>
+
+
+<div class="viewcode-block" id="start_audiotaps"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.start_audiotaps">[docs]</a><span class="k">def</span> <span class="nf">start_audiotaps</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">line_in_mapping</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Start audiotap capture on all given zone players for the given source type</span>
+
+<span class="sd">    :param list zps: zone players to start audiotap capture on</span>
+<span class="sd">    :param str source: identifier of source (music, tv, or line-in)</span>
+<span class="sd">    :param dict or None line_in_mapping: either None or a dictionary that</span>
+<span class="sd">        maps each zone player to its line-in source</span>
+<span class="sd">    :return: tuple - a list of filenames for audiotaps and a dictionary of</span>
+<span class="sd">        serial numbers to audiotap objects and a dictionary of input audiotaps</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># filenames (fns) and audiotaps (ats)</span>
+    <span class="n">fns</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">ats</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">input_taps</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># For each player</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+
+        <span class="c1"># don&#39;t capture TV audiotaps for non-TV capable players</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">TV</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">ht_master_capable</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Skipping TV capture on zp: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">continue</span>
+
+        <span class="c1"># create a filename for the tap and append to list</span>
+        <span class="n">base_filename</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">get_arch</span><span class="p">(),</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">line_in_mapping</span><span class="p">:</span>
+            <span class="n">line_in_arch</span> <span class="o">=</span> <span class="n">line_in_mapping</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span>
+            <span class="n">base_filename</span> <span class="o">+=</span> <span class="s2">&quot;_line-in_source=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">line_in_arch</span><span class="p">)</span>
+        <span class="n">fn</span> <span class="o">=</span> <span class="n">base_filename</span> <span class="o">+</span> <span class="s2">&quot;_standalone.raw&quot;</span>
+        <span class="n">fns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">fn</span><span class="p">)</span>
+
+        <span class="c1"># also start input tap capture</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">LINEIN</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_hideout</span><span class="p">():</span>
+            <span class="n">in_fn</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_line_in_tap.gld&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">get_arch</span><span class="p">(),</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+            <span class="n">input_taps</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">AudioTap</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">audiotap_type</span><span class="o">=</span><span class="n">AudioTap</span><span class="o">.</span><span class="n">AUDIOTAP_LINEIN</span><span class="p">,</span>
+                <span class="n">output_fn</span><span class="o">=</span><span class="n">in_fn</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">TV</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">ht_master_capable</span><span class="p">:</span>
+            <span class="n">in_fn</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_spdif_tap.gld&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">get_arch</span><span class="p">(),</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+            <span class="n">input_taps</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">AudioTap</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">audiotap_type</span><span class="o">=</span><span class="n">AudioTap</span><span class="o">.</span><span class="n">AUDIOTAP_SPDIF</span><span class="p">,</span>
+                <span class="n">output_fn</span><span class="o">=</span><span class="n">in_fn</span><span class="p">)</span>
+
+        <span class="c1"># Start audiotap for zp</span>
+        <span class="n">ats</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">AudioTap</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">audiotap_type</span><span class="o">=</span><span class="n">AudioTap</span><span class="o">.</span><span class="n">AUDIOTAP_DSP</span><span class="p">,</span>
+                           <span class="n">output_fn</span><span class="o">=</span><span class="n">fn</span><span class="p">)</span>
+
+    <span class="c1"># return filenames and audiotap dictionary</span>
+    <span class="k">return</span> <span class="n">fns</span><span class="p">,</span> <span class="n">ats</span><span class="p">,</span> <span class="n">input_taps</span></div>
+
+
+<div class="viewcode-block" id="wait_for_timers"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.wait_for_timers">[docs]</a><span class="k">def</span> <span class="nf">wait_for_timers</span><span class="p">(</span><span class="n">timers</span><span class="p">,</span> <span class="n">duration_per_source_seconds</span><span class="p">,</span> <span class="n">iteration_delay_sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wait for time_is_up() to return True for the given timers dictionary,</span>
+<span class="sd">    duration. Check if it&#39;s True every iteration_delay_sec seconds.</span>
+
+<span class="sd">    :param dict timers: dictionary of playback start times by player</span>
+<span class="sd">    :param float duration_per_source_seconds: number of seconds that must</span>
+<span class="sd">        expire</span>
+<span class="sd">    :param float iteration_delay_sec: seconds to wait between checks</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">while</span> <span class="ow">not</span> <span class="n">time_is_up</span><span class="p">(</span><span class="n">timers</span><span class="p">,</span> <span class="n">duration_per_source_seconds</span><span class="p">):</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;sleeping </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">iteration_delay_sec</span><span class="p">))</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">iteration_delay_sec</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="capture_playback_for_standalone_players"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.capture_playback_for_standalone_players">[docs]</a><span class="k">def</span> <span class="nf">capture_playback_for_standalone_players</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">track_uri</span><span class="p">,</span>
+                                            <span class="n">line_in_source</span><span class="p">,</span> <span class="n">toslink_source</span><span class="p">,</span>
+                                            <span class="n">duration_sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Capture audiotaps for each of the given zone players while playing back</span>
+<span class="sd">    content in the form of the given source. Return the list of audiotap</span>
+<span class="sd">    filenames.</span>
+
+<span class="sd">    :param list zps: the list of zone players to capture audiotaps for</span>
+<span class="sd">    :param str source: the source to playback</span>
+<span class="sd">    :param str track_uri: if music playback, the URI to use</span>
+<span class="sd">    :param line_in_source: if line-in playback, the line-in source to use</span>
+<span class="sd">    :param toslink_source: if TV playback, the toslink source to use</span>
+<span class="sd">    :param int duration_sec: the number of seconds to play a source</span>
+<span class="sd">    :return: list of filenames to analyze</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># amount of time to wait between checks of a wait_until_true</span>
+    <span class="n">iteration_delay_sec</span> <span class="o">=</span> <span class="mf">0.5</span>
+
+    <span class="c1"># zps that support line-in</span>
+    <span class="n">line_in_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">z</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zps</span> <span class="k">if</span> <span class="n">z</span><span class="o">.</span><span class="n">has_line_in</span><span class="p">()]</span>
+
+    <span class="n">line_in_zp_mapping</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="c1"># map the player to the line-in zp that it will get line-in from</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">LINEIN</span><span class="p">:</span>
+        <span class="n">line_in_zp_mapping</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="n">line_in_zp</span> <span class="o">=</span> <span class="p">[</span><span class="n">z</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">line_in_zps</span> <span class="k">if</span> <span class="n">z</span> <span class="o">!=</span> <span class="n">zp</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">line_in_zp_mapping</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">line_in_zp</span>
+
+    <span class="c1"># get filenames and audiotap objects</span>
+    <span class="n">valid_zps</span> <span class="o">=</span> <span class="n">get_zps_for_source</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
+
+    <span class="n">timers</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># start playback section</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">TV</span><span class="p">:</span>
+        <span class="n">toslink_source</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">SECONDS_AFTER_STARTING_MPLAYER_TO_SELECT_SOURCE</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">valid_zps</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_spdif</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">valid_zps</span><span class="p">:</span>
+            <span class="n">timers</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">LINEIN</span><span class="p">:</span>
+        <span class="n">line_in_source</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">SECONDS_AFTER_STARTING_MPLAYER_TO_SELECT_SOURCE</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">valid_zps</span><span class="p">:</span>
+            <span class="c1"># we want to play remote line-in. choose a zp that isn&#39;t this one</span>
+            <span class="n">line_in_zp</span> <span class="o">=</span> <span class="n">line_in_zp_mapping</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span>
+
+            <span class="c1"># set the gain on the line-in zp to not max (12, 15) but close</span>
+            <span class="c1"># to it so as to prevent clipping but ensure good SNR</span>
+            <span class="c1"># NOTE: the values of 5 and 7 were shown to yield a reasonably</span>
+            <span class="c1"># high SNR (20dB)</span>
+            <span class="n">line_in_gain</span> <span class="o">=</span> <span class="mi">5</span> <span class="k">if</span> <span class="n">line_in_zp</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="o">!=</span> <span class="s1">&#39;sh4&#39;</span> <span class="k">else</span> <span class="mi">7</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting line-in source to </span><span class="si">{}</span><span class="s2"> on zp </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">line_in_zp</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_line_in</span><span class="p">(</span><span class="n">line_in_zp</span><span class="p">)</span>
+            <span class="n">line_in_zp</span><span class="o">.</span><span class="n">AudioIn</span><span class="o">.</span><span class="n">SetLineInLevel</span><span class="p">(</span>
+                <span class="n">left_level</span><span class="o">=</span><span class="n">line_in_gain</span><span class="p">,</span> <span class="n">right_level</span><span class="o">=</span><span class="n">line_in_gain</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">valid_zps</span><span class="p">:</span>
+            <span class="n">timers</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">MUSIC</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">valid_zps</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI</span><span class="p">(</span><span class="n">track_uri</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+            <span class="n">timers</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Unknown audio source: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source</span><span class="p">))</span>
+
+    <span class="n">fns</span><span class="p">,</span> <span class="n">ats</span><span class="p">,</span> <span class="n">input_taps</span> <span class="o">=</span> <span class="n">start_audiotaps</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span>
+                                           <span class="n">line_in_mapping</span><span class="o">=</span><span class="n">line_in_zp_mapping</span><span class="p">)</span>
+
+    <span class="c1"># playback section</span>
+    <span class="n">wait_for_timers</span><span class="p">(</span><span class="n">timers</span><span class="p">,</span> <span class="n">duration_sec</span><span class="p">,</span>
+                    <span class="n">iteration_delay_sec</span><span class="p">)</span>
+
+    <span class="c1"># end playback section</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="n">TV</span><span class="p">:</span>
+        <span class="n">toslink_source</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">LINEIN</span><span class="p">:</span>
+        <span class="n">line_in_source</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="n">MUSIC</span><span class="p">:</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">]</span>
+
+    <span class="c1"># Stop each audiotap as its duration is met</span>
+    <span class="n">zps_missing_taps</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">ats</span><span class="p">:</span>
+        <span class="n">sample</span> <span class="o">=</span> <span class="n">ats</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">sample</span><span class="p">:</span>
+            <span class="n">sample</span><span class="o">.</span><span class="n">to_wav</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No samples captured for audiotap on &quot;</span>
+                               <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="n">zps_missing_taps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">zps_missing_taps</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;Missing audiotaps for these players: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zps_missing_taps</span><span class="p">))</span>
+
+    <span class="c1"># stop all input taps</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">input_taps</span><span class="p">:</span>
+        <span class="n">input_taps</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+
+    <span class="c1"># return audiotap filenames</span>
+    <span class="k">return</span> <span class="n">fns</span></div>
+
+
+<div class="viewcode-block" id="remove_starting_ending_noise"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.remove_starting_ending_noise">[docs]</a><span class="k">def</span> <span class="nf">remove_starting_ending_noise</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">0.2</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Remove any audio at the start and end of the file that, when normalized, is</span>
+<span class="sd">    less than the given threshold.</span>
+<span class="sd">    :param signal: numpy array of audio samples</span>
+<span class="sd">    :param float threshold: threshold from 0.0 to 1.0</span>
+<span class="sd">    :return: numpy array of audio samples from start index to end index</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># divide by max to normalize -1 to 1</span>
+    <span class="n">normalized_signal</span> <span class="o">=</span> <span class="n">signal</span> <span class="o">/</span> <span class="nb">max</span><span class="p">(</span><span class="n">signal</span><span class="p">)</span>
+    <span class="n">start_idx</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">end_idx</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+
+    <span class="c1"># get start index as first sample above threshold and end index as last</span>
+    <span class="c1"># sample above threshold</span>
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_signal</span><span class="p">)):</span>
+        <span class="n">start_idx</span> <span class="o">=</span> <span class="n">idx</span>
+        <span class="k">if</span> <span class="n">normalized_signal</span><span class="p">[</span><span class="n">start_idx</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">threshold</span><span class="p">:</span>
+            <span class="k">break</span>
+
+    <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_signal</span><span class="p">)):</span>
+        <span class="n">end_idx</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">normalized_signal</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">idx</span>
+        <span class="k">if</span> <span class="n">normalized_signal</span><span class="p">[</span><span class="n">end_idx</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">threshold</span><span class="p">:</span>
+            <span class="k">break</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Selected start/end index of audiotap to be </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> for &quot;</span>
+                       <span class="s2">&quot;line in source&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">start_idx</span><span class="p">,</span> <span class="n">end_idx</span><span class="p">))</span>
+
+    <span class="k">if</span> <span class="n">end_idx</span> <span class="o">!=</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">signal</span><span class="p">[</span><span class="n">start_idx</span><span class="p">:</span> <span class="n">end_idx</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">signal</span><span class="p">[</span><span class="n">start_idx</span><span class="p">:]</span></div>
+
+
+<div class="viewcode-block" id="account_for_corrupted_test_runner_signal"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.account_for_corrupted_test_runner_signal">[docs]</a><span class="k">def</span> <span class="nf">account_for_corrupted_test_runner_signal</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">fs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    ignore the first second of audio for some sources</span>
+
+<span class="sd">    :param list signal: list of audio samples</span>
+<span class="sd">    :param str source: the name of the input source</span>
+<span class="sd">    :param int fs: samples per second</span>
+<span class="sd">    :return: list of samples with first second removed if a signal that may</span>
+<span class="sd">        have been corrupted by test runner output</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">SOURCES_CORRUPTED_AT_START_ON_TEST_RUNNER</span><span class="p">:</span>
+        <span class="n">signal</span> <span class="o">=</span> <span class="n">signal</span><span class="p">[</span><span class="n">fs</span><span class="p">:]</span>
+    <span class="k">return</span> <span class="n">signal</span></div>
+
+
+<div class="viewcode-block" id="verify_audiotap"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.verify_audiotap">[docs]</a><span class="k">def</span> <span class="nf">verify_audiotap</span><span class="p">(</span><span class="n">audiotap_file</span><span class="p">,</span> <span class="n">test_signal_to_noise_db</span><span class="p">,</span>
+                    <span class="n">test_frequency_hz</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that the given audiotap file:</span>
+<span class="sd">    1. exists</span>
+<span class="sd">    2. has a high signal to noise ratio for the test signal frequency</span>
+
+<span class="sd">    Note: we do not throw asserts in this test because we want to ensure</span>
+<span class="sd">    that we execute for each file for each player. Otherwise, we would stop</span>
+<span class="sd">    on the first failure.</span>
+
+<span class="sd">    :param str audiotap_file: path to the audiotap file</span>
+<span class="sd">    :param int test_signal_to_noise_db: the minimum dB difference that can</span>
+<span class="sd">        exist between the signal energy and noise energy before we fail</span>
+<span class="sd">    :param int test_frequency_hz: the frequency (in Hz) of the signal that</span>
+<span class="sd">        we&#39;re looking for</span>
+<span class="sd">    :return: string denoting whether or not test passed for given audiotap.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># get the base filename and extract the model from it</span>
+    <span class="n">fname</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">audiotap_file</span><span class="p">)</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="n">fname</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;_&#39;</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">source</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">run_verification</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">audiotap_file</span><span class="p">,</span> <span class="n">test_frequency_hz</span><span class="p">,</span>
+                            <span class="n">test_signal_to_noise_db</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="run_verification"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.run_verification">[docs]</a><span class="k">def</span> <span class="nf">run_verification</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">audiotap_file</span><span class="p">,</span> <span class="n">test_frequency_hz</span><span class="p">,</span>
+                     <span class="n">test_signal_to_noise_db</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Run the actual verification of the audiotaps captured</span>
+
+<span class="sd">    :param str model: model number of player</span>
+<span class="sd">    :param str source: the name of the playback source</span>
+<span class="sd">    :param str audiotap_file: path to the audiotap file</span>
+<span class="sd">    :param int test_frequency_hz: the expected signal frequency in Hertz</span>
+<span class="sd">    :param int test_signal_to_noise_db: the acceptable Signal to Noise Ratio</span>
+<span class="sd">    :return: str with results of verification</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># whether or not the audiotap is padded with 8 bits of zeros</span>
+    <span class="n">padded</span> <span class="o">=</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">DEVICES_WITH_8_BIT_ZERO_PADDING_IN_DSPOUT_AUDIOTAPS</span>
+
+    <span class="c1"># if the file does not exist, return a file not found error</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">audiotap_file</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">ERROR_FILE_NOT_FOUND</span>
+
+    <span class="c1"># get the normalized audio from a file</span>
+    <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_normalized_audio_from_file</span><span class="p">(</span>
+        <span class="n">fname</span><span class="o">=</span><span class="n">audiotap_file</span><span class="p">,</span> <span class="n">padded</span><span class="o">=</span><span class="n">padded</span><span class="p">,</span>
+        <span class="n">n_channels</span><span class="o">=</span><span class="n">AudioTap</span><span class="o">.</span><span class="n">AUDIOTAP_DSP_CHANNELS</span><span class="p">[</span><span class="n">model</span><span class="p">])</span>
+
+    <span class="c1"># sampling frequency depends on the player - sub is lower</span>
+    <span class="k">if</span> <span class="n">model</span> <span class="o">!=</span> <span class="s2">&quot;SUB&quot;</span><span class="p">:</span>
+        <span class="n">fs</span> <span class="o">=</span> <span class="mi">44100</span>
+        <span class="c1"># downmix the audio to one channel</span>
+        <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">norm_audio</span><span class="p">[</span><span class="n">get_channel_index_for_frequency_and_model</span><span class="p">(</span>
+            <span class="n">test_frequency_hz</span><span class="p">,</span> <span class="n">model</span><span class="p">)]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">fs</span> <span class="o">=</span> <span class="mf">8138.02</span>
+
+    <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">account_for_corrupted_test_runner_signal</span><span class="p">(</span><span class="n">norm_audio</span><span class="p">,</span>
+                                                          <span class="n">source</span><span class="p">,</span> <span class="n">fs</span><span class="p">)</span>
+
+    <span class="c1"># remove the leading and trailing zeros from the signal</span>
+    <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_signal_removed_starting_zeros</span><span class="p">(</span><span class="n">norm_audio</span><span class="p">)</span>
+
+    <span class="c1"># there can be nonzero samples before the signal actually begins</span>
+    <span class="c1"># playback and after playback ends. Need to remove that.</span>
+    <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">remove_starting_ending_noise</span><span class="p">(</span><span class="n">norm_audio</span><span class="p">)</span>
+
+    <span class="n">norm_audio</span> <span class="o">=</span> <span class="n">account_for_corrupted_test_runner_signal</span><span class="p">(</span><span class="n">norm_audio</span><span class="p">,</span>
+                                                          <span class="n">source</span><span class="p">,</span> <span class="n">fs</span><span class="p">)</span>
+
+    <span class="c1"># get the spectrogram for the given normalized audio</span>
+    <span class="c1"># in this case, we don&#39;t do any overlap and use sampling frequency sized</span>
+    <span class="c1"># windows so as to have a high degree of frequency granularity at each</span>
+    <span class="c1"># window</span>
+    <span class="n">specgram</span> <span class="o">=</span> <span class="n">fft_helper</span><span class="o">.</span><span class="n">get_spectrogram_from_signal</span><span class="p">(</span>
+        <span class="n">signal</span><span class="o">=</span><span class="n">norm_audio</span><span class="p">,</span> <span class="n">fs</span><span class="o">=</span><span class="n">fs</span><span class="p">,</span> <span class="n">overlap</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">n</span><span class="o">=</span><span class="n">fs</span><span class="p">)</span>
+
+    <span class="c1"># get the index of the test signal&#39;s frequency bin</span>
+    <span class="n">idx</span> <span class="o">=</span> <span class="n">test_crossfade</span><span class="o">.</span><span class="n">get_index_for_freq</span><span class="p">(</span><span class="n">freqs</span><span class="o">=</span><span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;freqs&#39;</span><span class="p">],</span>
+                                            <span class="n">target_f</span><span class="o">=</span><span class="n">test_frequency_hz</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="c1"># get the indices of the noise frequency bins (not the signal&#39;s)</span>
+    <span class="n">n_idx</span> <span class="o">=</span> <span class="n">test_crossfade</span><span class="o">.</span><span class="n">get_indices_of_not_these_frequencies</span><span class="p">(</span>
+        <span class="n">freqs</span><span class="o">=</span><span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;freqs&#39;</span><span class="p">],</span> <span class="n">target_fs</span><span class="o">=</span><span class="p">[</span><span class="n">test_frequency_hz</span><span class="p">])</span>
+
+    <span class="c1"># track the number of windows where the SNR is low</span>
+    <span class="n">n_windows_snr_too_low</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">total_n_winows</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;mags&#39;</span><span class="p">])</span> <span class="o">-</span> <span class="mi">2</span>
+
+    <span class="c1"># don&#39;t start from first window or end at last window as they may</span>
+    <span class="c1"># contain noise - we just want to make sure that the audio playback</span>
+    <span class="c1"># works generally, we don&#39;t really care about masking/fade in this test.</span>
+    <span class="n">first_second_with_noise</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;mags&#39;</span><span class="p">])</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+
+        <span class="c1"># get the magnitudes of the signal and the noise bins</span>
+        <span class="n">sig_mag</span> <span class="o">=</span> <span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;mags&#39;</span><span class="p">][</span><span class="n">s</span><span class="p">][</span><span class="n">idx</span><span class="p">]</span>
+        <span class="c1"># the noise magnitude is the sum of all bins besides the signal bin</span>
+        <span class="n">n_mag</span> <span class="o">=</span> <span class="n">test_crossfade</span><span class="o">.</span><span class="n">add_dbs</span><span class="p">([</span>
+            <span class="n">specgram</span><span class="p">[</span><span class="s1">&#39;mags&#39;</span><span class="p">][</span><span class="n">s</span><span class="p">][</span><span class="n">x</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">n_idx</span><span class="p">])</span>
+
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;@</span><span class="si">{}</span><span class="s2">Hz: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">test_frequency_hz</span><span class="p">,</span> <span class="n">sig_mag</span><span class="p">))</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;@noise: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">n_mag</span><span class="p">))</span>
+
+        <span class="c1"># if even one window has noise with higher magnitude than the</span>
+        <span class="c1"># signal, we return that there was an error with the audio signal</span>
+        <span class="k">if</span> <span class="n">sig_mag</span> <span class="o">&lt;=</span> <span class="n">n_mag</span> <span class="o">+</span> <span class="n">test_signal_to_noise_db</span><span class="p">:</span>
+            <span class="n">n_windows_snr_too_low</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;sig to noise should be higher. </span><span class="si">{}</span><span class="s2"> windows &quot;</span>
+                               <span class="s2">&quot;with low SNR&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">n_windows_snr_too_low</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">first_second_with_noise</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">first_second_with_noise</span> <span class="o">=</span> <span class="n">s</span>
+
+    <span class="n">ret</span> <span class="o">=</span> <span class="n">OK</span>
+
+    <span class="n">percent_windows_low_snr</span> <span class="o">=</span> <span class="mf">100.0</span> <span class="o">*</span> <span class="n">n_windows_snr_too_low</span> <span class="o">/</span> <span class="n">total_n_winows</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">% windows had low SNR&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">percent_windows_low_snr</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">percent_windows_low_snr</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">ERROR_AUDIO_SIGNAL</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">first_second_with_noise</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">ret</span></div>
+
+
+<div class="viewcode-block" id="test_standalone_concurrently"><a class="viewcode-back" href="../../../../pytest_automation.player.sanity.html#pytest_automation.player.sanity.test_standalone_parallel.test_standalone_concurrently">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s1">&#39;toslink_source&#39;</span><span class="p">,</span>
+                         <span class="p">[(</span><span class="n">LOCAL_TEST_FILE_PATH</span><span class="p">,</span> <span class="n">TEST_FILE_METADATA</span><span class="p">[</span>
+                             <span class="s1">&#39;mplayer_codec&#39;</span><span class="p">])],</span> <span class="n">indirect</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;toslink_source&#39;</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s1">&#39;line_in_source&#39;</span><span class="p">,</span> <span class="p">[[</span><span class="n">LOCAL_TEST_FILE_PATH</span><span class="p">]],</span>
+                         <span class="n">indirect</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;line_in_source&#39;</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;source&quot;</span><span class="p">,</span> <span class="p">[</span><span class="n">MUSIC</span><span class="p">,</span> <span class="n">TV</span><span class="p">,</span> <span class="n">LINEIN</span><span class="p">],</span>
+                         <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="n">MUSIC</span><span class="p">,</span> <span class="n">TV</span><span class="p">,</span> <span class="n">LINEIN</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">standalone</span>
+<span class="k">def</span> <span class="nf">test_standalone_concurrently</span><span class="p">(</span><span class="n">sanity_test_configured_standalone_players</span><span class="p">,</span>
+                                 <span class="n">source</span><span class="p">,</span> <span class="n">toslink_source</span><span class="p">,</span> <span class="n">line_in_source</span><span class="p">,</span>
+                                 <span class="n">track_uri</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This test verifies that the signal to noise ratio for a given playback</span>
+<span class="sd">    source is at least some given value. The goal of this test is to confirm</span>
+<span class="sd">    that the most basic playback scenarios outputs some correct audio in a</span>
+<span class="sd">    standalone configuration (i.e. no silence, no huge amounts of noise).</span>
+
+<span class="sd">    :param list sanity_test_configured_standalone_players: list of players</span>
+<span class="sd">        that have been configured to run this test, along with the duration</span>
+<span class="sd">        of the test and the max percentage of FFT windows that can have a</span>
+<span class="sd">        low SNR before we fail the test</span>
+<span class="sd">    :param str source: the source that will be used for playback for this test</span>
+<span class="sd">    :param toslink_source: a toslink source</span>
+<span class="sd">    :param line_in_source: a line-in source</span>
+<span class="sd">    :param str track_uri: a URI to a music file for playback</span>
+<span class="sd">    :param request: pytest request</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">skip_line_in</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s1">&#39;skip_line_in&#39;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">skip_line_in</span> <span class="ow">and</span> <span class="n">source</span> <span class="o">==</span> <span class="n">LINEIN</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Skipping line-in as per command line specification&quot;</span><span class="p">)</span>
+    <span class="n">zps</span><span class="p">,</span> <span class="n">duration</span> <span class="o">=</span> <span class="n">sanity_test_configured_standalone_players</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">PROPAGATION_DELAY_FOR_AUDIOTAP_SEC</span><span class="p">)</span>
+
+    <span class="c1"># capture audiotaps for playback from the given source on the given players</span>
+    <span class="n">files</span> <span class="o">=</span> <span class="n">capture_playback_for_standalone_players</span><span class="p">(</span>
+        <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span> <span class="n">toslink_source</span><span class="o">=</span><span class="n">toslink_source</span><span class="p">,</span>
+        <span class="n">line_in_source</span><span class="o">=</span><span class="n">line_in_source</span><span class="p">,</span> <span class="n">track_uri</span><span class="o">=</span><span class="n">track_uri</span><span class="p">,</span>
+        <span class="n">duration_sec</span><span class="o">=</span><span class="n">duration</span><span class="p">)</span>
+
+    <span class="c1"># go through each audiotap file and verify if it passed</span>
+    <span class="n">pass_state_per_player</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;file: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">f</span><span class="p">))</span>
+        <span class="n">pass_state_per_player</span><span class="p">[</span><span class="n">f</span><span class="p">]</span> <span class="o">=</span> <span class="n">verify_audiotap</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">TEST_SIGNAL_TO_NOISE_DB</span><span class="p">,</span>
+                                                   <span class="n">TEST_FREQUENCY_HZ</span><span class="p">)</span>
+
+    <span class="c1"># we do the assertions around pass/fail separately so that we can get</span>
+    <span class="c1"># the results for all players simultaneously</span>
+    <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">pass_state_per_player</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">pass_state_per_player</span><span class="p">[</span><span class="n">f</span><span class="p">]</span> <span class="o">!=</span> <span class="n">OK</span><span class="p">:</span>
+            <span class="n">zp</span> <span class="o">=</span> <span class="n">zps</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">diag_id</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">submit_direct_diag</span><span class="p">()</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failed test: </span><span class="si">{}</span><span class="s2">. Diag ID </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">pass_state_per_player</span><span class="p">,</span> <span class="n">diag_id</span><span class="p">))</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

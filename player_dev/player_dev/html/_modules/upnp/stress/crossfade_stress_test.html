@@ -1,0 +1,457 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.stress.crossfade_stress_test &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.stress.crossfade_stress_test</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">itertools</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="p">(</span><span class="n">wait_until_true</span><span class="p">,</span>
+                                   <span class="n">reltime_str_to_seconds</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">upnp.stress.stress_tests_base</span> <span class="k">import</span> <span class="p">(</span><span class="n">StressTestsBaseNew</span><span class="p">,</span>
+                                           <span class="n">LOCAL_WEB_SERVER</span><span class="p">,</span>
+                                           <span class="n">TEST_MODELS</span><span class="p">)</span>
+
+<span class="n">PLAYBACK_LOG</span> <span class="o">=</span> <span class="s2">&quot;./</span><span class="si">{}</span><span class="s2">_playback_sequence.log&quot;</span>
+<span class="n">HOUSEHOLD_DIAG</span> <span class="o">=</span> <span class="s2">&quot;crossfade_stress_</span><span class="si">{}</span><span class="s2">_diag_</span><span class="si">{}</span><span class="s2">.xml&quot;</span>
+<span class="n">CROSSFADE_TRACKS_PATH</span> <span class="o">=</span> <span class="s2">&quot;/Automation/crossfade/&quot;</span>
+
+<span class="n">TRACKS</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">aiff</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.aiff&#39;</span><span class="p">,</span>
+              <span class="n">mp4</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed_AAC.mp4&#39;</span><span class="p">,</span>
+              <span class="n">flac</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.flac&#39;</span><span class="p">,</span>
+              <span class="n">mp3</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.mp3&#39;</span><span class="p">,</span>
+              <span class="n">ogg</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.ogg&#39;</span><span class="p">,</span>
+              <span class="n">wav</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.wav&#39;</span><span class="p">,</span>
+              <span class="n">wma</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed.wma&#39;</span><span class="p">,</span>
+              <span class="n">m4a</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed_ALAC.m4a&#39;</span><span class="p">,</span>
+              <span class="n">heaac</span><span class="o">=</span><span class="s1">&#39;MaggieFarm_trimmed_HEAACv2.mp4&#39;</span>
+              <span class="p">)</span>
+
+<span class="n">SPOTIFY_TRACKS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;ogg1&#39;</span><span class="p">:</span> <span class="s1">&#39;2Foc5Q5nqNiosCNqttzHof_s.ogg&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;ogg2&#39;</span><span class="p">:</span> <span class="s1">&#39;3bidbhpOYeV4knp8AIu8Xn_s.ogg&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;ogg3&#39;</span><span class="p">:</span> <span class="s1">&#39;1CmUZGtH29Kx36C1Hleqlz_s.ogg&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;ogg4&#39;</span><span class="p">:</span> <span class="s1">&#39;4G8gkOterJn0Ywt6uhqbhp.ogg&#39;</span>
+<span class="p">}</span>
+
+<span class="n">CROSSFADE_ON</span> <span class="o">=</span> <span class="s1">&#39;starting xfade&#39;</span>
+<span class="n">CROSSFADE_END</span> <span class="o">=</span> <span class="s1">&#39;ending xfade&#39;</span>
+<span class="n">NUM_GROUP_MEMBERS</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">TEST_MODELS</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+
+
+<div class="viewcode-block" id="CrossfadeStressTest"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest">[docs]</a><span class="k">class</span> <span class="nc">CrossfadeStressTest</span><span class="p">(</span><span class="n">StressTestsBaseNew</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Purpose of this test is to test crossfade for all codec transitions in </span>
+<span class="sd">    grouped environment as that is most likely to produce failures if any. Also</span>
+<span class="sd">    serve tracks via http as it exercises the audio pipeline more fully then via</span>
+<span class="sd">    cifs. In case of spotify tracks, play full track as it was found to create</span>
+<span class="sd">    a &#39;buildup&#39; of state which could potentially cause a failure such as LSE</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">CROSSFADE_EVENTS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;chsnk&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">:</span> <span class="p">[</span><span class="n">CROSSFADE_ON</span><span class="p">,</span> <span class="n">CROSSFADE_END</span><span class="p">]}}</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">StressTestsBaseNew</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_tracks_dict</span> <span class="o">=</span> <span class="p">{}</span>
+
+<div class="viewcode-block" id="CrossfadeStressTest.parse_test_args"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.parse_test_args">[docs]</a>    <span class="k">def</span> <span class="nf">parse_test_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Parse command line args</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--gc_models&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="s1">&#39;all&#39;</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Run test on comma separated list of gcs&quot;</span>
+                                 <span class="s2">&quot;default = All test models.&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--num_group_members&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="n">NUM_GROUP_MEMBERS</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Number of group members&quot;</span>
+                                  <span class="s2">&quot;Default: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">NUM_GROUP_MEMBERS</span><span class="p">)))</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">unknown_args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">unknown_args</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc_models</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">test_devices_models</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">gc_models</span> <span class="o">==</span> <span class="s1">&#39;all&#39;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc_models</span> <span class="o">=</span> <span class="n">test_devices_models</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">temp_models</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">gc_models</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">temp_model</span> <span class="ow">in</span> <span class="n">temp_models</span><span class="p">:</span>
+                <span class="n">model</span> <span class="o">=</span> <span class="n">temp_model</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">test_devices_models</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">gc_models</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> not in expected list of </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                     <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">test_devices_models</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">num_group_members</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Number of GMs: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;GC Models: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc_models</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.gc_gms_generator"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.gc_gms_generator">[docs]</a>    <span class="k">def</span> <span class="nf">gc_gms_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate gc.</span>
+<span class="sd">        :return: Sonos zone component which will serve as a group coordinator</span>
+<span class="sd">        :rtype: :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">gc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="n">gms</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span> <span class="k">if</span> <span class="n">zp</span> <span class="o">!=</span> <span class="n">gc</span><span class="p">][:</span><span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">gc</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc_models</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.setUpFixture"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CrossfadeStressTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">parse_test_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture: Local&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_tracks_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">TRACKS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_tracks_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">SPOTIFY_TRACKS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_tracks</span><span class="p">(</span><span class="n">tracks</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">all_tracks_dict</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                        <span class="n">path</span><span class="o">=</span><span class="n">CROSSFADE_TRACKS_PATH</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_webserver</span><span class="p">(</span><span class="n">handlers</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">all_tracks_dict</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="c1"># uris excluding spotify</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_track_uris</span><span class="p">(</span><span class="n">TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                                             <span class="n">source</span><span class="o">=</span><span class="n">LOCAL_WEB_SERVER</span><span class="p">)</span>
+        <span class="c1"># spotify uris</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">spotify_http_uris</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_track_uris</span><span class="p">(</span><span class="n">SPOTIFY_TRACKS</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                                                     <span class="n">source</span><span class="o">=</span><span class="n">LOCAL_WEB_SERVER</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.setUpTest"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup test</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">]</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CrossfadeStressTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">(</span>
+            <span class="n">trigger_events</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">CROSSFADE_EVENTS</span><span class="p">,</span>
+            <span class="n">trigger_cb</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cb_crossfade_event</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.tearDownFixture"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Teardown fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Teardown fixture&quot;</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CrossfadeStressTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetCrossfadeMode</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.cb_crossfade_event"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.cb_crossfade_event">[docs]</a>    <span class="k">def</span> <span class="nf">cb_crossfade_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">expr</span><span class="p">,</span> <span class="n">l</span><span class="p">,</span> <span class="n">counters</span><span class="p">)):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on detecting crossfade</span>
+<span class="sd">        :param str msg: anacapa trace line containing detected string</span>
+<span class="sd">        :param zp: Sonos zone component from which to submit</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected: </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Crossfade values detected so far: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                          <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CrossfadeStressTest.crossfade_uri_generator"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.crossfade_uri_generator">[docs]</a>    <span class="k">def</span> <span class="nf">crossfade_uri_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">http_uris</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate all permutation of start and end track from non spotify uris</span>
+<span class="sd">        :param list http_uris: List of http uris</span>
+<span class="sd">        :return: Tuple of start and end http uris</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">permutations</span><span class="p">(</span><span class="n">http_uris</span><span class="p">,</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="k">yield</span> <span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_remove_duplicate_sequences</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">codec</span><span class="p">,</span> <span class="n">tracks_set</span><span class="p">,</span> <span class="n">master_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove duplicate sequence of tracks from set of all permutations</span>
+<span class="sd">        :param str codec: track codec </span>
+<span class="sd">        :param list tracks_set: List of tuples of tracks</span>
+<span class="sd">        :param list master_list: master list of all tuples of track set</span>
+<span class="sd">        :return temp_list: list of tuples of tracks</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">temp_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">codec_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">delete_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">tracks_set</span><span class="p">)):</span>
+            <span class="c1"># delete_list = []</span>
+            <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="n">tracks_set</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">codec</span> <span class="o">==</span> <span class="n">start</span><span class="p">:</span>
+                <span class="n">codec_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tracks_set</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">master_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tracks_set</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">codec_list</span><span class="p">)):</span>
+            <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="n">codec_list</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">codec_list</span><span class="p">):</span>
+                <span class="n">next_start</span><span class="p">,</span> <span class="n">next_end</span> <span class="o">=</span> <span class="n">codec_list</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="n">delete_set</span> <span class="o">=</span> <span class="p">(</span><span class="n">end</span><span class="p">,</span> <span class="n">next_start</span><span class="p">)</span>
+                <span class="n">delete_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">delete_set</span><span class="p">)</span>
+        <span class="n">temp_list</span><span class="p">[:]</span> <span class="o">=</span> <span class="p">[</span><span class="n">a_set</span> <span class="k">for</span> <span class="n">a_set</span> <span class="ow">in</span> <span class="n">tracks_set</span>
+                        <span class="k">if</span> <span class="n">a_set</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">master_list</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">a_set</span> <span class="ow">in</span> <span class="n">delete_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">a_set</span> <span class="ow">in</span> <span class="n">temp_list</span><span class="p">:</span>
+                <span class="n">temp_list</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">a_set</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">temp_list</span>
+
+    <span class="k">def</span> <span class="nf">_add_tracks_to_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add tracks to queue as per all permutation generated.</span>
+<span class="sd">        :param zp: Sonos zone component </span>
+<span class="sd">        :type zp: :`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Adding tracks to queue&quot;</span><span class="p">)</span>
+        <span class="c1"># add spotify tracks</span>
+        <span class="k">for</span> <span class="n">spotify_track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">spotify_http_uris</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">spotify_track</span><span class="p">)</span>
+        <span class="c1"># add all codec tracks, all permutations from codec to codec</span>
+        <span class="n">http_uri_permutations</span> <span class="o">=</span> <span class="p">[</span><span class="n">http_uri_pair</span> <span class="k">for</span> <span class="n">http_uri_pair</span> <span class="ow">in</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">crossfade_uri_generator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span><span class="p">)]</span>
+        <span class="n">all_uris_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="c1"># progressively remove repeating sequences to save test time</span>
+        <span class="c1"># example : from  these permutation, (ogg, mp4) (flac, wav) (mp4 flac)</span>
+        <span class="c1"># remove (mp4 flac) transition as this sequence is already obtained</span>
+        <span class="c1"># between first and second permutation.</span>
+        <span class="k">for</span> <span class="n">uri</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span><span class="p">:</span>
+            <span class="n">http_uri_permutations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_remove_duplicate_sequences</span><span class="p">(</span>
+                <span class="n">uri</span><span class="p">,</span> <span class="n">http_uri_permutations</span><span class="p">,</span> <span class="n">all_uris_list</span><span class="p">)</span>
+        <span class="c1"># add tracks for transition between same codecs</span>
+        <span class="k">for</span> <span class="n">http_uri</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_uris</span><span class="p">:</span>
+            <span class="n">all_uris_list</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">http_uri</span><span class="p">,</span> <span class="n">http_uri</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">http_uri_pair</span> <span class="ow">in</span> <span class="n">all_uris_list</span><span class="p">:</span>
+            <span class="n">first_track</span><span class="p">,</span> <span class="n">second_track</span> <span class="o">=</span> <span class="n">http_uri_pair</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">first_track</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">second_track</span><span class="p">)</span>
+        <span class="n">num_tracks</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_number_of_tracks_in_queue</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">num_tracks</span>
+
+    <span class="k">def</span> <span class="nf">_did_all_devices_crossfade</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check is all devices crossfade</span>
+<span class="sd">        :param list device_list: List of Sonos zone components under test</span>
+<span class="sd">        :return: Did all devices crossfade ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Crossfade state values: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">all</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">device_list</span><span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">_did_next_track_start</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">current_track</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check if next track playback started</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        :type zp: :`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        :param int current_track: Current track number</span>
+<span class="sd">        :return: Did next track start ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Current position info: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span>
+                                 <span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;RelTime&#39;</span><span class="p">)))</span>
+        <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span> <span class="o">!=</span> <span class="n">current_track</span>
+
+<div class="viewcode-block" id="CrossfadeStressTest.test_crossfade"><a class="viewcode-back" href="../../../upnp.stress.html#upnp.stress.crossfade_stress_test.CrossfadeStressTest.test_crossfade">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;gc_gms_generator&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_crossfade</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">gms</span><span class="p">)</span>
+        <span class="c1"># list of devices under test</span>
+        <span class="n">device_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="n">gms</span>
+        <span class="n">device_udn_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">device_list</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_add_tracks_to_queue</span><span class="p">(</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">crossfade</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetCrossfadeMode</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expect crossfade on&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_log</span> <span class="o">=</span> <span class="n">PLAYBACK_LOG</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">)</span>
+        <span class="c1"># write http uri sequence to file as it is played</span>
+        <span class="n">fh</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_log</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span>
+        <span class="n">current_track</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="k">while</span> <span class="n">current_track</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+            <span class="c1"># not_crossfading_zps = []</span>
+            <span class="c1"># reset crossfading states to False</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">device_list</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="n">track_duration</span> <span class="o">=</span> <span class="n">reltime_str_to_seconds</span><span class="p">(</span>
+                                    <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track_duration</span><span class="p">())</span>
+            <span class="n">current_track_uri</span> <span class="o">=</span> <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track_uri</span><span class="p">()</span>
+            <span class="n">current_track</span> <span class="o">=</span> <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span>
+            <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">current_track_uri</span> <span class="o">+</span> <span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Now playing : </span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2"> - </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">current_track</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">,</span>
+                                     <span class="n">current_track_uri</span><span class="p">))</span>
+            <span class="c1"># wait for track transition</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting for track transtion on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_did_next_track_start</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span>
+                                <span class="n">current_track</span><span class="p">),</span>
+                                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">track_duration</span> <span class="o">+</span> <span class="mi">20</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">current_track</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;Timeout waiting for next track to start&#39;</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">True</span>
+                    <span class="c1"># if we are not in playing state, stop test else will go</span>
+                    <span class="c1"># in endless loop.</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">():</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Playback stopped !!!! &quot;</span>
+                                          <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">continue_on_errors</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="c1"># verify cross fade occurred</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Checking if all players crossfaded&quot;</span><span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_did_all_devices_crossfade</span><span class="p">(</span><span class="n">device_list</span><span class="p">),</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">current_track</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;Crossfade did not occur on:&#39;</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">True</span>
+                    <span class="k">for</span> <span class="n">udn</span> <span class="ow">in</span> <span class="n">device_udn_list</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">crossfading</span><span class="p">[</span><span class="n">udn</span><span class="p">]:</span>
+                            <span class="n">zone</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_raw_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+                            <span class="k">if</span> <span class="n">zone</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">==</span> <span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">:</span>
+                                <span class="n">role</span> <span class="o">=</span> <span class="s1">&#39;GC&#39;</span>
+                            <span class="k">else</span><span class="p">:</span>
+                                <span class="n">role</span> <span class="o">=</span> <span class="s1">&#39;GM&#39;</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: &lt;</span><span class="si">{}</span><span class="s2">&gt; did not crossfade&quot;</span>
+                                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">role</span><span class="p">,</span> <span class="n">zone</span><span class="p">))</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">+=</span> <span class="s2">&quot;, </span><span class="si">{}</span><span class="s2"> - &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">role</span><span class="p">,</span> <span class="n">zone</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">continue_on_errors</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">fh</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+                    <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop</span><span class="p">()</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping test on detecting error: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">))</span>
+                    <span class="k">break</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Crossfade Stress Test&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">CrossfadeStressTest</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

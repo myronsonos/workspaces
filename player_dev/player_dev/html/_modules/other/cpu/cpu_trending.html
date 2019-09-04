@@ -1,0 +1,669 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>other.cpu.cpu_trending &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for other.cpu.cpu_trending</h1><div class="highlight"><pre>
+<span></span><span class="ch">#!/usr/bin/env python</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">matplotlib</span>
+<span class="n">matplotlib</span><span class="o">.</span><span class="n">use</span><span class="p">(</span><span class="s1">&#39;Agg&#39;</span><span class="p">)</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">collections</span>
+<span class="kn">import</span> <span class="nn">numpy</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">logstash</span> <span class="k">import</span> <span class="n">send_event_to_logstash_server</span>
+<span class="kn">from</span> <span class="nn">graphing.graph</span> <span class="k">import</span> <span class="n">Graph</span>
+
+<div class="viewcode-block" id="CPUResult"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult">[docs]</a><span class="k">class</span> <span class="nc">CPUResult</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Stores cpu test results for one build/version</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;CPUResult&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">version</span><span class="p">,</span> <span class="n">timestamp</span><span class="p">,</span> <span class="n">data_dict</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param str version: version number e.g. 27.2-19180</span>
+<span class="sd">        :param int timestamp: time the test was run, in epoch time</span>
+<span class="sd">        :param data_dict: optional dict of data to add to the object as it is initialized. Data can</span>
+<span class="sd">            also be added later using the methods below</span>
+<span class="sd">        :type data_dict: dict or None</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">version</span> <span class="o">=</span> <span class="n">version</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">timestamp</span> <span class="o">=</span> <span class="n">timestamp</span>
+        <span class="n">recursive_default_dict</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">collections</span><span class="o">.</span><span class="n">defaultdict</span><span class="p">(</span><span class="n">recursive_default_dict</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">recursive_default_dict</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">data_dict</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">add_result_from_dict</span><span class="p">(</span><span class="n">data_dict</span><span class="p">)</span>
+
+<div class="viewcode-block" id="CPUResult.add_result_from_json"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult.add_result_from_json">[docs]</a>    <span class="k">def</span> <span class="nf">add_result_from_json</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path_to_file</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add data to the object from a json file</span>
+
+<span class="sd">        :param str path_to_file: path to the json file holding the data</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path_to_file</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">fh</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_result_from_dict</span><span class="p">(</span><span class="n">data</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUResult.add_result_from_dict"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult.add_result_from_dict">[docs]</a>    <span class="k">def</span> <span class="nf">add_result_from_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add data to the object from a dict</span>
+
+<span class="sd">        :param dict data: the data to be added. Should have the structure</span>
+<span class="sd">            data[resource][config][device]</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">r</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">,</span> <span class="n">avg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">json_avg_generator</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">r</span><span class="p">][</span><span class="n">c</span><span class="p">][</span><span class="n">d</span><span class="p">]:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">r</span><span class="p">][</span><span class="n">c</span><span class="p">][</span><span class="n">d</span><span class="p">]</span> <span class="o">=</span> <span class="n">avg</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;already recorded data for </span><span class="si">{}</span><span class="s2"> &#39;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&#39;:&quot;</span>
+                                  <span class="s2">&quot; skipping </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">version</span><span class="p">,</span> <span class="n">r</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span> <span class="n">d</span><span class="p">,</span> <span class="n">avg</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CPUResult.json_avg_generator"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult.json_avg_generator">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">json_avg_generator</span><span class="p">(</span><span class="n">avg_dict</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generates all resource, config, device, data combinations in a dictionary of cpu data</span>
+
+<span class="sd">        :param dict avg_dict: dictionary of cpu test data</span>
+<span class="sd">        :return: resource, config, device, and cpu data in a tuple</span>
+<span class="sd">        :rtype: tuple</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">avg_dict</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">avg_dict</span><span class="p">[</span><span class="n">resource</span><span class="p">]:</span>
+                <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="n">avg_dict</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">]:</span>
+                    <span class="n">avg</span> <span class="o">=</span> <span class="n">avg_dict</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">][</span><span class="n">device</span><span class="p">]</span>
+                    <span class="k">yield</span> <span class="p">(</span><span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">avg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUResult.write_compiled_averages_to_file"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult.write_compiled_averages_to_file">[docs]</a>    <span class="k">def</span> <span class="nf">write_compiled_averages_to_file</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">out_fn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Write the data in this object to a json file</span>
+
+<span class="sd">        :param str out_fn: desired filename</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;writing averages to &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">out_fn</span><span class="p">))</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">out_fn</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">fh</span><span class="p">,</span> <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUResult.generate_compiled_averages"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResult.generate_compiled_averages">[docs]</a>    <span class="k">def</span> <span class="nf">generate_compiled_averages</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate a dict of data about each captured average</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">]:</span>
+                <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">]:</span>
+                    <span class="n">avg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">][</span><span class="n">device</span><span class="p">]</span>
+                    <span class="n">model</span><span class="p">,</span> <span class="n">channel</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;-&#39;</span><span class="p">)</span>
+                    <span class="n">event_dict</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;version&#39;</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
+                                  <span class="s1">&#39;resource&#39;</span><span class="p">:</span><span class="n">resource</span><span class="p">,</span>
+                                  <span class="s1">&#39;config&#39;</span><span class="p">:</span><span class="n">config</span><span class="p">,</span>
+                                  <span class="s1">&#39;channel&#39;</span><span class="p">:</span><span class="n">device</span><span class="p">,</span>
+                                  <span class="s1">&#39;average&#39;</span><span class="p">:</span><span class="n">avg</span><span class="p">,</span>
+                                  <span class="s1">&#39;timestamp&#39;</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">timestamp</span><span class="p">}</span>
+                    <span class="k">yield</span> <span class="n">event_dict</span></div></div>
+
+<div class="viewcode-block" id="CPUResultUtility"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResultUtility">[docs]</a><span class="k">class</span> <span class="nc">CPUResultUtility</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    CPU test result utility that can plot CPU test data over time and print it to the console.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># base filename for compiled average JSON files</span>
+    <span class="n">COLLATED_AVG_FN</span> <span class="o">=</span> <span class="s2">&quot;CPU-averages.json&quot;</span>
+
+    <span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;CPUResultUtil&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">avg_directory</span><span class="p">,</span> <span class="n">configurations</span><span class="p">,</span> <span class="n">resources</span><span class="p">,</span> <span class="n">trend_name</span><span class="p">,</span> <span class="n">date_range</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">supress_graphs</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initialize the object</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        :param str avg_directory: top directory to search for cpu data in. Typically ends with</span>
+<span class="sd">            branch name, e.g. /path/to/files/floyd</span>
+<span class="sd">        :param configurations: configurations to be analyzed. Same format used with</span>
+<span class="sd">            cpu_performance.py, e.g. [&#39;stereo-sub-S5&#39;, &#39;standalone&#39;]</span>
+<span class="sd">        :type configurations: list of str</span>
+<span class="sd">        :param resources: resources to be analyzed, e.g. [&#39;stereo-S1&#39;, &#39;stereo-sub-S1&#39;]</span>
+<span class="sd">        :type resources: list of str</span>
+<span class="sd">        :param trend_name: identifying name for the data set</span>
+<span class="sd">        :type trend_name: str or None</span>
+<span class="sd">        :param date_range: -- start and end dates time frame to analyze.Format MM/DD/YYYY. If None,</span>
+<span class="sd">            all dates accepted.</span>
+<span class="sd">        :type date_range: list of str or None</span>
+<span class="sd">        :param supress_graphs: if True graphs will not be raised for viewing as they are created,</span>
+<span class="sd">            only saved to png files.</span>
+<span class="sd">        :type supress_graphs: bool or False</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">avg_dir</span> <span class="o">=</span> <span class="n">avg_directory</span>
+        <span class="k">if</span> <span class="n">date_range</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span> <span class="o">=</span> <span class="p">[</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="n">d</span><span class="p">,</span> <span class="s2">&quot;%m/</span><span class="si">%d</span><span class="s2">/%Y&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">date</span><span class="p">()</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">date_range</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="o">.</span><span class="n">sort</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">trend_name</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">trend_name</span> <span class="o">=</span> <span class="n">trend_name</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">trend_name</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">configurations</span> <span class="o">=</span> <span class="n">configurations</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resources</span> <span class="o">=</span> <span class="n">resources</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">supress_graphs</span> <span class="o">=</span> <span class="n">supress_graphs</span>
+        <span class="c1"># Recursively defined dict allows calls to nonexistent keys multiple levels deep not to fail</span>
+        <span class="c1"># Useful for checking if data has already been written for resource/config/device combos</span>
+        <span class="n">recursive_default_dict</span> <span class="o">=</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">collections</span><span class="o">.</span><span class="n">defaultdict</span><span class="p">(</span><span class="n">recursive_default_dict</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">compiled_dirs</span> <span class="o">=</span> <span class="n">recursive_default_dict</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">versions</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">timestamps</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">_generate_valid_rootnames</span><span class="p">(</span><span class="n">dirname</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Walk through directory and sub directories, yielding directories that contain cpu data</span>
+
+<span class="sd">        :param str dirname: topmost directory</span>
+<span class="sd">        :return: directory with cpu data</span>
+<span class="sd">        :rtype: str</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">root</span><span class="p">,</span> <span class="n">dirnames</span><span class="p">,</span><span class="n">_</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">dirname</span><span class="p">):</span>
+            <span class="c1"># when correct directory is found, prune irrelevant directories to speed up os.walk</span>
+            <span class="k">if</span> <span class="s1">&#39;cpu&#39;</span> <span class="ow">in</span> <span class="n">dirnames</span> <span class="ow">and</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">_get_version_num_from_cpu_dirname</span><span class="p">(</span><span class="n">root</span><span class="p">):</span>
+                <span class="n">dirnames</span><span class="p">[:]</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;cpu&#39;</span><span class="p">]</span>
+            <span class="k">elif</span> <span class="s1">&#39;averages&#39;</span> <span class="ow">in</span> <span class="n">dirnames</span><span class="p">:</span>
+                <span class="n">dirnames</span><span class="p">[:]</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;averages&#39;</span><span class="p">]</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="s1">&#39;cpu&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">root</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="s1">&#39;averages&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">root</span><span class="p">):</span>
+                <span class="k">continue</span>
+            <span class="k">yield</span> <span class="n">root</span>
+
+<div class="viewcode-block" id="CPUResultUtility.get_data"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResultUtility.get_data">[docs]</a>    <span class="k">def</span> <span class="nf">get_data</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Walks through given directory and collects data for the specified resources and</span>
+<span class="sd">        configurations.</span>
+
+<span class="sd">        The data is saved on the instance as self.result_objects</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">for</span> <span class="n">root</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_generate_valid_rootnames</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">avg_dir</span><span class="p">):</span>
+            <span class="n">timestamp</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="n">root</span><span class="p">)</span><span class="o">.</span><span class="n">st_mtime</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_is_date_in_range</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="o">.</span><span class="n">fromtimestamp</span><span class="p">(</span><span class="n">timestamp</span><span class="p">)):</span>
+                <span class="k">continue</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;getting averages in &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">root</span><span class="p">))</span>
+                <span class="n">cpu_result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collate_directory_average_files</span><span class="p">(</span><span class="n">root</span><span class="p">,</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">COLLATED_AVG_FN</span><span class="p">,</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">resources</span><span class="p">,</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">configurations</span><span class="p">)</span>
+                <span class="c1"># if a directory with no data made it through, don&#39;t save that empty dict</span>
+                <span class="k">if</span> <span class="n">cpu_result</span><span class="o">.</span><span class="n">data</span> <span class="ow">and</span> <span class="n">cpu_result</span><span class="o">.</span><span class="n">version</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">cpu_result</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUResultUtility.collate_directory_average_files"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResultUtility.collate_directory_average_files">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">collate_directory_average_files</span><span class="p">(</span><span class="n">dirname</span><span class="p">,</span> <span class="n">collated_avg_fn</span><span class="p">,</span> <span class="n">resources</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                        <span class="n">configs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">check_for_compiled</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Combines all cpu json data files in a directory (corresponding to a build version) into a</span>
+<span class="sd">        CPUResult object</span>
+
+<span class="sd">        :param str dirname: string, the directory to combine files in</span>
+<span class="sd">        :param str collated_avg_fn: base filename of json compiled average files</span>
+<span class="sd">        :param resources: resources of interest. If None, all considered.</span>
+<span class="sd">        :type resource: list of str or None</span>
+<span class="sd">        :param configs: configurations of interest. If None, all considered.</span>
+<span class="sd">        :type configs: list of str or None</span>
+<span class="sd">        :param check_for_compiled: if True, a compiled cpu data json file is checked for</span>
+<span class="sd">            before going through individual json files</span>
+<span class="sd">        :type check_for_compiled: bool or True</span>
+
+<span class="sd">        :return: a CPUResult object</span>
+<span class="sd">        :rtype: CPUResult</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">timestamp</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="n">dirname</span><span class="p">)</span><span class="o">.</span><span class="n">st_mtime</span>
+        <span class="n">ver_num</span> <span class="o">=</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">_get_version_num_from_cpu_dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">dirname</span><span class="p">))</span>
+        <span class="n">compiled_avg_file</span> <span class="o">=</span> <span class="n">ver_num</span><span class="o">+</span><span class="s1">&#39;-&#39;</span><span class="o">+</span><span class="n">collated_avg_fn</span>
+
+        <span class="n">result</span> <span class="o">=</span> <span class="n">CPUResult</span><span class="p">(</span><span class="n">ver_num</span><span class="p">,</span> <span class="n">timestamp</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">compiled_avg_file</span><span class="p">)</span> <span class="ow">and</span> <span class="n">check_for_compiled</span><span class="p">:</span>
+            <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;using averages already combined&quot;</span>
+                                          <span class="s2">&quot; in file: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">compiled_avg_file</span><span class="p">))</span>
+            <span class="n">result</span><span class="o">.</span><span class="n">add_result_from_json</span><span class="p">(</span><span class="n">compiled_avg_file</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">result</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">fn</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">dirname</span><span class="p">):</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">fn</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;-averages.json&quot;</span><span class="p">):</span>
+                    <span class="k">continue</span>
+                <span class="k">if</span> <span class="n">resources</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">([</span><span class="n">resource</span> <span class="ow">in</span> <span class="n">fn</span> <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">resources</span><span class="p">]):</span>
+                        <span class="k">continue</span>
+                <span class="k">if</span> <span class="n">configs</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">([</span><span class="n">config</span> <span class="ow">in</span> <span class="n">fn</span> <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">configs</span><span class="p">]):</span>
+                        <span class="k">continue</span>
+                <span class="n">fn_abspath</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">dirname</span><span class="p">,</span> <span class="n">fn</span><span class="p">)</span>
+                <span class="n">result</span><span class="o">.</span><span class="n">add_result_from_json</span><span class="p">(</span><span class="n">fn_abspath</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">result</span></div>
+
+<div class="viewcode-block" id="CPUResultUtility.resource_config_generator"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResultUtility.resource_config_generator">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">resource_config_generator</span><span class="p">(</span><span class="n">resources</span><span class="p">,</span> <span class="n">configs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generates resource/config combinations</span>
+
+<span class="sd">        :param resources</span>
+<span class="sd">        :type resources: list of str</span>
+<span class="sd">        :param configs</span>
+<span class="sd">        :type configs: list of str</span>
+
+<span class="sd">        :return: resource and config</span>
+<span class="sd">        :rtype: tuple</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">resource</span> <span class="ow">in</span> <span class="n">resources</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">configs</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="p">(</span><span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_sort_result_objects_in_time</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sorts the list of CPUResult objects according to their timestamps</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">timestamps</span> <span class="o">=</span> <span class="p">[</span><span class="n">result</span><span class="o">.</span><span class="n">timestamp</span> <span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span><span class="p">]</span>
+        <span class="n">sort_ix</span> <span class="o">=</span> <span class="n">numpy</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">timestamps</span><span class="p">)</span>
+        <span class="n">sorted_results</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="n">sort_ix</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span> <span class="o">=</span> <span class="n">sorted_results</span>
+
+<div class="viewcode-block" id="CPUResultUtility.graph_and_print_running_averages"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.CPUResultUtility.graph_and_print_running_averages">[docs]</a>    <span class="k">def</span> <span class="nf">graph_and_print_running_averages</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Prepares single resource/config data for graphing and printing by creating lists by device</span>
+<span class="sd">        from data stored in dict, then graphs and prints it</span>
+
+<span class="sd">        :param str resource: resource of interest</span>
+<span class="sd">        :param str config: configuration of interest</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">avg_data</span><span class="p">,</span> <span class="n">all_timestamps</span><span class="p">,</span> <span class="n">all_versions</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_prepare_for_graph_and_print</span><span class="p">(</span><span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+
+        <span class="c1"># if no date range was defined, figure out what the first and last dates were</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span> <span class="o">=</span> <span class="p">[</span><span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="o">.</span><span class="n">fromtimestamp</span><span class="p">(</span><span class="n">all_timestamps</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+                                <span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="o">.</span><span class="n">fromtimestamp</span><span class="p">(</span><span class="n">all_timestamps</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_print_data_to_console</span><span class="p">(</span><span class="n">avg_data</span><span class="p">,</span> <span class="n">all_versions</span><span class="p">,</span> <span class="n">all_timestamps</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_graph_data</span><span class="p">(</span><span class="n">avg_data</span><span class="p">,</span> <span class="n">all_versions</span><span class="p">,</span> <span class="n">all_timestamps</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_prepare_for_graph_and_print</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Compiles data by device into lists, which are stored by device in a dict. Also returns all</span>
+<span class="sd">        timestamps and all versions that were stored (no one device is guaranteed to have all)</span>
+
+<span class="sd">        :param str resource: resource of interest</span>
+<span class="sd">        :param str config: configuration of interest</span>
+<span class="sd">        :return: the data itself. Keys are devices. Data is stored as list of tuples</span>
+<span class="sd">            (timestamp, avg)</span>
+<span class="sd">        :rtype: dict</span>
+<span class="sd">        :return: all timestamps for which data was found</span>
+<span class="sd">        :rtype: list of int</span>
+<span class="sd">        :return: all versions for which data was found</span>
+<span class="sd">        :rtype: list of str</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_timestamps</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">all_versions</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">avg_data</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_sort_result_objects_in_time</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">result_objects</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">data</span>
+            <span class="k">if</span> <span class="n">resource</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span> <span class="ow">or</span> <span class="n">config</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">]:</span>
+                <span class="k">continue</span>
+            <span class="n">rc_combo</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">]</span>
+            <span class="n">all_timestamps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">timestamp</span><span class="p">)</span>
+            <span class="n">all_versions</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">version</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="n">rc_combo</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">device</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">avg_data</span><span class="p">:</span>
+                    <span class="n">avg_data</span><span class="p">[</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+                <span class="n">avg</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">resource</span><span class="p">][</span><span class="n">config</span><span class="p">][</span><span class="n">device</span><span class="p">]</span>
+                <span class="n">avg_data</span><span class="p">[</span><span class="n">device</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">result</span><span class="o">.</span><span class="n">timestamp</span><span class="p">,</span> <span class="n">avg</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">avg_data</span><span class="p">,</span> <span class="n">all_timestamps</span><span class="p">,</span> <span class="n">all_versions</span>
+
+    <span class="k">def</span> <span class="nf">_graph_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">avg_data</span><span class="p">,</span> <span class="n">all_versions</span><span class="p">,</span> <span class="n">all_timestamps</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Graphs the data, formats the graph, and saves it as a png</span>
+
+<span class="sd">        :param dict avg_data: the data to plot</span>
+<span class="sd">        :param all_versions: list of all versions in avg_data</span>
+<span class="sd">        :type all_version: list of str</span>
+<span class="sd">        :param all_timestamps: list of all timestamps in avg_data</span>
+<span class="sd">        :type all_timestamps: list of int</span>
+<span class="sd">        :param str resource</span>
+<span class="sd">        :param str config</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">graph</span> <span class="o">=</span> <span class="n">Graph</span><span class="p">(</span><span class="n">avg_data</span><span class="p">,</span> <span class="n">xlabel</span><span class="o">=</span><span class="s1">&#39;Version Number&#39;</span><span class="p">,</span> <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;CPU %&#39;</span><span class="p">,</span>
+                      <span class="n">title</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">trend_name</span> <span class="o">+</span> <span class="s1">&#39; &#39;</span> <span class="o">+</span> <span class="n">resource</span> <span class="o">+</span> <span class="s1">&#39; &#39;</span> <span class="o">+</span> <span class="n">config</span> <span class="o">+</span> <span class="s1">&#39; &#39;</span> <span class="o">+</span>
+                      <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">{:%b-</span><span class="si">%d</span><span class="s2">-%Y} to {:%b-</span><span class="si">%d</span><span class="s2">-%Y}&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span>
+                      <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="n">graph</span><span class="o">.</span><span class="n">reduce_graph_height</span><span class="p">(</span><span class="mf">0.15</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">100</span><span class="p">)</span>
+        <span class="n">graph</span><span class="o">.</span><span class="n">axes</span><span class="o">.</span><span class="n">yaxis</span><span class="o">.</span><span class="n">set_ticks</span><span class="p">([</span> <span class="n">y</span> <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">105</span><span class="p">,</span><span class="mi">5</span><span class="p">)</span> <span class="p">])</span>
+        <span class="n">n_labels</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_versions</span><span class="p">))</span>
+        <span class="n">label_ix</span> <span class="o">=</span> <span class="n">numpy</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_timestamps</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span>
+                                   <span class="n">n_labels</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+
+        <span class="n">new_ticks</span> <span class="o">=</span> <span class="p">[</span><span class="n">all_timestamps</span><span class="p">[</span><span class="n">ix</span><span class="p">]</span> <span class="k">for</span> <span class="n">ix</span> <span class="ow">in</span> <span class="n">label_ix</span><span class="p">]</span>
+        <span class="n">ticklabels</span> <span class="o">=</span> <span class="p">[</span><span class="n">all_versions</span><span class="p">[</span><span class="n">ix</span><span class="p">]</span> <span class="k">for</span> <span class="n">ix</span> <span class="ow">in</span> <span class="n">label_ix</span><span class="p">]</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">xticks</span><span class="p">(</span><span class="n">new_ticks</span><span class="p">,</span> <span class="n">ticklabels</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
+
+        <span class="n">png_fn</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">_{:%b-</span><span class="si">%d</span><span class="s2">-%Y}_to_{:%b-</span><span class="si">%d</span><span class="s2">-%Y}.png&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">trend_name</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                                                  <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;saving figure as </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">png_fn</span><span class="p">))</span>
+        <span class="n">graph</span><span class="o">.</span><span class="n">save_graph</span><span class="p">(</span><span class="n">png_fn</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">supress_graphs</span><span class="p">:</span>
+            <span class="n">graph</span><span class="o">.</span><span class="n">show_graph</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">graph</span><span class="o">.</span><span class="n">close_graph</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_print_data_to_console</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">avg_data</span><span class="p">,</span> <span class="n">versions</span><span class="p">,</span> <span class="n">timestamps</span><span class="p">,</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Prints the data to the console</span>
+
+<span class="sd">        :param dict avg_data: the data to plot</span>
+<span class="sd">        :param all_versions: list of all versions in avg_data</span>
+<span class="sd">        :type all_version: list of str</span>
+<span class="sd">        :param all_timestamps: list of all timestamps in avg_data</span>
+<span class="sd">        :type all_timestamps: list of int</span>
+<span class="sd">        :type str resource</span>
+<span class="sd">        :type str config</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">key</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">avg_data</span><span class="o">.</span><span class="n">keys</span><span class="p">()]</span>
+        <span class="n">devices</span><span class="o">.</span><span class="n">sort</span><span class="p">()</span>
+        <span class="n">top_row_format</span> <span class="o">=</span><span class="s2">&quot;</span><span class="si">{:&gt;12}</span><span class="s2">&quot;</span> <span class="o">*</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">devices</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">row_format</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{:&gt;12}</span><span class="s2">&quot;</span><span class="o">+</span><span class="s2">&quot;</span><span class="si">{:&gt;12}</span><span class="s2">&quot;</span><span class="o">*</span><span class="nb">len</span><span class="p">(</span><span class="n">devices</span><span class="p">)</span>
+
+        <span class="nb">print</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Average CPU Test Result between {:%b </span><span class="si">%d</span><span class="s1">, %Y}&#39;</span>
+              <span class="s1">&#39; and {:%b </span><span class="si">%d</span><span class="s1">, %Y}&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{:&gt;15}{:&lt;15}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;Resource: &#39;</span><span class="p">,</span> <span class="n">resource</span><span class="p">))</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{:&gt;15}{:&lt;15}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;Configuration: &#39;</span><span class="p">,</span> <span class="n">config</span><span class="p">))</span>
+        <span class="nb">print</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">top_row_format</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s2">&quot;version&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">devices</span><span class="p">))</span>
+
+        <span class="n">device_timestamps</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">devices</span><span class="p">,</span> <span class="p">[[]]</span><span class="o">*</span><span class="nb">len</span><span class="p">(</span><span class="n">devices</span><span class="p">)))</span>
+        <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">:</span>
+            <span class="n">device_timestamps</span><span class="p">[</span><span class="n">d</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">a</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">avg_data</span><span class="p">[</span><span class="n">d</span><span class="p">]]</span>
+
+        <span class="k">for</span> <span class="n">version</span><span class="p">,</span> <span class="n">master_timestamp</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">versions</span><span class="p">,</span> <span class="n">timestamps</span><span class="p">):</span>
+            <span class="n">print_data</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">:</span>
+                <span class="k">if</span>  <span class="n">master_timestamp</span> <span class="ow">in</span> <span class="n">device_timestamps</span><span class="p">[</span><span class="n">d</span><span class="p">]:</span>
+                    <span class="n">ix</span> <span class="o">=</span> <span class="n">device_timestamps</span><span class="p">[</span><span class="n">d</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">master_timestamp</span><span class="p">)</span>
+                    <span class="n">avg</span> <span class="o">=</span> <span class="n">avg_data</span><span class="p">[</span><span class="n">d</span><span class="p">][</span><span class="n">ix</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span>
+                    <span class="n">print_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">avg</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">print_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;no data&#39;</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">row_format</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">version</span><span class="p">,</span> <span class="o">*</span><span class="n">print_data</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_is_date_in_range</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">date</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Determine if a date is in the specified range</span>
+
+<span class="sd">        :param date: date of interest</span>
+<span class="sd">        :type date: datetime.date</span>
+
+<span class="sd">        :return: True - in range, False - out of range</span>
+<span class="sd">        :rtype: bool</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">date</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="ow">and</span> <span class="p">(</span><span class="n">date</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">date_range</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">_get_version_num_from_cpu_dirname</span><span class="p">(</span><span class="n">dirname</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        determine version number from path</span>
+
+<span class="sd">        :param str dirname: path to use</span>
+<span class="sd">        :return: the version number, or None if couldn&#39;t determine</span>
+<span class="sd">        :rtype: str or None</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">dirname</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s1">&#39;cpu&#39;</span> <span class="ow">in</span> <span class="n">path</span><span class="p">:</span>
+            <span class="n">names</span> <span class="o">=</span> <span class="n">dirname</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">names</span><span class="p">[</span><span class="n">names</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;cpu&#39;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="load_compiled_avg_from_file"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.load_compiled_avg_from_file">[docs]</a><span class="k">def</span> <span class="nf">load_compiled_avg_from_file</span><span class="p">(</span><span class="n">fn</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Loads cpu data stored in json to dict</span>
+
+<span class="sd">    :param str fn: file to be loaded</span>
+
+<span class="sd">    :return: the data from the file</span>
+<span class="sd">    :rtype: dict</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+        <span class="n">compiled_averages</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">fh</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">compiled_averages</span></div>
+
+<div class="viewcode-block" id="combine_loose_averages_to_json"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.combine_loose_averages_to_json">[docs]</a><span class="k">def</span> <span class="nf">combine_loose_averages_to_json</span><span class="p">(</span><span class="n">dirname</span><span class="p">,</span> <span class="n">filename</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Walks through given directory and sub-directories looking for loose cpu json files to</span>
+<span class="sd">    combine into one. Each directory (corresponding to a version), gets it&#39;s own json file.</span>
+
+<span class="sd">    :param str dirname: the topmost directory to start the search in</span>
+<span class="sd">    :param filename: optional name of the file to be written. If not specified, a unique name will</span>
+<span class="sd">        be created based on the version.</span>
+<span class="sd">    :type filename: str or None</span>
+
+<span class="sd">    :return: CPUResult object with compiled test data</span>
+<span class="sd">    :rtype: CPUResult or None </span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">root</span> <span class="ow">in</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">_generate_valid_rootnames</span><span class="p">(</span><span class="n">dirname</span><span class="p">):</span>
+        <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;compiling averages in &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">root</span><span class="p">))</span>
+        <span class="n">version</span> <span class="o">=</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">_get_version_num_from_cpu_dirname</span><span class="p">(</span><span class="n">root</span><span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">collate_directory_average_files</span><span class="p">(</span>
+            <span class="n">root</span><span class="p">,</span> <span class="n">version</span><span class="p">,</span> <span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">COLLATED_AVG_FN</span><span class="p">,</span> <span class="n">check_for_compiled</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">result</span><span class="o">.</span><span class="n">data</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">filename</span><span class="p">:</span>
+                <span class="n">compiled_avg_fn</span> <span class="o">=</span> <span class="n">filename</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">compiled_avg_fn</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">version</span><span class="o">+</span><span class="s1">&#39;-&#39;</span><span class="o">+</span><span class="n">CPUResultUtility</span><span class="o">.</span><span class="n">COLLATED_AVG_FN</span>
+            <span class="n">result</span><span class="o">.</span><span class="n">write_compiled_averages_to_file</span><span class="p">(</span><span class="n">compiled_avg_fn</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">result</span></div>
+
+<div class="viewcode-block" id="transmit_cpu_results_to_event_server"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.transmit_cpu_results_to_event_server">[docs]</a><span class="k">def</span> <span class="nf">transmit_cpu_results_to_event_server</span><span class="p">(</span><span class="n">branch</span><span class="p">,</span> <span class="n">cpu_result</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">event_dict</span> <span class="ow">in</span> <span class="n">cpu_result</span><span class="o">.</span><span class="n">generate_compiled_averages</span><span class="p">():</span>
+        <span class="n">event_dict</span><span class="p">[</span><span class="s1">&#39;branch&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">branch</span>
+        <span class="n">send_event_to_logstash_server</span><span class="p">(</span><span class="s1">&#39;cpu&#39;</span><span class="p">,</span> <span class="n">event_dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="parse_args"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.parse_args">[docs]</a><span class="k">def</span> <span class="nf">parse_args</span><span class="p">():</span>
+    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;input_dir&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;generate JSON averages from these files&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-d&quot;</span><span class="p">,</span> <span class="s2">&quot;--date_range&quot;</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;MM/DD/YYYY format, start and end date of range to be considered.&quot;</span>
+                        <span class="s2">&quot; Considers all dates if no range is specified.&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--combine_loose_averages&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+                        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;for each build, combine individual &quot;</span>
+                             <span class="s2">&quot;JSON averages into a single file.&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--supress_graphs&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+                        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;don&#39;t show graphs, just save them&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-c&quot;</span><span class="p">,</span> <span class="s2">&quot;--configurations&quot;</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;*&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Get cpu data for these &quot;</span>
+                        <span class="s2">&quot;configurations. Use same format expected by cpu_performance.py, &quot;</span>
+                        <span class="s2">&quot;e.g. stereo-sub-S5&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-r&quot;</span><span class="p">,</span><span class="s2">&quot;--resources&quot;</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;*&quot;</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Get cpu data for these resources. Use&quot;</span>
+                        <span class="s2">&quot; same format expected by cpu_performance.py, e.g. library-aif&quot;</span><span class="p">,</span>
+                        <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--branch&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;unknown&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span>
+                        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Name of branch which generated CPU results. &quot;</span>
+                             <span class="s2">&quot;Note that this is only used when the &quot;</span>
+                             <span class="s2">&quot;--send_metrics&#39; option is set&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--trend_name&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Identifying name of the data. Branch&#39;</span>
+                        <span class="s1">&#39;name will make sense in many cases. This name will be inluded in the title&#39;</span>
+                        <span class="s1">&#39; of the graphs and filenames.&#39;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s1">&#39;--send_metrics&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+                        <span class="n">help</span><span class="o">=</span><span class="s1">&#39;Post CPU result data to events server&#39;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="main"><a class="viewcode-back" href="../../../other.cpu.html#other.cpu.cpu_trending.main">[docs]</a><span class="k">def</span> <span class="nf">main</span><span class="p">():</span>
+    <span class="n">logging</span><span class="o">.</span><span class="n">basicConfig</span><span class="p">(</span><span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">DEBUG</span><span class="p">)</span>
+    <span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;CPU Trending&#39;</span><span class="p">)</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="n">parse_args</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">combine_loose_averages</span><span class="p">:</span>
+        <span class="n">cpu_result</span> <span class="o">=</span> <span class="n">combine_loose_averages_to_json</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input_dir</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cpu_result</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">send_metrics</span><span class="p">:</span>
+            <span class="n">transmit_cpu_results_to_event_server</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">branch</span><span class="p">,</span> <span class="n">cpu_result</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">resources</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">configurations</span><span class="p">:</span>
+        <span class="n">util</span> <span class="o">=</span> <span class="n">CPUResultUtility</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">input_dir</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">configurations</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">resources</span><span class="p">,</span>
+                                <span class="n">args</span><span class="o">.</span><span class="n">trend_name</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">date_range</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">supress_graphs</span><span class="p">)</span>
+        <span class="n">util</span><span class="o">.</span><span class="n">get_data</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">resource</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">util</span><span class="o">.</span><span class="n">resource_config_generator</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">resources</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">configurations</span><span class="p">):</span>
+                <span class="n">util</span><span class="o">.</span><span class="n">graph_and_print_running_averages</span><span class="p">(</span><span class="n">resource</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">combine_loose_averages</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;No resources or configs specified. No graphs will be created.&#39;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s1">&#39;Resources and configs need to be specified. Use flags -r and -c, e.g. -r &#39;</span>
+                     <span class="s1">&#39;library-aif -c stereo-sub-S5. Run this script with flag -h for more help.&#39;</span><span class="p">)</span></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">main</span><span class="p">()</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

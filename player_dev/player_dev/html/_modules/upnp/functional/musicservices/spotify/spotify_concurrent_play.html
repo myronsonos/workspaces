@@ -1,0 +1,475 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.musicservices.spotify.spotify_concurrent_play &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../../" src="../../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.musicservices.spotify.spotify_concurrent_play</h1><div class="highlight"><pre>
+<span></span><span class="c1"># _*_ coding:utf-8 _*_</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">xml.sax.saxutils</span> <span class="k">import</span> <span class="n">escape</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="k">import</span> <span class="n">Lock</span>
+
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">SimpleUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.musicservices.spotify.spotify_base</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">SpotifyBase</span><span class="p">,</span> <span class="n">ContainerFormat</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="c1"># Limit playback to 6 hours per zone player</span>
+<span class="n">MAX_PLAYBACK_DURATION</span> <span class="o">=</span> <span class="mi">6</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">*</span> <span class="mi">60</span>
+<span class="n">MINIMUM_INITIAL_PLAYBACK</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">MINIMUM_TRACK_DURATION</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="c1"># TODO - make this a command line</span>
+<span class="n">SECONDS_BEFORE_END</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="c1"># TODO - make this a command line</span>
+<span class="c1"># How often to perform seek - defaults to one per track</span>
+<span class="n">SEEK_TRACK_RATE</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">TRACK_CHANGE_TIMEOUT</span> <span class="o">=</span> <span class="n">SECONDS_BEFORE_END</span> <span class="o">+</span> <span class="mi">180</span>
+<span class="c1"># Minimum seconds between seeks on HH</span>
+<span class="n">MIN_SEEK_INTERVAL</span> <span class="o">=</span> <span class="mi">27</span>
+
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay">[docs]</a><span class="k">class</span> <span class="nc">SpotifyConcurrentPlay</span><span class="p">(</span><span class="n">SpotifyBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Play all favorite Spotify playlists using the available</span>
+<span class="sd">    unique players in the test bed.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">SpotifyConcurrentPlay</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">logging_to_file</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seek_lock</span> <span class="o">=</span> <span class="n">Lock</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">last_seek_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_parse_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--seek_rate&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">SEEK_TRACK_RATE</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;How often to seek tracks - default </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">SEEK_TRACK_RATE</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--max_duration&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">MAX_PLAYBACK_DURATION</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Maximum playback duration in seconds - default </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">MAX_PLAYBACK_DURATION</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--seek_pos&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">SECONDS_BEFORE_END</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Seconds to seek before track end - default </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">SECONDS_BEFORE_END</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--min_seek_interval&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">MIN_SEEK_INTERVAL</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Minimum seconds between seeks in HH - default </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">MIN_SEEK_INTERVAL</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--seek_throttle&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Seeks should be throttled&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--staggered_start&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Players randomize the playback start of the playlist&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--randomize&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s1">&#39;store_true&#39;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Randomize play duration and seek position&quot;</span><span class="p">)</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">unknown_args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">unknown_args</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seek_rate</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">seek_rate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">seek_pos</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">staggered_start</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">staggered_start</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">randomize</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">randomize</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">min_seek_interval</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">min_seek_interval</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">seek_throttle</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">seek_throttle</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">max_duration</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">max_duration</span>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.setUpFixture"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">SpotifyConcurrentPlay</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">featured</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_featured_containers</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">featured</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Must have at least one featured playlist&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unique_playback</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_unique_playback_devices</span><span class="p">()]</span>
+        <span class="c1"># Create a dictionary of zones mapping to a list of containers</span>
+        <span class="c1"># that each zone will play.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">dq</span> <span class="o">=</span> <span class="n">deque</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">unique_playback</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">dq</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="c1"># Distribute the playlist load among the available players.</span>
+        <span class="k">for</span> <span class="n">container</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">featured</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span><span class="p">[</span><span class="n">dq</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">container</span><span class="p">)</span>
+            <span class="n">dq</span><span class="o">.</span><span class="n">rotate</span><span class="p">()</span>
+        <span class="c1"># Update the unique players based on available content</span>
+        <span class="c1"># in the event there&#39;re more players than playlists.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unique_playback</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span>
+                                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span><span class="p">[</span><span class="n">zp</span><span class="p">]]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_parse_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">track_change_timeout</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span> <span class="o">+</span> <span class="mi">180</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using </span><span class="si">{}</span><span class="s2"> seconds for seek position before track end&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using seek every </span><span class="si">{}</span><span class="s2"> track&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seek_rate</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using </span><span class="si">{}</span><span class="s2"> seconds for track change timeout after seek&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">track_change_timeout</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using staggereded start </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">staggered_start</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using randomization track play/seek </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">randomize</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using </span><span class="si">{}</span><span class="s2"> between seeks on HH&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">min_seek_interval</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using Seek throttling on HH </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seek_throttle</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Using maximum playback duration </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">max_duration</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.allow_seek"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.allow_seek">[docs]</a>    <span class="k">def</span> <span class="nf">allow_seek</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns True when conditions allows to seek on currently</span>
+<span class="sd">        playing track based on the run time seek rate and the last</span>
+<span class="sd">        invocation of seek on the HH.</span>
+<span class="sd">        :param int curr_track: Track number playing</span>
+<span class="sd">        :return: True when seeking is allowed else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">allowed</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">curr_track</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_rate</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_throttle</span><span class="p">:</span>
+                <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_lock</span><span class="p">:</span>
+                    <span class="n">now</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                    <span class="n">allowed</span> <span class="o">=</span> <span class="p">(</span><span class="n">now</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_seek_time</span><span class="p">)</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_seek_interval</span>
+                    <span class="k">if</span> <span class="n">allowed</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">last_seek_time</span> <span class="o">=</span> <span class="n">now</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                        <span class="s2">&quot;allowed seek </span><span class="si">{}</span><span class="s2"> now=</span><span class="si">{}</span><span class="s2"> last=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="n">allowed</span><span class="p">,</span> <span class="n">now</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">last_seek_time</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">allowed</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">allowed</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.next_expected_track_number"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.next_expected_track_number">[docs]</a>    <span class="k">def</span> <span class="nf">next_expected_track_number</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pos</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the next unrestricted track number that follows</span>
+<span class="sd">        the specified position.</span>
+<span class="sd">        :param int pos: current track number</span>
+<span class="sd">        :param list restricted: unavailable track numbers</span>
+<span class="sd">        :param int num: number of available tracks</span>
+<span class="sd">        :return: Next playable track number</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Maximum number of attempts to find an unrestricted track is</span>
+        <span class="c1"># the total number of tracks (playable and restricted)</span>
+        <span class="n">tries</span> <span class="o">=</span> <span class="n">num</span>
+        <span class="n">new</span> <span class="o">=</span> <span class="n">pos</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="k">while</span> <span class="n">tries</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new</span> <span class="o">&gt;</span> <span class="n">num</span><span class="p">:</span>
+                <span class="n">new</span> <span class="o">=</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="n">new</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">restricted</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;next track number </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">new</span><span class="p">))</span>
+                <span class="k">return</span> <span class="n">new</span>
+            <span class="n">tries</span> <span class="o">=</span> <span class="n">tries</span> <span class="o">-</span> <span class="mi">1</span>
+            <span class="n">new</span> <span class="o">=</span> <span class="n">new</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;no playable tracks&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.wait_for_end_of_track"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.wait_for_end_of_track">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_end_of_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                              <span class="n">curr_track</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for track change, verifies track position on change.</span>
+<span class="sd">        Returns a tuple with a state and track position. The state</span>
+<span class="sd">        of False indicates no more tracks to play while True there</span>
+<span class="sd">        are more tracks.</span>
+<span class="sd">        :param int curr_track: Current track playing</span>
+<span class="sd">        :param list restricted: List of unplayable track numbers</span>
+<span class="sd">        :param int num_tracks: Total tracks</span>
+<span class="sd">        :param int timeout: Maximum time in seconds to wait for track</span>
+<span class="sd">        change</span>
+<span class="sd">        :return: Tuple (state, track)</span>
+<span class="sd">        :rtype :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> waiting </span><span class="si">{}</span><span class="s2"> seconds for track change&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="p">))</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_until_any_track_change</span><span class="p">(</span>
+            <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">res</span><span class="p">,</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> switched to next track&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">track_pos</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">curr_track</span> <span class="o">==</span> <span class="n">num_tracks</span> <span class="ow">or</span> <span class="n">track_pos</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> played last track </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+                <span class="mi">1</span><span class="p">,</span>
+                <span class="n">track_pos</span><span class="p">,</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> expected track position&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">return</span> <span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">)</span>
+        <span class="n">curr_track</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_expected_track_number</span><span class="p">(</span>
+            <span class="n">curr_track</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+            <span class="n">curr_track</span><span class="p">,</span>
+            <span class="n">track_pos</span><span class="p">,</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> playing expected track [</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">]&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">,</span> <span class="n">track_pos</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.play_container"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.play_container">[docs]</a>    <span class="k">def</span> <span class="nf">play_container</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">container</span><span class="p">,</span> <span class="n">expiration</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Attempts to play all tracks in container.</span>
+<span class="sd">        To expedite the test, plays the first 15 seconds of the</span>
+<span class="sd">        track and then advances to 10 seconds before the end.</span>
+<span class="sd">        Monitors for track changes and flags as failed test the</span>
+<span class="sd">        unexpected track changes or any fatal playback errors.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> playing container </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">container</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">(</span>
+            <span class="n">title</span><span class="o">=</span><span class="n">escape</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">container</span><span class="o">.</span><span class="n">title</span><span class="p">)),</span>
+            <span class="n">svc_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">service_id</span><span class="p">,</span>
+            <span class="n">acct_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">username</span><span class="p">)</span>
+        <span class="n">num_tracks</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">container</span><span class="o">.</span><span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">num_tracks</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> - failed to add tracks&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> added </span><span class="si">{}</span><span class="s2"> tracks in playlist&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">))</span>
+        <span class="n">restricted</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_restricted_track_numbers</span><span class="p">()</span>
+        <span class="n">curr_track</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">next_expected_track_number</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+            <span class="n">curr_track</span><span class="p">,</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">&quot;First playable track number&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Seek</span><span class="p">(</span><span class="s1">&#39;TRACK_NR&#39;</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> playing </span><span class="si">{}</span><span class="s2"> tracks </span><span class="si">{}</span><span class="s2"> restricted </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">restricted</span><span class="p">),</span> <span class="n">restricted</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="k">while</span> <span class="n">curr_track</span> <span class="o">&lt;=</span> <span class="n">num_tracks</span> <span class="ow">and</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">expiration</span><span class="p">:</span>
+            <span class="n">pos_info</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()</span>
+            <span class="n">track_pos</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pos_info</span><span class="p">[</span><span class="s1">&#39;Track&#39;</span><span class="p">])</span>
+            <span class="n">duration</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_seconds_from_pos_info</span><span class="p">(</span><span class="n">pos_info</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">duration</span> <span class="o">&lt;</span> <span class="n">MINIMUM_TRACK_DURATION</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;Short track &#39;</span><span class="si">{}</span><span class="s2">&#39; with duration </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">get_track_title</span><span class="p">(</span><span class="n">pos_info</span><span class="p">),</span> <span class="n">duration</span><span class="p">))</span>
+                <span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_end_of_track</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">,</span> <span class="n">duration</span> <span class="o">+</span> <span class="mi">10</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">res</span><span class="p">:</span>
+                    <span class="k">continue</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">break</span>
+            <span class="c1"># Randomize the duration of initial play of the track</span>
+            <span class="n">timeout</span> <span class="o">=</span> <span class="n">MINIMUM_INITIAL_PLAYBACK</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">randomize</span><span class="p">:</span>
+                <span class="n">timeout</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span> <span class="o">+</span> <span class="n">timeout</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> setting initial play duration </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="p">))</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_avt_state</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">STOPPED_STATE</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span>
+                <span class="n">res</span><span class="p">,</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> unexpectedly failed playback [</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">]&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">))</span>
+            <span class="n">expected_track</span> <span class="o">=</span> <span class="n">curr_track</span> <span class="o">==</span> <span class="n">track_pos</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+                <span class="n">curr_track</span><span class="p">,</span>
+                <span class="n">track_pos</span><span class="p">,</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> expected track being played&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> playing track=</span><span class="si">{}</span><span class="s2"> duration=</span><span class="si">{}</span><span class="s2"> title=&#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span>
+                    <span class="n">track_pos</span><span class="p">,</span>
+                    <span class="n">duration</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">get_track_title</span><span class="p">(</span><span class="n">pos_info</span><span class="p">)))</span>
+            <span class="c1"># If we&#39;re not playing the expected track, fail the test</span>
+            <span class="c1"># and re-assign running track variable to current track to</span>
+            <span class="c1"># continue test</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">expected_track</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">curr_track</span> <span class="o">==</span> <span class="n">num_tracks</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                        <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> played last track </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+                        <span class="mi">1</span><span class="p">,</span>
+                        <span class="n">track_pos</span><span class="p">,</span>
+                        <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> expected track position&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                    <span class="k">break</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> unexpected switch to </span><span class="si">{}</span><span class="s2"> track from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">zp</span><span class="p">,</span> <span class="n">track_pos</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">))</span>
+                <span class="n">curr_track</span> <span class="o">=</span> <span class="n">track_pos</span>
+                <span class="c1"># Catch black listing service</span>
+                <span class="k">if</span> <span class="n">curr_track</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> unexpected track position 1&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                    <span class="k">break</span>
+            <span class="c1"># seekable tracks when rate allows</span>
+            <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">allow_seek</span><span class="p">(</span><span class="n">curr_track</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span> <span class="o">&lt;</span> <span class="n">duration</span><span class="p">):</span>
+                <span class="c1"># randomize the seek position before track end if configured</span>
+                <span class="n">rand_seek_pos</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">randomize</span><span class="p">:</span>
+                    <span class="n">rand_seek_pos</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span> <span class="o">+</span> <span class="n">rand_seek_pos</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> invoking seek </span><span class="si">{}</span><span class="s2"> seconds BTE </span><span class="si">{}</span><span class="s2"> duration </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">zp</span><span class="p">,</span> <span class="n">rand_seek_pos</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">,</span> <span class="n">duration</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">seek_to_position_before_track_end</span><span class="p">(</span><span class="n">rand_seek_pos</span><span class="p">)</span>
+            <span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_end_of_track</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">curr_track</span><span class="p">,</span> <span class="n">restricted</span><span class="p">,</span> <span class="n">num_tracks</span><span class="p">,</span> <span class="n">duration</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">res</span><span class="p">:</span>
+                <span class="k">break</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.spotify_playlists"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.spotify_playlists">[docs]</a>    <span class="k">def</span> <span class="nf">spotify_playlists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Play the assigned containers on the zone player.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Stagger the startup to space out plays/seeks</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">staggered_start</span><span class="p">:</span>
+            <span class="n">wait_time</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span>
+                <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">seek_pos</span> <span class="o">+</span> <span class="n">MINIMUM_INITIAL_PLAYBACK</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> delaying start for </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">))</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">wait_time</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setUpTest</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has </span><span class="si">{}</span><span class="s2"> containers to play&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span><span class="p">[</span><span class="n">zp</span><span class="p">])))</span>
+        <span class="n">expiration</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_duration</span>
+        <span class="k">for</span> <span class="n">container</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp_to_container</span><span class="p">[</span><span class="n">zp</span><span class="p">]:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">play_container</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">container</span><span class="p">,</span> <span class="n">expiration</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_tearDownTest</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SpotifyConcurrentPlay.test_spotify_playlists"><a class="viewcode-back" href="../../../../../upnp.functional.musicservices.spotify.html#upnp.functional.musicservices.spotify.spotify_concurrent_play.SpotifyConcurrentPlay.test_spotify_playlists">[docs]</a>    <span class="k">def</span> <span class="nf">test_spotify_playlists</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start playback in parallel on available players.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Testing on </span><span class="si">{}</span><span class="s2"> zone players&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unique_playback</span><span class="p">)))</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">spotify_playlists</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">unique_playback</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">SpotifyConcurrentPlay</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">SimpleUpgradeTestFixture</span><span class="p">(),</span> <span class="n">SpotifyConcurrentPlay</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

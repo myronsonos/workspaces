@@ -1,0 +1,770 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.integration.spotify.conftest &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../../" src="../../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.integration.spotify.conftest</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Test Fixture definitions and helper functions for Spotify Direct Control Test</span>
+<span class="sd">Suite.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">namedtuple</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">pytest_automation.player.integration.common_spotify</span> <span class="k">as</span> <span class="nn">spot_common</span>
+<span class="kn">import</span> <span class="nn">pytest_automation.player.common</span> <span class="k">as</span> <span class="nn">player_common</span>
+<span class="kn">import</span> <span class="nn">sonos.subnet</span>
+
+<span class="kn">from</span> <span class="nn">sonos.client.muse_platform_api</span> <span class="k">import</span> <span class="n">device_manager</span> <span class="k">as</span> <span class="n">DM</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.cloud_queue_control</span> <span class="k">import</span> <span class="n">CloudQueueControl</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="n">PlayerRegistration</span><span class="p">,</span> <span class="n">OAuth</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">UPNP_ERROR_800_NO_SETTING</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+
+
+<span class="n">EVENT_UPLOAD</span> <span class="o">=</span> <span class="s2">&quot;Upload Events&quot;</span>
+<span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span> <span class="o">=</span> <span class="s2">&quot;O_EVENTMETRICS_URL&quot;</span>
+<span class="c1"># MITC ENVIRONMENTS</span>
+<span class="n">TESTING_ENVIRONMENTS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;int&quot;</span><span class="p">,</span> <span class="s2">&quot;stage&quot;</span><span class="p">,</span> <span class="s2">&quot;test&quot;</span><span class="p">,</span> <span class="s2">&quot;prod&quot;</span><span class="p">,</span> <span class="s2">&quot;perf&quot;</span><span class="p">]</span>
+<span class="c1">#-----------------------------------HELPER FUNCTIONS---------------------------#</span>
+<span class="c1"># represents a zone player connected to user&#39;s current spotify playback</span>
+<span class="c1"># spot is a SpotifyClient() instance and zp is a discovered zone player</span>
+<span class="n">SCASession</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;SCASession&#39;</span><span class="p">,</span> <span class="s1">&#39;spot zp hh_zps device_id&#39;</span><span class="p">)</span>
+<span class="n">SCAPlaylist</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;SCAPlaylist&#39;</span><span class="p">,</span> <span class="s1">&#39;longest playlist&#39;</span><span class="p">)</span>
+
+<span class="n">SPOTIFY_DC_DIAG_LEVELS</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">(</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;spot&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;vli&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;ogg&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;chsrc&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)]</span>
+
+
+<div class="viewcode-block" id="diag_levels"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.diag_levels">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">diag_levels</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Local override of &quot;diag_level_settings&quot;, which adds default muse</span>
+<span class="sd">    diag levels to increase, plus any levels specified by the</span>
+<span class="sd">    testcase/class/module.</span>
+
+<span class="sd">    :returns: List of diag levels to modify.</span>
+<span class="sd">    :rtype: :obj:`list`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">keywords</span><span class="p">[</span><span class="s2">&quot;usefixtures&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">combined</span><span class="o">.</span><span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="s2">&quot;diag_levels&quot;</span><span class="p">,</span> <span class="p">[])</span> <span class="o">+</span> <span class="n">SPOTIFY_DC_DIAG_LEVELS</span></div>
+
+
+<div class="viewcode-block" id="pytest_addoption"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.pytest_addoption">[docs]</a><span class="k">def</span> <span class="nf">pytest_addoption</span><span class="p">(</span><span class="n">parser</span><span class="p">):</span>
+    <span class="kn">import</span> <span class="nn">argparse</span>
+
+    <span class="k">class</span> <span class="nc">SpotifyConfigAction</span><span class="p">(</span><span class="n">argparse</span><span class="o">.</span><span class="n">Action</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">option_strings</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">nargs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;nargs not allowed&quot;</span><span class="p">)</span>
+            <span class="nb">super</span><span class="p">(</span><span class="n">SpotifyConfigAction</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">option_strings</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span>
+                                                      <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parser</span><span class="p">,</span> <span class="n">namespace</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">option_string</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+            <span class="c1"># read JSON file and set spotify_config attribute</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">json_data</span><span class="p">:</span>
+                <span class="n">d</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">json_data</span><span class="p">)</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="n">namespace</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dest</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span>
+
+    <span class="n">spot_default_config</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s1">&#39;access_token&#39;</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;SPOT_ACCESS_TOKEN&#39;</span><span class="p">),</span>
+            <span class="s1">&#39;refresh_token&#39;</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;SPOT_REFRESH_TOKEN&#39;</span><span class="p">),</span>
+            <span class="s1">&#39;client_id&#39;</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;SPOT_CLIENT_ID&#39;</span><span class="p">),</span>
+            <span class="s1">&#39;client_secret&#39;</span><span class="p">:</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;SPOT_CLIENT_SECRET&#39;</span><span class="p">)</span>
+        <span class="p">}</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--spotify_config&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="n">SpotifyConfigAction</span><span class="p">,</span>
+                     <span class="n">default</span><span class="o">=</span><span class="n">spot_default_config</span><span class="p">,</span>
+                     <span class="n">help</span><span class="o">=</span><span class="s2">&quot;file with spotify client_id, client_secret, tokens&quot;</span><span class="p">)</span>
+
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--time_delay&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                     <span class="n">help</span><span class="o">=</span><span class="s2">&quot;time to delay for zone player state variables&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--session_sleep&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+                     <span class="n">help</span><span class="o">=</span><span class="s2">&quot;sleep time after start/stop direct control session&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--mitc_env&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;prod&quot;</span><span class="p">,</span>
+                     <span class="n">choices</span><span class="o">=</span><span class="n">TESTING_ENVIRONMENTS</span><span class="p">,</span>
+                     <span class="n">help</span><span class="o">=</span><span class="s2">&quot;change MITC environment&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--spotify_sn&quot;</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                     <span class="n">help</span><span class="o">=</span><span class="s2">&quot;spotify SerialNum as defined in accounts.xml&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="zp_state_timeout"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.zp_state_timeout">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">zp_state_timeout</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns the number of seconds to wait for Zone player state variables to</span>
+<span class="sd">    update</span>
+
+<span class="sd">    :param request: pytest request obj</span>
+<span class="sd">    :return: int: number of seconds</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;--time_delay&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="spotify_sn_cmdline"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.spotify_sn_cmdline">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">spotify_sn_cmdline</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;--spotify_sn&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="get_spotify_sn"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.get_spotify_sn">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_spotify_sn</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">dut_manager</span><span class="p">,</span> <span class="n">spotify_sn_cmdline</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return the spotify account if there&#39;s only 1 or a specific account if there&#39;s multiple on the hh</span>
+<span class="sd">    :param request:</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :param spotify_sn_cmdline:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Skip the test case if we&#39;re running on locked builds since it won&#39;t have access to the testpoint later on</span>
+    <span class="n">player_common</span><span class="o">.</span><span class="n">skip_locked_build</span><span class="p">(</span><span class="s2">&quot;testpoints&quot;</span><span class="p">)</span>
+
+    <span class="n">spot_account</span> <span class="o">=</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">all_playback_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">get_service_account</span><span class="p">(</span>
+        <span class="n">spot_common</span><span class="o">.</span><span class="n">SPOTIFY_SERVICE_ID</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">spot_account</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">spot_account</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># If there&#39;s not spotify accounts on the hh, fail</span>
+    <span class="k">elif</span> <span class="nb">len</span><span class="p">(</span><span class="n">spot_account</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="c1"># If there&#39;s more then one Spotify accounts,</span>
+        <span class="c1"># try to figure out which one to use in the following order:</span>
+        <span class="c1">#</span>
+        <span class="c1"># 1. Python module level delcaration: &quot;SPOTIFY_SN=1&quot;</span>
+        <span class="c1"># 2. Linux shell environmental variable: &quot;export SPOTIFY_SN=1&quot;</span>
+        <span class="c1"># 3. Pytest command line option: &quot;pytest --spotify_sn 1&quot;</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="p">,</span> <span class="s2">&quot;SPOTIFY_SN&quot;</span><span class="p">):</span>
+            <span class="n">spotify_sn</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">SPOTIFY_SN</span>
+        <span class="k">elif</span> <span class="s2">&quot;SPOTIFY_SN&quot;</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">:</span>
+            <span class="n">spotify_sn</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;SPOTIFY_SN&quot;</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="n">spotify_sn_cmdline</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">spotify_sn</span> <span class="o">=</span> <span class="n">spotify_sn_cmdline</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;More than one Spotify SerialNum exist on this hh; &quot;</span>
+                        <span class="s2">&quot;please set SPOTIFY_SN or use --spotify_sn arg&quot;</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">acct</span> <span class="ow">in</span> <span class="n">spot_account</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">acct</span><span class="o">.</span><span class="n">serial_number</span> <span class="o">==</span> <span class="n">spotify_sn</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">acct</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># If the specified sn is not found, fail</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;SPOTIFY_SN/--spotify_sn value does not match any Spotify SerialNum in accounts.xml&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;No Spotify SMAPI account exists on this hh&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="login_esdk_via_testpoint"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.login_esdk_via_testpoint">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">login_esdk_via_testpoint</span><span class="p">(</span><span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">dut_manager</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Trigger the testpoint on all playback devices in the household</span>
+<span class="sd">    :param get_spotify_sn:</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">all_playback_devices</span><span class="p">:</span>
+        <span class="c1"># Just login, don&#39;t start DC session yet</span>
+        <span class="n">spot_common</span><span class="o">.</span><span class="n">login_and_play_spotify_dc_session</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">autostart_dc</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="session_delay"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.session_delay">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">session_delay</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns the number of seconds to sleep in between switching direct control</span>
+<span class="sd">    session</span>
+
+<span class="sd">    :param request: pytest request obj</span>
+<span class="sd">    :return: int: number of seconds</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;--session_sleep&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="spotify_client"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.spotify_client">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">spotify_client</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Create a SpotifyClient instance that provides access to Spotify&#39;s Web API.</span>
+
+<span class="sd">    :param dict cli_options: A dict with command line arguments.</span>
+<span class="sd">    :return: :class:`~path.SpotifyClient`</span>
+<span class="sd">    :rtype: :obj:`SpotifyClient`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span> <span class="nn">spotify_api</span> <span class="k">import</span> <span class="n">SpotifyClient</span>
+
+    <span class="n">config</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;--spotify_config&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="p">,</span> <span class="s2">&quot;SPOT_REFRESH_TOKEN&quot;</span><span class="p">):</span>
+        <span class="n">config</span><span class="p">[</span><span class="s2">&quot;refresh_token&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">SPOT_REFRESH_TOKEN</span>
+    <span class="c1"># Example module override: SPOT_REFRESH_TOKEN = os.getenv(&#39;SPOT_FREE_REFRESH_TOKEN&#39;)</span>
+
+    <span class="n">spot</span> <span class="o">=</span> <span class="n">SpotifyClient</span><span class="p">(</span><span class="n">access_token</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;access_token&#39;</span><span class="p">],</span>
+                         <span class="n">refresh_token</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;refresh_token&#39;</span><span class="p">],</span>
+                         <span class="n">client_id</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;client_id&#39;</span><span class="p">],</span>
+                         <span class="n">client_secret</span><span class="o">=</span><span class="n">config</span><span class="p">[</span><span class="s1">&#39;client_secret&#39;</span><span class="p">])</span>
+
+
+    <span class="k">return</span> <span class="n">spot</span></div>
+
+
+<div class="viewcode-block" id="get_spotify_user"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.get_spotify_user">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_spotify_user</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return the current Spotify user account detail as a dict (JSON).</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: Dict of user account information.</span>
+<span class="sd">    :rtype: :obj: `dict`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">me</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="all_spotify_devices"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.all_spotify_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">all_spotify_devices</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    All available devices for playback through Spotify&#39;s device picker.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: All devices picked up by Spotify available for playback.</span>
+<span class="sd">    :rtype: :obj:`list of dicts`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">get_devices</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="all_active_spotify_devices"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.all_active_spotify_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">all_active_spotify_devices</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    All active available devices for playback through Spotify&#39;s device picker.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: Only active devices picked up by Spotify available for playback.</span>
+<span class="sd">    :rtype: :obj:`list of dicts`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">get_active_devices</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="all_spotify_speaker_type_devices"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.all_spotify_speaker_type_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">all_spotify_speaker_type_devices</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return a list of available devices that are Speakers.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: All spotify available devices that are Speakers.</span>
+<span class="sd">    :rtype: :obj: `list of dicts`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">get_spotify_devices_by_type</span><span class="p">(</span><span class="s1">&#39;Speaker&#39;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="all_spotify_computer_type_devices"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.all_spotify_computer_type_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">all_spotify_computer_type_devices</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return a list of available devices that are Computers.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: All spotify available devices that are Computers.</span>
+<span class="sd">    :rtype: :obj: `list of dicts`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">get_spotify_devices_by_type</span><span class="p">(</span><span class="s1">&#39;Computer&#39;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="all_spotify_smartphone_type_devices"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.all_spotify_smartphone_type_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">all_spotify_smartphone_type_devices</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return a list of available devices that are Smartphones.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :return: All spotify available devices that are Smartphones.</span>
+<span class="sd">    :rtype: :obj: `list of dicts`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">get_spotify_devices_by_type</span><span class="p">(</span><span class="s1">&#39;Smartphone&#39;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="get_module_dut"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.get_module_dut">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_module_dut</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">dut_manager</span><span class="p">,</span> <span class="n">all_playback_devices</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Module-scoped device selection fixture.</span>
+<span class="sd">    If a module attribute &quot;MODULE_DEVICE_FILTER&quot; is found in the requesting test file, it will use that for a</span>
+<span class="sd">    filter. Otherwise, it will just randomly select a device.</span>
+<span class="sd">    :param request:</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_playback_devices</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sonos</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">Devices</span><span class="p">()</span><span class="o">.</span><span class="n">get_devices_by_hhid</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">primary_hhid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">hhid</span>
+            <span class="k">break</span>
+
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="p">,</span> <span class="s2">&quot;MODULE_DEVICE_FILTER&quot;</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">get_primary_dut</span><span class="p">(</span><span class="n">device_filter</span><span class="o">=</span><span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">MODULE_DEVICE_FILTER</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">get_primary_dut</span><span class="p">(</span><span class="n">device_filter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">hhid</span> <span class="o">==</span> <span class="n">primary_hhid</span><span class="p">,</span>
+                                           <span class="n">fail_on_none</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="spotify_zp_standalone"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.spotify_zp_standalone">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">spotify_zp_standalone</span><span class="p">(</span><span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">ungroup_unbond_cleanup</span><span class="p">,</span> <span class="n">get_module_dut</span><span class="p">,</span>
+                          <span class="n">login_esdk_via_testpoint</span><span class="p">,</span> <span class="n">spotify_client</span><span class="p">,</span> <span class="n">all_spotify_speaker_type_devices</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns one zone player with no other group members in sync with spotify</span>
+<span class="sd">    connect adapter.</span>
+<span class="sd">    :param get_spotify_sn:</span>
+<span class="sd">    :param ungroup_unbond_cleanup:</span>
+<span class="sd">    :param get_module_dut:</span>
+<span class="sd">    :param login_esdk_via_testpoint:</span>
+<span class="sd">    :param spotify_client:</span>
+<span class="sd">    :param all_spotify_speaker_type_devices:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># The esdk login fixture should make players show up in the /devices output</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">all_spotify_speaker_type_devices</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;Spotify available device list is empty.&#39;</span>
+
+    <span class="c1"># TO-DO: Add condition to switch the environment on the players if necessary</span>
+    <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="n">all_spotify_speaker_type_devices</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">get_module_dut</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">()</span> <span class="o">==</span> <span class="n">device</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]:</span>
+            <span class="c1"># Force start the DC session on the zp</span>
+            <span class="n">spot_common</span><span class="o">.</span><span class="n">login_and_play_spotify_dc_session</span><span class="p">(</span><span class="n">get_module_dut</span><span class="p">,</span> <span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">autostart_dc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="c1"># Reset the client</span>
+            <span class="n">spotify_client</span><span class="o">.</span><span class="n">set_volume</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+            <span class="n">spotify_client</span><span class="o">.</span><span class="n">pause</span><span class="p">()</span>
+            <span class="n">spotify_client</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="s2">&quot;false&quot;</span><span class="p">)</span>
+            <span class="n">spotify_client</span><span class="o">.</span><span class="n">repeat_mode</span><span class="p">(</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
+
+            <span class="k">def</span> <span class="nf">format_playback</span><span class="p">(</span><span class="n">current_playback_info</span><span class="p">):</span>
+                <span class="k">return</span> <span class="s2">&quot;Failed to reset spotify client state.</span><span class="se">\n\t</span><span class="s2">&quot;</span> \
+                       <span class="s2">&quot;volume_percent: Expected  &lt;10&gt;,    Actual &lt;</span><span class="si">{}</span><span class="s2">&gt;</span><span class="se">\n\t</span><span class="s2">&quot;</span> \
+                       <span class="s2">&quot;is_playing:     Expected  &lt;False&gt;, Actual &lt;</span><span class="si">{}</span><span class="s2">&gt;</span><span class="se">\n\t</span><span class="s2">&quot;</span> \
+                       <span class="s2">&quot;shuffle_state:  Expected  &lt;False&gt;, Actual &lt;</span><span class="si">{}</span><span class="s2">&gt;</span><span class="se">\n\t</span><span class="s2">&quot;</span> \
+                       <span class="s2">&quot;repeat_state:   Expected  &lt;off&gt;,   Actual &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span>\
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">current_playback_info</span><span class="p">[</span><span class="s1">&#39;device&#39;</span><span class="p">][</span><span class="s1">&#39;volume_percent&#39;</span><span class="p">],</span>
+                               <span class="n">current_playback_info</span><span class="p">[</span><span class="s1">&#39;is_playing&#39;</span><span class="p">],</span>
+                               <span class="n">current_playback_info</span><span class="p">[</span><span class="s1">&#39;shuffle_state&#39;</span><span class="p">],</span>
+                               <span class="n">current_playback_info</span><span class="p">[</span><span class="s1">&#39;repeat_state&#39;</span><span class="p">])</span>
+
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span>
+                    <span class="nb">abs</span><span class="p">(</span><span class="n">spotify_client</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">()[</span><span class="s1">&#39;device&#39;</span><span class="p">][</span><span class="s1">&#39;volume_percent&#39;</span><span class="p">]</span><span class="o">-</span><span class="mi">10</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">2</span> <span class="ow">and</span>
+                    <span class="ow">not</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">()[</span><span class="s1">&#39;is_playing&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                    <span class="ow">not</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">()[</span><span class="s1">&#39;shuffle_state&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                    <span class="n">spotify_client</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">()[</span><span class="s1">&#39;repeat_state&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;off&quot;</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="n">format_playback</span><span class="p">(</span><span class="n">spotify_client</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">()))</span>
+
+            <span class="c1"># Verify the active speaker</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">is_spotify_dc_active_on_device</span><span class="p">(</span><span class="n">get_module_dut</span><span class="p">),</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for &lt;</span><span class="si">{}</span><span class="s2">&gt; to become the active spotify DC target&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">get_module_dut</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+            <span class="k">yield</span> <span class="n">SCASession</span><span class="p">(</span><span class="n">spot</span><span class="o">=</span><span class="n">spotify_client</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="n">get_module_dut</span><span class="p">,</span>
+                             <span class="n">hh_zps</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="n">device</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">])</span>
+
+            <span class="n">spotify_client</span><span class="o">.</span><span class="n">pause</span><span class="p">()</span>
+            <span class="k">return</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span>\
+            <span class="s1">&#39;Could not find &lt;</span><span class="si">{}</span><span class="s1">&gt; in SpotifyAPI /devices output&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">get_module_dut</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="spotify_two_zp_household"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.spotify_two_zp_household">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">spotify_two_zp_household</span><span class="p">(</span><span class="n">dut_manager</span><span class="p">,</span> <span class="n">get_module_dut</span><span class="p">,</span> <span class="n">spotify_zp_standalone</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a namedtuple that represents a SCA session with two zone players</span>
+<span class="sd">    in the same household. One player will be in Spotify Connect Adapter session</span>
+<span class="sd">    while the other will not be. The other player is there to be grouped later.</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :param get_module_dut:</span>
+<span class="sd">    :param spotify_zp_standalone:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">another_hh_zp</span> <span class="o">=</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">get_another_device</span><span class="p">(</span>
+        <span class="n">device_filter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span> <span class="o">==</span> <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">SCASession</span><span class="p">(</span><span class="n">spot</span><span class="o">=</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">spot</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="n">get_module_dut</span><span class="p">,</span>
+                      <span class="n">hh_zps</span><span class="o">=</span><span class="p">[</span><span class="n">get_module_dut</span><span class="p">,</span> <span class="n">another_hh_zp</span><span class="p">],</span>
+                      <span class="n">device_id</span><span class="o">=</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">device_id</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ungroup_unbond_cleanup"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.ungroup_unbond_cleanup">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">ungroup_unbond_cleanup</span><span class="p">(</span><span class="n">dut_manager</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Group/bonding clean up that should run at session startup</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">all_playback_devices</span><span class="p">:</span>
+        <span class="n">dut_manager</span><span class="o">.</span><span class="n">zp_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="get_20_track_playlist"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.get_20_track_playlist">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_20_track_playlist</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">,</span> <span class="n">get_spotify_user</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Creates a spotify playlist with 20 featured tracks.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :param dict get_spotify_user: dict with spotify user information.</span>
+<span class="sd">    :return: SCAPlaylist with playlist as a dict and longest track</span>
+<span class="sd">    :rtype: :obj: `namedtuple SCAPlaylist`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s1">&#39;SCA_playlist_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="o">.</span><span class="n">today</span><span class="p">(),</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">())</span>
+    <span class="n">user_id</span> <span class="o">=</span> <span class="n">get_spotify_user</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]</span>
+    <span class="c1"># Get a list of newly released albums</span>
+    <span class="c1"># Use artist&#39;s IDs to seed recommendations to return 20 tracks</span>
+    <span class="n">new_releases</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">new_releases</span><span class="p">(</span><span class="n">country</span><span class="o">=</span><span class="s1">&#39;us&#39;</span><span class="p">,</span> <span class="n">limit</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">artist_ids</span> <span class="o">=</span> <span class="p">[</span><span class="n">album</span><span class="p">[</span><span class="s1">&#39;artists&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s1">&#39;id&#39;</span><span class="p">]</span>
+                    <span class="k">for</span> <span class="n">album</span> <span class="ow">in</span> <span class="n">new_releases</span><span class="p">[</span><span class="s1">&#39;albums&#39;</span><span class="p">][</span><span class="s1">&#39;items&#39;</span><span class="p">]]</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">artist_ids</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> \
+        <span class="s1">&#39;Artist ID list is empty. Needed for recommendations.&#39;</span>
+    <span class="c1"># get track recommendations</span>
+    <span class="n">rec</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">recommendations</span><span class="p">(</span><span class="n">seed_artists</span><span class="o">=</span><span class="n">artist_ids</span><span class="p">,</span> <span class="n">limit</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">rec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="s1">&#39;tracks&#39;</span> <span class="ow">in</span> <span class="n">rec</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> \
+        <span class="s1">&#39;No tracks returned from Spotify recommendations.&#39;</span>
+
+    <span class="n">playlist</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_create</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span><span class="n">name</span><span class="p">,</span><span class="n">public</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">uris</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span><span class="p">[</span><span class="s1">&#39;uri&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">rec</span><span class="p">[</span><span class="s1">&#39;tracks&#39;</span><span class="p">]]</span>
+    <span class="n">total_tracks</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">rec</span><span class="p">[</span><span class="s1">&#39;tracks&#39;</span><span class="p">])</span>
+    <span class="n">longest_track</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([</span><span class="n">t</span><span class="p">[</span><span class="s1">&#39;duration_ms&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">rec</span><span class="p">[</span><span class="s1">&#39;tracks&#39;</span><span class="p">]])</span>
+    <span class="c1"># Create new playlist and add tracks</span>
+    <span class="n">add_tracks</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_add_tracks</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span>
+                                                    <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">],</span> <span class="n">uris</span><span class="p">)</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Add tracks and update playlist</span>
+    <span class="n">updated_playlist</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_tracks</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span>
+            <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">],</span> <span class="n">market</span><span class="o">=</span><span class="s1">&#39;us&#39;</span><span class="p">)</span>
+    <span class="c1"># Remove tracks that are not playable</span>
+    <span class="n">updated_playlist</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">updated_playlist</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]</span>
+                            <span class="k">if</span> <span class="n">t</span><span class="p">[</span><span class="s1">&#39;track&#39;</span><span class="p">][</span><span class="s1">&#39;is_playable&#39;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">]</span>
+    <span class="n">playlist</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">updated_playlist</span><span class="p">)</span>
+    <span class="n">playlist</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;tracks&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>  <span class="c1"># tracks is empty when playlist is created</span>
+    <span class="n">p</span> <span class="o">=</span> <span class="n">SCAPlaylist</span><span class="p">(</span><span class="n">longest</span><span class="o">=</span><span class="n">longest_track</span><span class="p">,</span> <span class="n">playlist</span><span class="o">=</span><span class="n">playlist</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">p</span>
+    <span class="c1"># delete playlist</span>
+    <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_unfollow</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span> <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">])</span></div>
+
+
+<div class="viewcode-block" id="get_playlist"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.get_playlist">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">get_playlist</span><span class="p">(</span><span class="n">spotify_client</span><span class="p">,</span> <span class="n">get_spotify_user</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Creates a spotify playlist.</span>
+
+<span class="sd">    :param spotify_api.SpotifyClient spotify_client: Spotify Web API object.</span>
+<span class="sd">    :param dict get_spotify_user: dict with spotify user information.</span>
+<span class="sd">    :return: SCAPlaylist with playlist as a dict and longest track</span>
+<span class="sd">    :rtype: :obj: `namedtuple SCAPlaylist`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">thriller_uri</span> <span class="o">=</span> <span class="s1">&#39;spotify:album:2ANVost0y2y52ema1E9xAZ&#39;</span>
+    <span class="n">beatles_uri</span> <span class="o">=</span> <span class="s1">&#39;spotify:album:0ETFjACtuP2ADo6LFhL6HN&#39;</span>
+
+    <span class="n">album</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">album_tracks</span><span class="p">(</span><span class="n">thriller_uri</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">album</span><span class="p">):</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span><span class="p">[</span><span class="s1">&#39;uri&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">album</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]]</span>
+        <span class="n">longest</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([</span><span class="n">j</span><span class="p">[</span><span class="s1">&#39;duration_ms&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="n">album</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]])</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">album</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">album_tracks</span><span class="p">(</span><span class="n">beatles_uri</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">album</span><span class="p">):</span>
+            <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span><span class="p">[</span><span class="s1">&#39;uri&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">album</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]]</span>
+            <span class="n">longest</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([</span><span class="n">j</span><span class="p">[</span><span class="s1">&#39;duration_ms&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="n">album</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="kc">False</span><span class="p">,</span> <span class="s1">&#39;Album URIs: [</span><span class="si">{}</span><span class="s1">, </span><span class="si">{}</span><span class="s1">] did not return album tracks&#39;</span><span class="o">.</span>\
+                                            <span class="nb">format</span><span class="p">(</span><span class="n">thriller_uri</span><span class="p">,</span> <span class="n">beatles_uri</span><span class="p">)</span>
+    <span class="c1"># create a playlist</span>
+    <span class="n">user_id</span> <span class="o">=</span> <span class="n">get_spotify_user</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s1">&#39;SCA_playlist_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">date</span><span class="o">.</span><span class="n">today</span><span class="p">(),</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">())</span>
+    <span class="n">playlist</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_create</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span><span class="n">name</span><span class="p">,</span> <span class="n">public</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">add_tracks</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_add_tracks</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span>
+                                                    <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">],</span> <span class="n">track_uris</span><span class="p">)</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+    <span class="n">updated_playlist</span> <span class="o">=</span> <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_tracks</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span>
+                                                    <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">],</span> <span class="n">market</span><span class="o">=</span><span class="s1">&#39;us&#39;</span><span class="p">)</span>
+    <span class="c1"># Remove tracks that are not playable</span>
+    <span class="n">updated_playlist</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">t</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">updated_playlist</span><span class="p">[</span><span class="s1">&#39;items&#39;</span><span class="p">]</span>
+                            <span class="k">if</span> <span class="n">t</span><span class="p">[</span><span class="s1">&#39;track&#39;</span><span class="p">][</span><span class="s1">&#39;is_playable&#39;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">]</span>
+    <span class="n">playlist</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">updated_playlist</span><span class="p">)</span>
+    <span class="n">playlist</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;tracks&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>  <span class="c1"># tracks is empty when playlist is created</span>
+    <span class="k">yield</span> <span class="n">SCAPlaylist</span><span class="p">(</span><span class="n">longest</span><span class="o">=</span><span class="n">longest</span><span class="p">,</span> <span class="n">playlist</span><span class="o">=</span><span class="n">playlist</span><span class="p">)</span>
+    <span class="c1"># delete playlist</span>
+    <span class="n">spotify_client</span><span class="o">.</span><span class="n">user_playlist_unfollow</span><span class="p">(</span><span class="n">user_id</span><span class="p">,</span> <span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">])</span></div>
+
+
+<div class="viewcode-block" id="sca_playback"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.sca_playback">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;function&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">sca_playback</span><span class="p">(</span><span class="n">spotify_zp_standalone</span><span class="p">,</span> <span class="n">get_playlist</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Initializes spotifyc direct control playback with a specific playlist.</span>
+
+<span class="sd">    :param spotify_zp_standalone: namedtuple with spotify client and zone player</span>
+<span class="sd">    :param dict: dict of a spotify created playlist</span>
+<span class="sd">    :param disable_speaker_audio:</span>
+<span class="sd">    :return: namedtuple that contains a zone player, playlist and spotify client</span>
+<span class="sd">    object.</span>
+<span class="sd">    :rtype: :obj: `function`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span>
+    <span class="n">spot</span> <span class="o">=</span> <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">spot</span>
+    <span class="n">SCA</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;SCA&#39;</span><span class="p">,</span> <span class="s1">&#39;spot zp device_id playlist&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">context_uri</span><span class="o">=</span><span class="n">get_playlist</span><span class="o">.</span><span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;uri&#39;</span><span class="p">],</span>
+                       <span class="n">offset</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;position&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span> <span class="n">position_ms</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">throw_error</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+
+        <span class="c1"># Play the spotify DC session</span>
+        <span class="n">played</span> <span class="o">=</span> <span class="n">spot</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">device_id</span><span class="p">,</span> <span class="n">context_uri</span><span class="o">=</span><span class="n">context_uri</span><span class="p">,</span>
+                           <span class="n">offset</span><span class="o">=</span><span class="n">offset</span><span class="p">,</span> <span class="n">position_ms</span><span class="o">=</span><span class="n">position_ms</span><span class="p">,</span> <span class="n">throw_error</span><span class="o">=</span><span class="n">throw_error</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">played</span><span class="p">,</span> <span class="s1">&#39;spotify playback did not start in test fixture&#39;</span>
+
+        <span class="c1"># Wait until our ZP starts playing</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for &lt;</span><span class="si">{}</span><span class="s2">&gt; to be playing&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+        <span class="c1"># Wait until the Spotify side reports playhead is in the expected position</span>
+        <span class="c1"># This check is currently disabled due to issues with the Spotify backend keeping in sync</span>
+        <span class="c1"># with our ZP state: https://jira.sonos.com/browse/SPOTIFY-180</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">spot</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">(</span><span class="n">market</span><span class="o">=</span><span class="s1">&#39;us&#39;</span><span class="p">)[</span><span class="s1">&#39;is_playing&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                                 <span class="nb">abs</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">spot</span><span class="o">.</span><span class="n">current_playback_info</span><span class="p">(</span><span class="n">market</span><span class="o">=</span><span class="s1">&#39;us&#39;</span><span class="p">)[</span><span class="s1">&#39;progress_ms&#39;</span><span class="p">])</span><span class="o">-</span><span class="n">position_ms</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">3000</span><span class="p">),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">start_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for Spotify client to start playing at </span><span class="si">{}</span><span class="s2"> ms&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">position_ms</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">SCA</span><span class="p">(</span><span class="n">spot</span><span class="o">=</span><span class="n">spot</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">playlist</span><span class="o">=</span><span class="n">get_playlist</span><span class="o">.</span><span class="n">playlist</span><span class="p">,</span>
+                   <span class="n">device_id</span><span class="o">=</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">device_id</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">start_playback</span>
+    <span class="n">spot</span><span class="o">.</span><span class="n">pause</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="sca_playback_two_zp_household"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.sca_playback_two_zp_household">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;function&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">sca_playback_two_zp_household</span><span class="p">(</span><span class="n">spotify_two_zp_household</span><span class="p">,</span> <span class="n">get_playlist</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Initializes spotify direct control playback with a specific playlist.</span>
+
+<span class="sd">    :param spotify_two_zp_household: namedtuple with spotify client and zone</span>
+<span class="sd">    player</span>
+<span class="sd">    :param dict: dict of a spotify created playlist</span>
+<span class="sd">    :param disable_speaker_audio:</span>
+<span class="sd">    :return: namedtuple that contains a zone player, playlist and spotify client</span>
+<span class="sd">    object.</span>
+<span class="sd">    :rtype: :obj: `function`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">zp</span>
+    <span class="n">spot</span> <span class="o">=</span> <span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">spot</span>
+    <span class="n">SCA</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;SCA&#39;</span><span class="p">,</span> <span class="s1">&#39;spot zp hh_zps device_id playlist&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">context_uri</span><span class="o">=</span><span class="n">get_playlist</span><span class="o">.</span><span class="n">playlist</span><span class="p">[</span><span class="s1">&#39;uri&#39;</span><span class="p">],</span>
+                       <span class="n">offset</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;position&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span> <span class="n">throw_error</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="n">played</span> <span class="o">=</span> <span class="n">spot</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">device_id</span><span class="p">,</span> <span class="n">context_uri</span><span class="o">=</span><span class="n">context_uri</span><span class="p">,</span>
+                           <span class="n">offset</span><span class="o">=</span><span class="n">offset</span><span class="p">,</span> <span class="n">throw_error</span><span class="o">=</span><span class="n">throw_error</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">played</span><span class="p">,</span> <span class="s1">&#39;spotify playback did not start in test fixture&#39;</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for &lt;</span><span class="si">{}</span><span class="s2">&gt; to be playing&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="n">SCA</span><span class="p">(</span><span class="n">spot</span><span class="o">=</span><span class="n">spot</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">playlist</span><span class="o">=</span><span class="n">get_playlist</span><span class="o">.</span><span class="n">playlist</span><span class="p">,</span>
+                   <span class="n">hh_zps</span><span class="o">=</span><span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">hh_zps</span><span class="p">,</span>
+                   <span class="n">device_id</span><span class="o">=</span><span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">device_id</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">start_playback</span>
+    <span class="n">spot</span><span class="o">.</span><span class="n">pause</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="ungroup_and_login_esdk"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.ungroup_and_login_esdk">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;function&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">ungroup_and_login_esdk</span><span class="p">(</span><span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">dut_manager</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Cleanup groups and force the esdk to login to prep for the next test case</span>
+<span class="sd">    :param get_spotify_sn:</span>
+<span class="sd">    :param dut_manager:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+        <span class="n">dut_manager</span><span class="o">.</span><span class="n">zp_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">clear_avt</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Force an esdk login if needed</span>
+        <span class="n">spot_common</span><span class="o">.</span><span class="n">login_and_play_spotify_dc_session</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">autostart_dc</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">yield</span>
+
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">dut_manager</span><span class="o">.</span><span class="n">test_devices</span><span class="p">:</span>
+        <span class="n">dut_manager</span><span class="o">.</span><span class="n">zp_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">clear_avt</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="reset_volume"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.reset_volume">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">reset_volume</span><span class="p">(</span><span class="n">spotify_two_zp_household</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sets HH volume to 10 in teardown</span>
+<span class="sd">    :param spotify_two_zp_household:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">yield</span>
+
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">spotify_two_zp_household</span><span class="o">.</span><span class="n">hh_zps</span><span class="p">:</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">muse_rest</span><span class="o">.</span><span class="n">playerVolume</span><span class="o">.</span><span class="n">setVolume</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="cloudqueue_metrics_and_force_esdk_login"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.cloudqueue_metrics_and_force_esdk_login">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;module&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">cloudqueue_metrics_and_force_esdk_login</span><span class="p">(</span><span class="n">mock_cq_server_module</span><span class="p">,</span> <span class="n">spotify_zp_standalone</span><span class="p">,</span> <span class="n">zp_state_timeout</span><span class="p">,</span>
+                                            <span class="n">get_spotify_sn</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sets the eventmetrics URL on a ZP to send reports to mock Cloudqueue server</span>
+<span class="sd">    and then forces eSDK login on the ZP after anacapa restart</span>
+<span class="sd">    :param mock_cq_server_module:</span>
+<span class="sd">    :param spotify_zp_standalone:</span>
+<span class="sd">    :param zp_state_timeout:</span>
+<span class="sd">    :param get_spotify_sn:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Set the metrics URL</span>
+    <span class="n">metrics_override</span> <span class="o">=</span> <span class="p">{</span><span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">:</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/usageMetrics&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">mock_cq_server_module</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">)}</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">verifySysSettingStrings</span><span class="p">(</span><span class="n">metrics_override</span><span class="p">):</span>
+        <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span>
+            <span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">,</span> <span class="n">metrics_override</span><span class="p">[</span><span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">])</span>
+        <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+        <span class="c1"># Wait for AVTransport Service to be re-initialized</span>
+        <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s1">&#39;AVTransportURI&#39;</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">zp_state_timeout</span><span class="p">)</span>
+        <span class="c1"># eSDK login after anacapa restart</span>
+        <span class="n">spot_common</span><span class="o">.</span><span class="n">login_and_play_spotify_dc_session</span><span class="p">(</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">get_spotify_sn</span><span class="p">,</span> <span class="n">autostart_dc</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="k">yield</span>
+
+    <span class="c1"># Remove the metrics URL</span>
+    <span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="flush_metrics_event"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.flush_metrics_event">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s1">&#39;function&#39;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">flush_metrics_event</span><span class="p">(</span><span class="n">mock_cq_server_module</span><span class="p">,</span> <span class="n">spotify_zp_standalone</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Push all events prior to start of the test to the API log on the mock and flush the API logs from the mock</span>
+<span class="sd">    :param mock_cq_server_module:</span>
+<span class="sd">    :param spotify_zp_standalone:</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">player_common</span><span class="o">.</span><span class="n">trigger_job</span><span class="p">(</span><span class="n">spotify_zp_standalone</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">EVENT_UPLOAD</span><span class="p">)</span>
+    <span class="n">mock_cq_server_module</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="s1">&#39;api&#39;</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;fullPath&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/usageMetrics&#39;</span><span class="p">),</span>
+                                                <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">mock_cq_server_module</span><span class="o">.</span><span class="n">clear_log</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="print_spotify_logs"><a class="viewcode-back" href="../../../../../pytest_automation.player.integration.spotify.html#pytest_automation.player.integration.spotify.conftest.print_spotify_logs">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">,</span> <span class="n">autouse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">print_spotify_logs</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">print_player_logs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Pass through fixture which auto-uses the log printer fixture for the entire spotify directory. Only uses the</span>
+<span class="sd">    default ANACAPA and PERF logs</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># By default, `print_player_logs` fixture will print anacapa.trace and perf logs. This is good enough for spotify</span>
+    <span class="k">yield</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

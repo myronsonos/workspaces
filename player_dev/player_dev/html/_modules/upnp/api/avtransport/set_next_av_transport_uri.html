@@ -1,0 +1,569 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.api.avtransport.set_next_av_transport_uri &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.api.avtransport.set_next_av_transport_uri</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd"> UPnP Test: AVTransport.SetNextAVTransportURI</span>
+<span class="sd"> Tests the various usages of the SetNextAVTransportURI action.</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">import</span> <span class="nn">sonos.exception</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="n">check_dict_values</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.zone_generator</span> <span class="k">import</span> <span class="n">get_any_gc_player</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">import</span> <span class="nn">sonos.client</span>
+<span class="kn">import</span> <span class="nn">sonos.services</span>
+
+<span class="kn">from</span> <span class="nn">twisted.web.server</span> <span class="k">import</span> <span class="n">Request</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">urllib2</span>
+
+<span class="kn">from</span> <span class="nn">upnp.helpers.ignore_invoke_errors</span> <span class="k">import</span> <span class="n">IgnoreInvokeErrors</span>
+
+<span class="c1"># Yuck, but how it works for now</span>
+<span class="n">suite</span> <span class="o">=</span> <span class="kc">None</span>
+<div class="viewcode-block" id="playable_zone_generator"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.playable_zone_generator">[docs]</a><span class="k">def</span> <span class="nf">playable_zone_generator</span><span class="p">():</span>
+    <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">x</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_group_member</span><span class="p">(),</span> <span class="n">suite</span><span class="o">.</span><span class="n">my_devices</span><span class="p">):</span>
+        <span class="k">yield</span> <span class="n">z</span></div>
+
+<span class="c1"># Generator for a non-group coordinator device capable of playback</span>
+<div class="viewcode-block" id="zone_generator_noncoordinator"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.zone_generator_noncoordinator">[docs]</a><span class="k">def</span> <span class="nf">zone_generator_noncoordinator</span><span class="p">():</span>
+    <span class="n">gm</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">gc</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">suite</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">gc</span> <span class="o">==</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">gc</span> <span class="o">=</span> <span class="n">zp</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="n">gc</span><span class="p">)</span>
+                <span class="n">gm</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">gm</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">zp</span></div>
+
+
+<span class="n">AVT_STATE_VARS</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;AVTransportURI&#39;</span><span class="p">,</span> <span class="s1">&#39;NumberOfTracks&#39;</span><span class="p">,</span> <span class="s1">&#39;CurrentTrack&#39;</span><span class="p">,</span> <span class="s1">&#39;NextAVTransportURI&#39;</span><span class="p">)</span>
+<div class="viewcode-block" id="avt_state"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.avt_state">[docs]</a><span class="k">def</span> <span class="nf">avt_state</span><span class="p">(</span><span class="n">exp_avt</span><span class="p">,</span> <span class="n">exp_nt</span><span class="p">,</span> <span class="n">exp_ct</span><span class="p">,</span> <span class="n">exp_navt</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">compare</span><span class="p">(</span><span class="n">avt</span><span class="p">,</span> <span class="n">nt</span><span class="p">,</span> <span class="n">ct</span><span class="p">,</span> <span class="n">navt</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">exp_avt</span> <span class="o">==</span> <span class="n">avt</span> <span class="ow">and</span> <span class="n">exp_nt</span> <span class="o">==</span> <span class="n">nt</span> <span class="ow">and</span> <span class="n">exp_ct</span> <span class="o">==</span> <span class="n">ct</span> <span class="ow">and</span> <span class="n">exp_navt</span> <span class="o">==</span> <span class="n">navt</span>
+    <span class="k">return</span> <span class="n">compare</span></div>
+
+<span class="c1"># return a CR-delimited list of files in the path</span>
+<div class="viewcode-block" id="playlist_files"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.playlist_files">[docs]</a><span class="k">def</span> <span class="nf">playlist_files</span><span class="p">(</span><span class="n">files</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">generate_m3u</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+        <span class="n">host</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">getHost</span><span class="p">()</span>
+        <span class="n">urls</span> <span class="o">=</span> <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="s2">&quot;http://</span><span class="si">%s</span><span class="s2">:</span><span class="si">%s</span><span class="s2">/</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">host</span><span class="o">.</span><span class="n">host</span><span class="p">,</span> <span class="n">host</span><span class="o">.</span><span class="n">port</span><span class="p">,</span> <span class="n">x</span><span class="p">),</span> <span class="n">files</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">urls</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">generate_m3u</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests">[docs]</a><span class="k">class</span> <span class="nc">SetNextAVTransportURITests</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;AVTransport.SetNextAVTransportURI(InstanceID, CurrentURI, CurrentURIMetadata)&quot;&quot;&quot;</span>
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_API_AVTRANSPORT&#39;</span><span class="p">]</span>
+<span class="c1">#######################################################################</span>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.setUpFixture"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="p">,</span> <span class="s2">&quot;execution configuration must be present&quot;</span><span class="p">)</span>
+        <span class="n">execfg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span>
+
+        <span class="c1"># Get a valid Player device so we can check that the proper music</span>
+        <span class="c1"># service accounts exist</span>
+        <span class="n">a_player</span> <span class="o">=</span> <span class="n">get_any_gc_player</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span><span class="n">a_player</span><span class="p">,</span> <span class="s2">&quot;at least one player device is required&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Register a web server for the test files</span>
+        <span class="c1"># also register a handler to generate a playlist file that points to the right place</span>
+        <span class="n">resource_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)),</span> <span class="s2">&quot;resource&quot;</span><span class="p">)</span>
+        <span class="n">resource_files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">resource_path</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">resource_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)),</span> <span class="s2">&quot;resource&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="mi">8080</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">,</span>
+                <span class="n">handlers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;playlist.m3u&#39;</span><span class="p">:</span> <span class="n">playlist_files</span><span class="p">(</span><span class="n">resource_files</span><span class="p">)})</span>
+        <span class="c1"># Note: the files(1-4) in the resource directory have:</span>
+        <span class="c1">#   Artist: Silence</span>
+        <span class="c1">#    Album: 5 Seconds of Silence</span>
+        <span class="c1">#    Title: Test Track #     [[ e.g. &quot;Test Track 1&quot;, for test_track_1.mp3 ]]</span>
+        <span class="c1">#   Length: 5sec</span>
+        <span class="c1"># File 5 is 10 seconds long and the metadata reflects this.</span>
+
+        <span class="c1"># Get the HTTP URLs</span>
+        <span class="c1"># TODO: To avoid the bug where playing a 5 second track takes too long to start, use the 10 second track</span>
+        <span class="c1"># for the http_track. Update this once the bug has been fixed.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">%s</span><span class="s2">/</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">resource_files</span><span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">%s</span><span class="s2">/playlist.m3u&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">resource_files</span><span class="p">)</span>
+
+        <span class="c1"># set volume inaudibly low, so the tests don&#39;t annoy anyone</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zone</span><span class="p">,</span> <span class="s1">&#39;RenderingControl&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">zone</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetOutputFixed</span><span class="p">():</span>
+                <span class="n">zone</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<span class="c1">#######################################################################</span>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_empty_next_empty"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_empty_next_empty">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_empty_next_empty</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: set Next AVT URI to a http track, with the Current AVT URI being empty</span>
+<span class="sd">        Expected: failure -- Next AVT cannot be set while Current AVT is non-http</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="c1"># ## SetNextAVT(empty) --&gt; fail (not currently using http)</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">701</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span>
+                                   <span class="s2">&quot;Set NextAVT while AVT empty should receive 701 response&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_queue_next_track"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_queue_next_track">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_queue_next_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: set Next AVT URI to a http track, with the Current AVT URI being the queue</span>
+<span class="sd">        Expected: failure -- Next AVT cannot be set while Current AVT is non-http</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(queue) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+
+        <span class="c1"># ## SetNextAVT(track) --&gt; fail (we&#39;re using queue and not http)</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">701</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span>
+                                   <span class="s2">&quot;Set NextAVT while using queue should receive 701 response&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_exmpty"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_exmpty">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_exmpty</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to empty</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_queue"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_queue">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to queue</span>
+<span class="sd">        Expected: failure -- Next AVT cannot be non-http</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="c1"># ## SetNext(queue) --&gt; fail (queue is not a valid option)</span>
+        <span class="n">queue_uri</span> <span class="o">=</span> <span class="s2">&quot;x-rincon-queue:</span><span class="si">%s</span><span class="s2">#0&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI</span><span class="p">(</span><span class="n">queue_uri</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">);</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">714</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span>
+                                   <span class="s2">&quot;Set NextAVT to queue should receive 714 response&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_track"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_track">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to a track and transition to it</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">))</span>
+
+        <span class="c1"># ## Next() --&gt; success (now using Next; so Next should be empty)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_track_playlist_empty"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_track_playlist_empty">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_track_playlist_empty</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to a playlist, track, then empty, and trasition</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(playlist) --&gt; success (track count doesn&#39;t change)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(track) --&gt; success (now playlist as next; still no track count change)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(empty) --&gt; success (now empty as next; still no track count change)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## Next() --&gt; fail (no next track)</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">711</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;No next track&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_track_playlist"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_track_playlist">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_track_playlist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to a track, then playlist</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(track) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(track) --&gt; success (next is now track)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(playlist) --&gt; success (next is now playlist)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">))</span>
+
+        <span class="c1"># ## Next() --&gt; success (now playing first track of playlist; update track count)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(track) --&gt; success (playing playlist; next is track; no track count change)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="n">track_index</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="k">while</span> <span class="n">track_index</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">:</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                      <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span>
+                                                                <span class="n">track_index</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">))</span>
+
+            <span class="c1"># ## Next() --&gt; success (move to next track in playlist)</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+            <span class="n">track_index</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="c1"># ## Should now be done with playlist and onto the next == track</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_playlist_next_track"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_playlist_next_track">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_playlist_next_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with playlist, set Next AVT URI to playlist, then track</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(playlist) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># Make sure there&#39;s enough entries in the playlist to do the next set of steps</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># ## Next() --&gt; success (move to track 2 in playlist)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(track) --&gt; success (next is track; otherwise state unchanged)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="n">current_index</span> <span class="o">=</span> <span class="mi">2</span>
+        <span class="k">while</span> <span class="n">current_index</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">:</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                      <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span>
+                                                                <span class="n">current_index</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">))</span>
+
+            <span class="c1"># ## Next() --&gt; success (move to next track in playlist)</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+            <span class="n">current_index</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="c1"># ## Should now be on next == track</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span></div>
+ 
+ 
+ 
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_shuffle_http_uri"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_shuffle_http_uri">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_shuffle_http_uri</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, try to set shuffle/repeat</span>
+<span class="sd">        Expected: failure</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(http) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="c1"># ## SetShuffle() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_play_mode</span><span class="p">()</span> <span class="o">==</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(queue) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+
+        <span class="c1"># ## SetShuffle() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE_NO_REPEAT</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_play_mode</span><span class="p">()</span> <span class="o">==</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE_NO_REPEAT</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(http) --&gt; success</span>
+        <span class="c1"># This will change the PlayMode back to SHUFFLE since the AVT/Queue tracks it separately</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="c1"># ## VerifyShuffle()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_play_mode</span><span class="p">()</span> <span class="o">==</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+        <span class="c1"># ## SetNext(playlist) --&gt; success</span>
+        <span class="c1"># SetNextAVT will implicitly change the PlayMode to NORMAL</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">))</span>
+
+        <span class="c1"># ## VerifyShuffle()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_play_mode</span><span class="p">()</span> <span class="o">==</span> <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+        <span class="c1"># ## SetShuffle() --&gt; fail</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_SHUFFLE_NO_REPEAT</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">712</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Shuffle invalid with http URI&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_http_playlist_prev"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_http_playlist_prev">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_http_playlist_prev</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with playlist, try to go to previous track</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># ## SetAVT(empty) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+        <span class="c1"># ## SetAVT(playlist) --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## Prev() --&gt; fail</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Previous</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">711</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Cannot move before track 1&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># ## Next() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Next</span><span class="p">()</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## Prev() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Previous</span><span class="p">()</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_track_next_track_playing"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_track_next_track_playing">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">playable_zone_generator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_track_next_track_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT and let playback switch tracks</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+
+        <span class="c1"># ## SetNext(playlist) --&gt; success (track count doesn&#39;t change)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_track</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">))</span>
+
+        <span class="c1"># ## Play() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+
+        <span class="c1"># ## wait for next track; count changes; next == empty</span>
+        <span class="c1"># note: track should only be 10 seconds (or less) in length</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_state_variables</span><span class="p">(</span><span class="n">AVT_STATE_VARS</span><span class="p">,</span>
+                                                  <span class="n">avt_state</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_playlist</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_playlist_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+                                                  <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+
+        <span class="c1"># ## Stop() --&gt; success</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SetNextAVTransportURITests.test_set_next_member"><a class="viewcode-back" href="../../../../upnp.api.avtransport.html#upnp.api.avtransport.set_next_av_transport_uri.SetNextAVTransportURITests.test_set_next_member">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">zone_generator_noncoordinator</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_next_member</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test: with track, set Next AVT URI to empty</span>
+<span class="sd">        Expected: success</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">800</span><span class="p">,</span> <span class="n">zone</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span>
+                                   <span class="s2">&quot;Set NextAVT while a member should 800 response&quot;</span><span class="p">)</span>
+        <span class="n">zone</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span></div></div>
+
+
+<span class="c1"># Main</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;UPNP:AVTransport:SetNextAVTransportURI Test&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">SetNextAVTransportURITests</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,519 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.helpers.avtransport &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.helpers.avtransport</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">threading</span>
+<span class="kn">import</span> <span class="nn">urllib</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="vm">__name__</span><span class="p">]))</span>
+
+
+<div class="viewcode-block" id="AVTransportStateTransitionTimer"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.AVTransportStateTransitionTimer">[docs]</a><span class="k">class</span> <span class="nc">AVTransportStateTransitionTimer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class to test that a ZP&#39;s AVTransportState did not change within some time.</span>
+
+<span class="sd">    .. note:: An expiry condition meant that the condition has been met.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">avts</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param avts: The ZP&#39;s &quot;AVTransport&quot; attribute</span>
+<span class="sd">        :type avts: :class:`AVTransportService`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__avts</span> <span class="o">=</span> <span class="n">avts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__expiry</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__start_state</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__stop_state</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__elapsed</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__timer</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="AVTransportStateTransitionTimer.wait_for_transport_state_change"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.AVTransportStateTransitionTimer.wait_for_transport_state_change">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">wait_for_transport_state_change</span><span class="p">(</span><span class="n">avts</span><span class="p">,</span> <span class="n">max_wait</span><span class="p">,</span> <span class="n">user_defined_start_states</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait max_wait for AVTransport to change from user_defined_start_states.</span>
+
+<span class="sd">        :param avts: AVTransport service object</span>
+<span class="sd">        :type avts: :class:`~sonos.services.avtransport.AVTransportService`</span>
+
+<span class="sd">        :param max_wait: Maximum wait time for the transition change to occur in seconds</span>
+<span class="sd">        :type max_wait: :int:</span>
+
+<span class="sd">        :param user_defined_start_states: Start startes allowed to check for transition changes.  Any state not matching</span>
+<span class="sd">                                          the start states will be considered a transition.</span>
+<span class="sd">        :type user_defined_start_states: :list:</span>
+
+<span class="sd">        :return: Tuple of (initial transport start states, new transport state)</span>
+<span class="sd">        :rtype: :tuple:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">user_defined_start_states</span><span class="p">:</span>
+            <span class="n">initial_tss</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">user_defined_start_states</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">initial_tss</span> <span class="o">=</span> <span class="p">[</span><span class="n">avts</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s1">&#39;TransportState&#39;</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">False</span><span class="p">)]</span>
+        <span class="n">new_ts</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">end</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+        <span class="k">while</span> <span class="p">((</span><span class="n">new_ts</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span> <span class="ow">in</span> <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">upper</span><span class="p">(),</span> <span class="n">initial_tss</span><span class="p">))</span> <span class="k">if</span> <span class="n">new_ts</span> <span class="k">else</span> <span class="kc">True</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span>
+                    <span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">max_wait</span><span class="p">:</span>
+            <span class="n">new_ts</span> <span class="o">=</span> <span class="n">avts</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s1">&#39;TransportState&#39;</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                             <span class="n">timeout</span><span class="o">=</span><span class="n">max_wait</span> <span class="o">-</span> <span class="p">(</span><span class="n">end</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">())</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">initial_tss</span><span class="p">,</span> <span class="n">new_ts</span></div>
+
+<div class="viewcode-block" id="AVTransportStateTransitionTimer.start"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.AVTransportStateTransitionTimer.start">[docs]</a>    <span class="k">def</span> <span class="nf">start</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">max_wait_for_transition</span><span class="p">,</span> <span class="n">min_duration_before_transition</span><span class="p">,</span> <span class="n">user_defined_start_states</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start the timer and wait for max_wait_for_transition for TransportState transition.</span>
+<span class="sd">        If user passed in user_defined_start_state, the state_changed function will it as</span>
+<span class="sd">        the initial TransportState for comparison with the TranpsortState when timer expired.</span>
+
+<span class="sd">        :param max_wait_for_transition: Max time to wait for TransportState transition.</span>
+<span class="sd">        :type max_wait_for_transition: :obj:`float`</span>
+
+<span class="sd">        :param min_duration_before_transition: Minimum duration we expect the AVTransportState to NOT change</span>
+<span class="sd">        :type min_duration_before_transition: :obj:`float`</span>
+
+<span class="sd">        :param user_defined_start_states: User-defined start state for state_changed comparison.</span>
+<span class="sd">        :type user_defined_start_states: :obj:`list`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">max_wait_for_transition</span> <span class="o">&lt;</span> <span class="n">min_duration_before_transition</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;max_wait_for_transition </span><span class="si">{}</span><span class="s2"> is less than min_duration_before_transition </span><span class="si">{}</span><span class="s2"> -&gt; timer not started&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">max_wait_for_transition</span><span class="p">,</span>
+                    <span class="n">min_duration_before_transition</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">__expiry</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__elapsed</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># If timer expires (i.e. after min_duration_before_transition), expiry will be set to True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__timer</span> <span class="o">=</span> <span class="n">threading</span><span class="o">.</span><span class="n">Timer</span><span class="p">(</span><span class="n">min_duration_before_transition</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__timer_expiry</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__timer</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+        <span class="n">start</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__start_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__stop_state</span> <span class="o">=</span> \
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_transport_state_change</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">__avts</span><span class="p">,</span>
+                                                 <span class="n">max_wait</span><span class="o">=</span><span class="n">max_wait_for_transition</span><span class="p">,</span>
+                                                 <span class="n">user_defined_start_states</span><span class="o">=</span><span class="n">user_defined_start_states</span><span class="p">)</span>
+
+        <span class="c1"># If transport state did not change within max_wait, timer would not be canceled and expiry would be set</span>
+        <span class="c1"># Hence asseting expiry asserts that &quot;transport state did not change within max_wait&quot;</span>
+
+        <span class="c1"># If transport state did change within max_wait, timer would have been canceled and expiry would not be set</span>
+        <span class="c1"># Hence asseting non-expiry asserts that &quot;transport state did change within max_wait&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__elapsed</span> <span class="o">=</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__timer</span><span class="o">.</span><span class="n">cancel</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__timer</span><span class="o">.</span><span class="n">join</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">__timer_expiry</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__expiry</span> <span class="o">=</span> <span class="kc">True</span>    <span class="c1"># Means timer wasn&#39;t canceled.</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">expiry</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">__expiry</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeWarning</span><span class="p">(</span><span class="s2">&quot;Timer Not Started&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__expiry</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">state_changed</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="kc">None</span> <span class="ow">in</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">__start_state</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__stop_state</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">RuntimeWarning</span><span class="p">(</span><span class="s2">&quot;Timer Not Started&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__stop_state</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span> <span class="ow">not</span> <span class="ow">in</span> <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="o">.</span><span class="n">upper</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">__start_state</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">elapsed</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">__elapsed</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">RuntimeWarning</span><span class="p">(</span><span class="s2">&quot;Timer Not Started&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">__elapsed</span></div>
+
+
+<div class="viewcode-block" id="start_playback_with_source_selector"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.start_playback_with_source_selector">[docs]</a><span class="k">def</span> <span class="nf">start_playback_with_source_selector</span><span class="p">(</span>
+        <span class="n">zp</span><span class="p">,</span>
+        <span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">source_meta</span><span class="p">)</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;queue&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">3.0</span>
+<span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set AVTransport URI, metadata and start playback on zp</span>
+
+<span class="sd">    :param zp: Sonos Zone Component object</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">    :param source: Source - &#39;queue&#39; or &#39;spdif&#39;</span>
+<span class="sd">    :type source: :obj:`str`</span>
+
+<span class="sd">    :param source_meta: Source-specific metadata</span>
+<span class="sd">    :type source_meta: Depends on source.  If queue, will be :int:.</span>
+
+<span class="sd">    :param timeout_seconds: Timeout in seconds to be passed to Play_and_wait().</span>
+<span class="sd">    :type timeout_seconds: :float:</span>
+
+<span class="sd">    :return: Elapsed time of when is_playing() condition is met.</span>
+<span class="sd">    :rtype: :obj:`float`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s2">&quot;AVTransport&quot;</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has no &#39;AVTransport&#39; attribute&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="s1">&#39;queue&#39;</span><span class="p">:</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">(</span><span class="n">queue_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">set_queue_position</span><span class="p">(</span><span class="n">source_meta</span><span class="p">,</span> <span class="n">instance_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">source</span> <span class="o">==</span> <span class="s1">&#39;spdif&#39;</span><span class="p">:</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_spdif</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="add_files_as_uri_to_queue"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.add_files_as_uri_to_queue">[docs]</a><span class="k">def</span> <span class="nf">add_files_as_uri_to_queue</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">files</span><span class="p">,</span> <span class="n">uri_base_url</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">queue_instance_id</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Add music tracks as URIs to zp&#39;s music queue</span>
+
+<span class="sd">    :param zp: Sonos Zone Component object</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">    :param files: List of media tracks</span>
+<span class="sd">    :type files: :obj: `list`</span>
+
+<span class="sd">    :param uri_base_url: Base URL.  If list, must match length of files</span>
+<span class="sd">    :type uri_base_url: :obj: `str` or :list:/:set:/:tuple: of :str:</span>
+
+<span class="sd">    :param queue_instance_id: Queue instance id</span>
+<span class="sd">    :type queue_instance_id: :int:</span>
+
+<span class="sd">    :return: URIs list</span>
+<span class="sd">    :rtype: :list: of :str:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s2">&quot;AVTransport&quot;</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has no &#39;AVTransport&#39; attribute&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">uri_base_url</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">set</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)):</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="s2">&quot;/&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">x</span><span class="p">),</span>
+                         <span class="nb">zip</span><span class="p">(</span><span class="n">uri_base_url</span><span class="p">,</span> <span class="p">[</span><span class="n">urllib</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">f</span><span class="p">)</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">files</span><span class="p">]))</span>
+    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">uri_base_url</span><span class="p">,</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">unicode</span><span class="p">)):</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uri_base_url</span><span class="p">,</span> <span class="n">urllib</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">f</span><span class="p">))</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span>
+                      <span class="n">files</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">uri_base_url</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="n">files</span>
+    <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">track</span><span class="p">,</span>
+                                 <span class="n">instance_id</span><span class="o">=</span><span class="n">queue_instance_id</span><span class="p">)</span>
+     <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="n">track_uris</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">track_uris</span></div>
+
+
+<div class="viewcode-block" id="start_playback_and_assert_playback_duration"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.start_playback_and_assert_playback_duration">[docs]</a><span class="k">def</span> <span class="nf">start_playback_and_assert_playback_duration</span><span class="p">(</span>
+        <span class="n">avts</span><span class="p">,</span>
+        <span class="n">zp</span><span class="p">,</span>
+        <span class="p">(</span><span class="n">media_source</span><span class="p">,</span> <span class="n">media_source_meta</span><span class="p">),</span>
+        <span class="n">max_wait_for_transition</span><span class="p">,</span>
+        <span class="n">min_duration_before_transition</span><span class="p">,</span>
+        <span class="n">expected_expiry</span><span class="p">,</span>
+        <span class="n">expected_state_changed</span><span class="p">,</span>
+        <span class="n">assert_media_source_meta_and_duration_only</span><span class="o">=</span><span class="kc">False</span>
+<span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    :param avts: AVTransportStateTransitionTimer service object</span>
+<span class="sd">    :type avts: :class:`~helpers.avtransport.AVTransportStateTransitionTimer`</span>
+
+<span class="sd">    :param media_source: Valid media sources for</span>
+<span class="sd">                            :method:`~upnp.helpers.avtransport.start_playback_with_source_selector`</span>
+<span class="sd">    :type media_source: :obj:`str`</span>
+
+<span class="sd">    :param media_source_meta: Valid media sources meta-data for</span>
+<span class="sd">                                :method:`~upnp.helpers.avtransport.start_playback_with_source_selector`</span>
+<span class="sd">    :type media_source_meta: Depends on media_source.</span>
+
+<span class="sd">    :param zp: Sonos Zone Component object</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">    :param max_wait_for_transition: Max time to wait for TransportState transition.</span>
+<span class="sd">    :type max_wait_for_transition: :obj:`float`</span>
+
+<span class="sd">    :param min_duration_before_transition: Minimum duration we expect the AVTransportState to NOT change</span>
+<span class="sd">    :type min_duration_before_transition: :obj:`float`</span>
+
+<span class="sd">    :param expected_expiry: Is timer expiry expected</span>
+<span class="sd">    :type expected_expiry: :bool:</span>
+
+<span class="sd">    :param expected_state_changed: Is transport state changed expected</span>
+<span class="sd">    :type expected_state_changed: :bool:</span>
+
+<span class="sd">    :param assert_media_source_meta_and_duration_only: No need to start playback with source selector.</span>
+<span class="sd">    :type assert_media_source_meta_and_duration_only: :bool:</span>
+
+<span class="sd">    :return: Elapsed time from function entry to function exit</span>
+<span class="sd">    (i.e. prolouge elapsed plus timer elapsed).</span>
+<span class="sd">    :rtype: :float:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">initial_playback_elapsed</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">assert_media_source_meta_and_duration_only</span><span class="p">:</span>
+        <span class="c1"># initial_playback_elapsed is approximation of when Play() was</span>
+        <span class="c1"># triggered to when is_playing() is True.</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">initial_playback_elapsed</span> <span class="o">=</span> <span class="n">start_playback_with_source_selector</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span>
+                <span class="p">(</span><span class="n">media_source</span><span class="p">,</span> <span class="n">media_source_meta</span><span class="p">),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">3.0</span>
+            <span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span> <span class="k">as</span> <span class="n">te</span><span class="p">:</span>
+            <span class="n">err</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> did not start </span><span class="si">{}</span><span class="s2"> playback, exception: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span>
+                <span class="n">media_source</span><span class="p">,</span>
+                <span class="n">te</span>
+            <span class="p">)</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">TimeoutError</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;initial_playback_elapsed: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">initial_playback_elapsed</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="n">media_source_check_start_time</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span>
+    <span class="k">if</span> <span class="n">media_source</span> <span class="o">==</span> <span class="s1">&#39;spdif&#39;</span><span class="p">:</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span> <span class="o">==</span>
+                    <span class="n">media_source_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+            <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">3.0</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Expected SPDIF StreamInfo: </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                   <span class="s2">&quot;Actual SPDIF StreamInfo: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">media_source_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()</span> <span class="o">==</span>
+                    <span class="n">media_source_meta</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+            <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">3.0</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Expected SampleRate: </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                   <span class="s2">&quot;Actual SPDIF SampleRate: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">media_source_meta</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()))</span>
+
+    <span class="n">media_source_check_elapsed_secs</span> <span class="o">=</span> \
+        <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span> <span class="o">-</span>
+         <span class="n">media_source_check_start_time</span><span class="p">)</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;media_source_check_elapsed_secs: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">media_source_check_elapsed_secs</span><span class="p">)</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Buffer time for setting up timer for assert_playback_duration</span>
+    <span class="n">assertion_duration_buffer_secs</span> <span class="o">=</span> <span class="mf">0.5</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">min_duration_before_transition</span> <span class="o">-</span> <span class="n">initial_playback_elapsed</span> <span class="o">&gt;=</span>
+            <span class="n">media_source_check_elapsed_secs</span> <span class="o">+</span> <span class="n">assertion_duration_buffer_secs</span><span class="p">):</span>
+        <span class="n">err</span> <span class="o">=</span> <span class="s2">&quot;Failed to assert min_duration_before_transition (</span><span class="si">{}</span><span class="s2"> secs)&quot;</span>
+        <span class="s2">&quot; as media_source_check_elapsed_secs (</span><span class="si">{}</span><span class="s2"> secs) &quot;</span>
+        <span class="s2">&quot;doesn&#39;t have enough buffer (</span><span class="si">{}</span><span class="s2"> secs) after &quot;</span>
+        <span class="s2">&quot;offsetting initial_playback_elapsed (</span><span class="si">{}</span><span class="s2"> secs).&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">min_duration_before_transition</span><span class="p">,</span>
+            <span class="n">media_source_check_elapsed_secs</span><span class="p">,</span>
+            <span class="n">assertion_duration_buffer_secs</span><span class="p">,</span>
+            <span class="n">initial_playback_elapsed</span>
+        <span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">TimeoutError</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">max_wait_for_transition</span> <span class="o">-</span> <span class="n">initial_playback_elapsed</span> <span class="o">&gt;=</span>
+            <span class="n">media_source_check_elapsed_secs</span> <span class="o">+</span> <span class="n">assertion_duration_buffer_secs</span><span class="p">):</span>
+        <span class="n">err</span> <span class="o">=</span> <span class="s2">&quot;Failed to assert max_wait_for_transition (</span><span class="si">{}</span><span class="s2"> secs)&quot;</span>
+        <span class="s2">&quot; as media_source_check_elapsed_secs (</span><span class="si">{}</span><span class="s2"> secs) &quot;</span>
+        <span class="s2">&quot;doesn&#39;t have enough buffer (</span><span class="si">{}</span><span class="s2"> secs) after &quot;</span>
+        <span class="s2">&quot;offsetting initial_playback_elapsed (</span><span class="si">{}</span><span class="s2"> secs).&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">max_wait_for_transition</span><span class="p">,</span>
+            <span class="n">media_source_check_elapsed_secs</span><span class="p">,</span>
+            <span class="n">assertion_duration_buffer_secs</span><span class="p">,</span>
+            <span class="n">initial_playback_elapsed</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">TimeoutError</span><span class="p">(</span><span class="n">err</span><span class="p">)</span>
+
+    <span class="n">effective_min_duration_before_transition</span> <span class="o">=</span>\
+        <span class="n">min_duration_before_transition</span> <span class="o">-</span>\
+        <span class="n">initial_playback_elapsed</span> <span class="o">-</span>\
+        <span class="n">media_source_check_elapsed_secs</span>
+
+    <span class="n">effective_max_wait_for_transition</span> <span class="o">=</span> <span class="n">max_wait_for_transition</span> <span class="o">-</span> \
+                                        <span class="n">initial_playback_elapsed</span> <span class="o">-</span> \
+                                        <span class="n">media_source_check_elapsed_secs</span>
+
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;effective_min_duration_before_transition: </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                 <span class="s2">&quot;effective_max_wait_for_transition: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">effective_min_duration_before_transition</span><span class="p">,</span>
+        <span class="n">effective_max_wait_for_transition</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">initial_playback_elapsed</span> <span class="o">+</span> \
+           <span class="n">media_source_check_elapsed_secs</span> <span class="o">+</span> \
+           <span class="n">assert_playback_duration</span><span class="p">(</span><span class="n">avts</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                                    <span class="n">effective_max_wait_for_transition</span><span class="p">,</span>
+                                    <span class="n">effective_min_duration_before_transition</span><span class="p">,</span>
+                                    <span class="n">expected_expiry</span><span class="p">,</span>
+                                    <span class="n">expected_state_changed</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="assert_playback_duration"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.avtransport.assert_playback_duration">[docs]</a><span class="k">def</span> <span class="nf">assert_playback_duration</span><span class="p">(</span><span class="n">avts</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                             <span class="n">max_wait_for_transition</span><span class="p">,</span>
+                             <span class="n">min_duration_before_transition</span><span class="p">,</span>
+                             <span class="n">expected_expiry</span><span class="p">,</span>
+                             <span class="n">expected_state_changed</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    :param avts: AVTransportStateTransitionTimer service object</span>
+<span class="sd">    :type avts: :class:`~helpers.avtransport.AVTransportStateTransitionTimer`</span>
+
+<span class="sd">    :param zp: Sonos Zone Component object</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">    :param max_wait_for_transition: Max time to wait for TransportState transition.</span>
+<span class="sd">    :type max_wait_for_transition: :obj:`float`</span>
+
+<span class="sd">    :param min_duration_before_transition: Minimum duration we expect the AVTransportState to NOT change</span>
+<span class="sd">    :type min_duration_before_transition: :obj:`float`</span>
+
+<span class="sd">    :param expected_expiry: Is timer expiry expected</span>
+<span class="sd">    :type expected_expiry: :bool:</span>
+
+<span class="sd">    :param expected_state_changed: Is transport state changed expected</span>
+<span class="sd">    :type expected_state_changed: :bool:</span>
+
+<span class="sd">    :return: Timer elapsed duration</span>
+<span class="sd">    :rtype: :float:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">avts</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">max_wait_for_transition</span><span class="p">,</span> <span class="n">min_duration_before_transition</span><span class="p">,</span>
+               <span class="n">user_defined_start_states</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;PLAYING&quot;</span><span class="p">,</span> <span class="s2">&quot;TRANSITIONING&quot;</span><span class="p">])</span>
+    <span class="k">assert</span> <span class="n">avts</span><span class="o">.</span><span class="n">expiry</span> <span class="o">==</span> <span class="n">expected_expiry</span><span class="p">,</span> \
+        <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1"> in &quot;Playing&quot; state for at least </span><span class="si">{}</span><span class="s1"> secs (elapsed: </span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="s2">&quot;did not stay&quot;</span> <span class="k">if</span> <span class="n">expected_expiry</span> <span class="k">else</span> <span class="s2">&quot;stayed&quot;</span><span class="p">,</span>
+            <span class="n">min_duration_before_transition</span><span class="p">,</span>
+            <span class="n">avts</span><span class="o">.</span><span class="n">elapsed</span>
+        <span class="p">)</span>
+    <span class="k">assert</span> <span class="n">avts</span><span class="o">.</span><span class="n">state_changed</span> <span class="o">==</span> <span class="n">expected_state_changed</span><span class="p">,</span> \
+        <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&#39;s TransportState </span><span class="si">{}</span><span class="s2"> after </span><span class="si">{}</span><span class="s2"> secs (max_wait_for_transition:&quot;</span> \
+        <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">.)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="s2">&quot;did not change as expected&quot;</span> <span class="k">if</span> <span class="n">expected_state_changed</span>
+            <span class="k">else</span> <span class="s2">&quot;changed unexpectedly&quot;</span><span class="p">,</span>
+            <span class="n">avts</span><span class="o">.</span><span class="n">elapsed</span><span class="p">,</span>
+            <span class="n">max_wait_for_transition</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">avts</span><span class="o">.</span><span class="n">elapsed</span></div>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../helpers.html">upnp.helpers</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

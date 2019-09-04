@@ -1,0 +1,748 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.autoplay.auto_start_stop_logger &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.autoplay.auto_start_stop_logger</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This module contains the class for attempting to re-create the auto stop</span>
+<span class="sd">issues that occurred as parts of SWPBL-91611 and SWPBL-91367</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">gaierror</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">audio_playback.mplayer_playback</span> <span class="k">import</span> <span class="n">MplayerAc3Playback</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+
+<span class="n">MIN_AUTOSTOP_INTERVAL</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">AUTO_PLAY_WAIT_TIME</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">AUTO_STOP_PROPAGATION_DELAY</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">ADD_SAT_WAIT_TIME</span> <span class="o">=</span> <span class="mi">30</span>
+<span class="n">BEGIN_SILENCE_WAIT_TIME</span> <span class="o">=</span> <span class="mi">2</span>
+
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest">[docs]</a><span class="k">class</span> <span class="nc">AutoPlayAutoStopLogTest</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Purpose of the test is to monitor the autoplay and autostop log to see</span>
+<span class="sd">    if anything strange is occurring</span>
+
+<span class="sd">    Requirements:</span>
+
+<span class="sd">    - Set autostop interval to configurable amount of time</span>
+<span class="sd">    - Bump up logging to include htap_autostop=3 and other HT pipeline modules</span>
+<span class="sd">    - Start playback of content via mplayer</span>
+<span class="sd">    - Pause playback after configurable amount of time</span>
+<span class="sd">    - Resume playback after a configurable amount of time</span>
+<span class="sd">    - Evaluate logs and ensure everything lines up as expected</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># numeric parameters</span>
+    <span class="n">auto_stop_int</span> <span class="o">=</span> <span class="mi">20</span>
+    <span class="n">playback_duration</span> <span class="o">=</span> <span class="mi">15</span>
+    <span class="n">pause_duration</span> <span class="o">=</span> <span class="mi">39</span>
+
+    <span class="c1"># file parameters</span>
+    <span class="n">playback_nas_path</span> <span class="o">=</span> <span class="s1">&#39;/Automation/reporting_toslink_files/&#39;</span>
+    <span class="n">playback_nas_file</span> <span class="o">=</span> <span class="s1">&#39;5ch_diff_music_01.ac3&#39;</span>
+    <span class="n">silence_nas_file</span> <span class="o">=</span> <span class="s1">&#39;zeros.wav&#39;</span>
+
+    <span class="c1"># regex strings</span>
+    <span class="c1"># autostop msg -&gt; htap_autostop, 1</span>
+    <span class="n">autostop_msg</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;[0-9]* seconds of silence detected.&quot;</span>
+
+    <span class="c1"># beginning silence detection -&gt; htap_autostop, 2</span>
+    <span class="n">beginning_silence_msg</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;beginning silence detection for auto stop&quot;</span>
+
+    <span class="c1"># satellite added to HT network -&gt; htap, 1</span>
+    <span class="n">sat_added_msg</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;satellite [\S]* added to the ht network&quot;</span>
+
+    <span class="c1"># starting auto play for spdif source -&gt; htap_spdif, 1</span>
+    <span class="n">start_autoplay_msg</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;starting auto play for spdif source&quot;</span>
+
+    <span class="c1"># callback maps</span>
+    <span class="n">autostop_map</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">beginning_silence_map</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">sat_added_map</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">start_autoplay_map</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        accept command line arguments to specify the various parameters</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AutoPlayAutoStopLogTest</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--playback_duration&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_duration</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;duration to playback content before pausing&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--pause_duration&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">pause_duration</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;duration to pause content before playing&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--autostop_interval&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+                            <span class="n">default</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span><span class="p">,</span>
+                            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;duration of time that passes before &quot;</span>
+                                 <span class="s2">&quot;autostop is engaged&quot;</span><span class="p">)</span>
+
+        <span class="c1"># parse args into members</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_duration</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">playback_duration</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pause_duration</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">pause_duration</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">autostop_interval</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span> <span class="o">&lt;</span> <span class="n">MIN_AUTOSTOP_INTERVAL</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Auto stop interval must be at least </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">MIN_AUTOSTOP_INTERVAL</span>
+            <span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_file</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">silence_file</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        setup test fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># generate the HT masters</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span>
+                      <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_satellite_pairs_and_subs</span><span class="p">()</span>
+        <span class="n">local_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">=</span> <span class="n">local_path</span> <span class="o">+</span> <span class="s1">&#39;/resource/&#39;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_files_from_nas</span><span class="p">(</span>
+            <span class="n">files_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_nas_file</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">silence_nas_file</span><span class="p">],</span>
+            <span class="n">files_path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_nas_path</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_nas_file</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">silence_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">silence_nas_file</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        disable auto play on all ZPs at tear down and clean up bonded configs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="n">z</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">z</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">()]:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayLinkedZones</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.get_files_from_nas"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.get_files_from_nas">[docs]</a>    <span class="k">def</span> <span class="nf">get_files_from_nas</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">files_path</span><span class="p">,</span> <span class="n">files_list</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Copy files from NAS</span>
+<span class="sd">        :param str files_path: Path to download files from</span>
+<span class="sd">        :param list files_list: The list of files to download</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Getting files from </span><span class="si">{}</span><span class="s2"> on NAS&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">files_path</span><span class="p">))</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="n">sftp</span><span class="o">.</span><span class="n">chdir</span><span class="p">(</span><span class="n">files_path</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">files_list</span><span class="p">:</span>
+                <span class="n">files_list</span> <span class="o">=</span> <span class="n">sftp</span><span class="o">.</span><span class="n">listdir</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;Available files on nas : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">files_list</span><span class="p">))</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">a_file</span> <span class="ow">in</span> <span class="n">files_list</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Copying file: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">a_file</span><span class="p">))</span>
+                    <span class="n">src</span> <span class="o">=</span> <span class="n">files_path</span> <span class="o">+</span> <span class="n">a_file</span>
+                    <span class="n">dst</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">+</span> <span class="n">a_file</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Source: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">src</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Destination: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dst</span><span class="p">))</span>
+                    <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">IOError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Required files not available&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.play_track"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.play_track">[docs]</a>    <span class="k">def</span> <span class="nf">play_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file</span><span class="p">,</span> <span class="n">playback_duration</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        play the given track on the mplayer and pause after duration</span>
+<span class="sd">        specified in playback arg</span>
+<span class="sd">        :param str file: the path to the file to play</span>
+<span class="sd">        :param int playback_duration: the amount of time to play the given</span>
+<span class="sd">        track</span>
+<span class="sd">        :param str encoding: to force an encoding format</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">args</span> <span class="o">=</span> <span class="p">[</span><span class="n">file</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Playing back </span><span class="si">{}</span><span class="s2"> via MplayerAc3Playback&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">playback_file</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">encoding</span><span class="p">:</span>
+            <span class="c1"># if encoding has been specified, pass it to the</span>
+            <span class="c1"># MplayerAc3Playback call. otherwise don&#39;t include a None</span>
+            <span class="c1"># argument in call so as to allow default encoding.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;using encoding </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">encoding</span><span class="p">))</span>
+            <span class="n">args</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">encoding</span><span class="p">)</span>
+
+        <span class="c1"># begin playback</span>
+        <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">)</span> <span class="k">as</span> <span class="n">m_player</span><span class="p">:</span>
+            <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+
+            <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;Iterating through track, timestamp: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">m_player</span><span class="o">.</span><span class="n">player</span><span class="o">.</span><span class="n">time_pos</span><span class="p">))</span>
+
+                <span class="c1"># sleep for 1 second so as to reduce the logging noise to 1s</span>
+                <span class="c1">#  intervals</span>
+                <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+                <span class="n">elapsed</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span>
+
+                <span class="c1"># pause if we&#39;ve played the playback duration</span>
+                <span class="k">if</span> <span class="n">elapsed</span> <span class="o">&gt;=</span> <span class="n">playback_duration</span><span class="p">:</span>
+
+                    <span class="c1"># sleep for the configured number of seconds</span>
+                    <span class="n">m_player</span><span class="o">.</span><span class="n">player</span><span class="o">.</span><span class="n">pause</span><span class="p">()</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;going to sleep for pause&quot;</span><span class="p">)</span>
+                    <span class="k">return</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.play_content"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.play_content">[docs]</a>    <span class="k">def</span> <span class="nf">play_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        play content to trigger auto start</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Begin playing content&quot;</span><span class="p">)</span>
+        <span class="c1"># use the spdifac3 codec since we&#39;re playing an AC3 file.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">play_track</span><span class="p">(</span>
+            <span class="n">encoding</span><span class="o">=</span><span class="s1">&#39;hwac3&#39;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_file</span><span class="p">,</span>
+            <span class="n">playback_duration</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_duration</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;End playing content&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.set_up_routine"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.set_up_routine">[docs]</a>    <span class="k">def</span> <span class="nf">set_up_routine</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        set up routine for test</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span><span class="p">:</span>
+            <span class="c1"># cleanup bonded config</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+
+            <span class="c1"># update the auto stop interval</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_ht_autostop_threshold</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span><span class="p">)</span>
+
+            <span class="c1"># set diag levels:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_logging</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+            <span class="c1"># reset udp logs</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">(</span><span class="n">reset</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="n">zp</span><span class="o">.</span><span class="n">wait_for_upnp_alive</span><span class="p">()</span>
+
+            <span class="c1"># setup auto play</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayLinkedZones</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="c1"># drop volume very low to prevent noises</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="c1"># set up callbacks</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_up_udp_log_cbs</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reset_callback_maps</span><span class="p">()</span>
+
+        <span class="c1"># generate HT satellites &amp; do a cleanup</span>
+        <span class="k">for</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span><span class="p">:</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span>
+                <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">]]</span>
+        <span class="k">for</span> <span class="n">sub</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subs</span><span class="p">:</span>
+            <span class="n">sub</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.reset_callback_maps"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.reset_callback_maps">[docs]</a>    <span class="k">def</span> <span class="nf">reset_callback_maps</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        reset all of the member callback maps so that the values for all ZPs</span>
+<span class="sd">        are defaulted to False</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Clearing callback maps&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">autostop_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">sat_added_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.autostop_cb"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.autostop_cb">[docs]</a>    <span class="k">def</span> <span class="nf">autostop_cb</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp_sn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        the callback for the autostop messages</span>
+<span class="sd">        :param str msg: the message that triggered the callback</span>
+<span class="sd">        :param str zp_sn: the serial number of the ZP that triggered it</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">interval_is_expected</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">autostop_map</span><span class="p">[</span><span class="n">zp_sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Autostop # seconds of silence detected is unexpected:&quot;</span>
+                      <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.beginning_silence_cb"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.beginning_silence_cb">[docs]</a>    <span class="k">def</span> <span class="nf">beginning_silence_cb</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp_sn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        the callback for the beginning silence messages</span>
+<span class="sd">        :param str msg: the message that triggered the callback</span>
+<span class="sd">        :param str zp_sn: the serial number of the ZP that triggered it</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Received msg for begin silence detection &quot;</span>
+                         <span class="s2">&quot;callback on zp </span><span class="si">{}</span><span class="s2"> : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_sn</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">zp_sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.sat_added_cb"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.sat_added_cb">[docs]</a>    <span class="k">def</span> <span class="nf">sat_added_cb</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp_sn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        the callback for the satellite added messages</span>
+<span class="sd">        :param str msg: the message that triggered the callback</span>
+<span class="sd">        :param str zp_sn: the serial number of the ZP that triggered it</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Received msg for satellite added &quot;</span>
+                         <span class="s2">&quot;callback on zp </span><span class="si">{}</span><span class="s2"> : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_sn</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sat_added_map</span><span class="p">[</span><span class="n">zp_sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.start_autoplay_cb"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.start_autoplay_cb">[docs]</a>    <span class="k">def</span> <span class="nf">start_autoplay_cb</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp_sn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        the callback for the start auto play messages</span>
+<span class="sd">        :param str msg: the message that triggered the callback</span>
+<span class="sd">        :param str zp_sn: the serial number of the ZP that triggered it</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Received msg for auto play &quot;</span>
+                         <span class="s2">&quot;callback on zp </span><span class="si">{}</span><span class="s2"> : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_sn</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">[</span><span class="n">zp_sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.set_up_udp_log_cbs"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.set_up_udp_log_cbs">[docs]</a>    <span class="k">def</span> <span class="nf">set_up_udp_log_cbs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        set up the UDP logging callbacks for the given zone player</span>
+<span class="sd">        :param zp: the zone player whose UDP logger callbacks we&#39;re setting up</span>
+<span class="sd">        :type zp: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">udp_logger</span><span class="o">.</span><span class="n">add_search</span><span class="p">(</span>
+            <span class="n">query</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">autostop_msg</span><span class="p">,</span>
+            <span class="n">callback</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">autostop_cb</span><span class="p">,</span>
+            <span class="n">params</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span>
+        <span class="p">)</span>
+
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">udp_logger</span><span class="o">.</span><span class="n">add_search</span><span class="p">(</span>
+            <span class="n">query</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_msg</span><span class="p">,</span>
+            <span class="n">callback</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_cb</span><span class="p">,</span>
+            <span class="n">params</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span>
+        <span class="p">)</span>
+
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">udp_logger</span><span class="o">.</span><span class="n">add_search</span><span class="p">(</span>
+            <span class="n">query</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sat_added_msg</span><span class="p">,</span>
+            <span class="n">callback</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sat_added_cb</span><span class="p">,</span>
+            <span class="n">params</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span>
+        <span class="p">)</span>
+
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">udp_logger</span><span class="o">.</span><span class="n">add_search</span><span class="p">(</span>
+            <span class="n">query</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_msg</span><span class="p">,</span>
+            <span class="n">callback</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_cb</span><span class="p">,</span>
+            <span class="n">params</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span>
+        <span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.set_logging"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.set_logging">[docs]</a>    <span class="k">def</span> <span class="nf">set_logging</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        set the logging levels as expected</span>
+<span class="sd">        :param zp: the ZP whose logging levels we are to set</span>
+<span class="sd">        :type zp: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting logging for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">levels</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;htap&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;htap_spdif&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;htap_autostop&quot;</span><span class="p">:</span> <span class="mi">2</span>
+        <span class="p">}</span>
+        <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting diag level: </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">level</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">level</span><span class="p">]</span>
+            <span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">level</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">level</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.interval_is_expected"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.interval_is_expected">[docs]</a>    <span class="k">def</span> <span class="nf">interval_is_expected</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">line</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        check if the numeric value for the number of seconds of silence</span>
+<span class="sd">        detected is 1 + the specified number of auto stop interval seconds</span>
+<span class="sd">        :param line: the line detected by regex</span>
+<span class="sd">        :type line: :obj:`str`</span>
+<span class="sd">        :return: True/False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">regex</span> <span class="o">=</span> <span class="sa">r</span><span class="s2">&quot;[0-9]* seconds of silence&quot;</span>
+        <span class="n">matches</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">regex</span><span class="p">,</span> <span class="n">line</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">matches</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="n">line</span> <span class="o">=</span> <span class="n">matches</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">line</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">n_secs</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">n_secs</span><span class="o">.</span><span class="n">isdigit</span><span class="p">():</span>
+                <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_secs</span><span class="p">)</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span> <span class="o">+</span> <span class="mi">1</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                    <span class="s2">&quot;Line does not denote &quot;</span>
+                    <span class="s2">&quot;number for n_secs: </span><span class="si">{}</span><span class="s2"> from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">n_secs</span><span class="p">,</span> <span class="n">line</span><span class="p">))</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.wait_for_map_to_be_entirely_true"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.wait_for_map_to_be_entirely_true">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_map_to_be_entirely_true</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bool_map</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        generate an array of values based on the values for each HT master</span>
+<span class="sd">        serial number in the given map (should be an array of boolean values).</span>
+<span class="sd">        wait until all values in that array are True.</span>
+<span class="sd">        :param bool_map: the map to use to generate the array of booleans</span>
+<span class="sd">        :param int timeout: the number of seconds to wait before timing out</span>
+<span class="sd">        :param str reason: the reason to give if a timeout occurs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="kc">False</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span>
+                <span class="n">bool_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span><span class="p">],</span>
+            <span class="n">reason</span><span class="o">=</span><span class="n">reason</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span>
+        <span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.wait_for_map_to_be_entirely_false"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.wait_for_map_to_be_entirely_false">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_map_to_be_entirely_false</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bool_map</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        generate an array of values based on the values for each HT master</span>
+<span class="sd">        serial number in the given map (should be an array of boolean values).</span>
+<span class="sd">        wait until all values in that array are False.</span>
+<span class="sd">        :param bool_map: the map to use to generate the array of booleans</span>
+<span class="sd">        :param int timeout: the number of seconds to wait before timing out</span>
+<span class="sd">        :param str reason: the reason to give if a timeout occurs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="kc">True</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span>
+                <span class="n">bool_map</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span><span class="p">],</span>
+            <span class="n">reason</span><span class="o">=</span><span class="n">reason</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span>
+        <span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.get_satellite_pairs_and_subs"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.get_satellite_pairs_and_subs">[docs]</a>    <span class="k">def</span> <span class="nf">get_satellite_pairs_and_subs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        generate member variables to hold all pairs of HT satellite capable</span>
+<span class="sd">        devices and subs, which will later be used to tickle the zone</span>
+<span class="sd">        topology monitor thread as a test for evaluating the autostop</span>
+<span class="sd">        functionality</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># generate the satellite pairs</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_stereo_pairable_devices</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">))</span>
+
+        <span class="c1"># get the subs</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subs</span> <span class="o">=</span> <span class="p">[</span><span class="n">s</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">s</span><span class="o">.</span><span class="n">is_sub</span><span class="p">()]</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.bond_all_ht_masters"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.bond_all_ht_masters">[docs]</a>    <span class="k">def</span> <span class="nf">bond_all_ht_masters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_masters</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        configure all HT masters to be in HT bonded configurations,</span>
+<span class="sd">        be it either 3.1 or 5.0 configs.</span>
+<span class="sd">        :param list ht_masters: a list of home theater masters to bond</span>
+<span class="sd">        satellites to</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># initialize counters</span>
+        <span class="n">n_sat_pairs_available</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span><span class="p">)</span>
+        <span class="n">n_subs_available</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subs</span><span class="p">)</span>
+
+        <span class="c1"># create the configs</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">ht_masters</span><span class="p">:</span>
+            <span class="c1"># make sure there are enough satellite pairs available first</span>
+            <span class="k">if</span> <span class="n">n_sat_pairs_available</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">left</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sat_pairs</span><span class="p">[</span><span class="n">n_sat_pairs_available</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Creating 5.0 config with </span><span class="si">{}</span><span class="s2">, </span><span class="si">{}</span><span class="s2">, </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span>
+                <span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">)</span>
+                <span class="n">n_sat_pairs_available</span> <span class="o">-=</span> <span class="mi">1</span>
+
+            <span class="c1"># if not enough satellite pairs available, use a sub satellite</span>
+            <span class="k">elif</span> <span class="n">n_subs_available</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">sub</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subs</span><span class="p">[</span><span class="n">n_subs_available</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Creating 3.1 config with </span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_31_config</span><span class="p">(</span><span class="n">sub</span><span class="p">)</span>
+                <span class="n">n_subs_available</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="c1"># we should never hit this</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Somehow ran out of satellite pairs / subs&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AutoPlayAutoStopLogTest.test_autoplay_autostop_playback_sequentially"><a class="viewcode-back" href="../../../../upnp.functional.autoplay.html#upnp.functional.autoplay.auto_start_stop_logger.AutoPlayAutoStopLogTest.test_autoplay_autostop_playback_sequentially">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_testbed_ht_master_capable_devices&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_autoplay_autostop_playback_sequentially</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param ht_master: the home theater master to test with</span>
+<span class="sd">        :type ht_master: :obj`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        test the SWPBL-91611 test case</span>
+<span class="sd">        using the test method described in comments:</span>
+
+<span class="sd">        - Set autostop threshold to 20 seconds by setting</span>
+<span class="sd">        HTASilenceThresholdAutoStopSec: [20] in localsettings.txt on an HT</span>
+<span class="sd">        capable device</span>
+<span class="sd">        - Playback SPDIF on HT device to engage autoplay</span>
+<span class="sd">        - Wait X seconds for autostop to engage (play silence to mitigate</span>
+<span class="sd">        risk of sound card noise tickling noise detector).</span>
+<span class="sd">        - Add sub to HT master to create 3.1 config (or any satellite config</span>
+<span class="sd">        should work)</span>
+<span class="sd">        - Wait at least another X seconds (where bug would normally kick in)</span>
+<span class="sd">        - Playback SPDIF on HT device to engage autoplay</span>
+
+<span class="sd">        There are 2 messages that indicate the bug:</span>
+<span class="sd">        1. The re-beginning of of silence detection upon addition of a HT</span>
+<span class="sd">        satellite to the already stopped HT master:</span>
+<span class="sd">        &lt;htap_autostop,2&gt; beginning silence detection for auto stop @ 363256.5</span>
+<span class="sd">        2. The arbitrarily numbered seconds of silence detected at autoplay:</span>
+<span class="sd">        &lt;htap_autostop,1&gt; 41 seconds of silence detected. Engaging auto stop</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span> <span class="o">=</span> <span class="p">[</span><span class="n">ht_master</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_up_routine</span><span class="p">()</span>
+
+        <span class="n">sn</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">serialNumber</span>
+
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        FIX FOR ENVIRONMENTAL NOISE DURING STARTUP OF ANACAPA</span>
+<span class="sd">        if we&#39;ve seen a beginning silence detection message prior to</span>
+<span class="sd">        playback of the SPDIF source, it means that there was some noise</span>
+<span class="sd">        on the line during the startup of the player, which caused</span>
+<span class="sd">        autoplay to kick-in prematurely.</span>
+<span class="sd">        In the event of this error, we skip playing content and checking</span>
+<span class="sd">        for the autoplay message, as autoplay should have already occurred</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">]:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">play_content</span><span class="p">()</span>
+            <span class="c1"># make sure we got an auto play msg</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for autoplay to begin: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">AVT: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">Toslink: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">,</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">(),</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">AUTO_PLAY_WAIT_TIME</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;NOTE: Auto play triggered prior to playback of &quot;</span>
+                             <span class="s2">&quot;content!&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Begin silence</span>
+        <span class="c1"># play silence for the autostop duration</span>
+        <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">silence_file</span><span class="p">])</span> <span class="k">as</span> <span class="n">m_player</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;making sure we get a &#39;beginning silence&#39; msg&quot;</span><span class="p">)</span>
+            <span class="c1"># also make sure we got the &quot;beginning silence detection message&quot;</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Ensuring beginning silence is false:&quot;</span>
+                       <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">BEGIN_SILENCE_WAIT_TIME</span> <span class="o">+</span> <span class="mi">10</span>
+            <span class="p">)</span>
+
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Due to instability during playback, we used to see</span>
+<span class="sd">            failures here for one of two reasons:</span>
+<span class="sd">                1. slight noise on the line caused the ZP under test to</span>
+<span class="sd">                re-begin silence detection while we were waiting for</span>
+<span class="sd">                auto-stop to kick-in. This would cause the auto-stop wait to</span>
+<span class="sd">                timeout, failing the test. It happened about 30% of the time.</span>
+<span class="sd">            Since there&#39;s nothing we can do to control noise that the</span>
+<span class="sd">            soundcard may introduce on the line, we have a maximum</span>
+<span class="sd">            number of attempts that we make to wait for auto-stop to kick-in</span>
+<span class="sd">            without being interrupted by a new silence detection beginning.</span>
+<span class="sd">                2. autostop would kick-in about 100-200ms later than we were</span>
+<span class="sd">                expecting it to kick-in.</span>
+<span class="sd">            Since we&#39;re not testing how long it takes for auto-stop to kick in,</span>
+<span class="sd">            it seems reasonable to increase the maximum wait time by 5 seconds</span>
+<span class="sd">            to account for this instability.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="n">max_n_attempts</span> <span class="o">=</span> <span class="mi">5</span>
+            <span class="n">n_attempts</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+            <span class="n">max_wait_time</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span> <span class="o">+</span> <span class="n">AUTO_STOP_PROPAGATION_DELAY</span>
+            <span class="n">time_between_checks</span> <span class="o">=</span> <span class="mi">2</span>
+
+            <span class="k">while</span> <span class="n">n_attempts</span> <span class="o">&lt;</span> <span class="n">max_n_attempts</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">autostop_map</span><span class="p">[</span><span class="n">sn</span><span class="p">]:</span>
+                <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">time_between_checks</span><span class="p">)</span>
+
+                <span class="c1"># if we detect silence again during this state, it means</span>
+                <span class="c1"># that the silence detection was interrupted</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">]:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;restarting wait for autostop - &quot;</span>
+                                     <span class="s2">&quot;saw another beginning silence detection&quot;</span><span class="p">)</span>
+                    <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+                    <span class="n">n_attempts</span> <span class="o">+=</span> <span class="mi">1</span>
+
+                <span class="n">elapsed_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span>
+                <span class="k">if</span> <span class="n">elapsed_time</span> <span class="o">&gt;</span> <span class="n">max_wait_time</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for autostop to kick in.&quot;</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">n_attempts</span> <span class="o">==</span> <span class="n">max_n_attempts</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Attempted to wait for autostop &quot;</span>
+                          <span class="s2">&quot;to kick-in </span><span class="si">{}</span><span class="s2"> times. Failed last because of silence&quot;</span>
+                          <span class="s2">&quot;detection kicking off multiple times.&quot;</span>
+                          <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">max_n_attempts</span><span class="p">))</span>
+
+            <span class="c1"># clear maps</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reset_callback_maps</span><span class="p">()</span>
+
+            <span class="c1"># add satellite(s), and wait some time for message to show in log</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bond_all_ht_masters</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_ms</span><span class="p">)</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">sat_added_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for sat_added_map to occur: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">sat_added_map</span><span class="p">),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">ADD_SAT_WAIT_TIME</span>
+            <span class="p">)</span>
+
+            <span class="c1"># wait a couple of seconds, then check to see if we hit a wrong</span>
+            <span class="c1"># message from the satellite having been added</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">BEGIN_SILENCE_WAIT_TIME</span><span class="p">)</span>
+
+            <span class="c1"># make sure there&#39;s no &quot;beginning silence detection&quot; message upon</span>
+            <span class="c1"># addition of satellite</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">beginning_silence_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+                <span class="s2">&quot;Expected no beginning silence messages after adding satellite&quot;</span>
+            <span class="p">)</span>
+
+            <span class="c1"># wait another autostop thresh seconds</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">auto_stop_int</span> <span class="o">+</span> <span class="n">AUTO_STOP_PROPAGATION_DELAY</span><span class="p">)</span>
+
+        <span class="c1"># end silence</span>
+
+        <span class="c1"># clear maps</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reset_callback_maps</span><span class="p">()</span>
+
+        <span class="c1"># begin music</span>
+        <span class="c1"># play content</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">play_content</span><span class="p">()</span>
+        <span class="c1"># end music</span>
+
+        <span class="c1"># make sure we got an auto play msg</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for autoplay to begin: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">start_autoplay_map</span><span class="p">),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">AUTO_PLAY_WAIT_TIME</span>
+        <span class="p">)</span>
+
+        <span class="c1"># make sure there are no &quot;seconds of silence detected&quot; messages at</span>
+        <span class="c1"># all immediately after the playback has finished</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">BEGIN_SILENCE_WAIT_TIME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">autostop_map</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+            <span class="s2">&quot;Expected auto stop not to kick in yet&quot;</span>
+        <span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">AutoPlayAutoStopLogTest</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">AutoPlayAutoStopLogTest</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

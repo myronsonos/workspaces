@@ -1,0 +1,404 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>secure_registration.test_cert_revocation &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for secure_registration.test_cert_revocation</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="p">(</span><span class="n">wait_until_true</span><span class="p">,</span> <span class="n">XMLAccessor</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="p">(</span><span class="n">PlayerRegistration</span><span class="p">,</span>
+                                      <span class="n">OAuth</span><span class="p">,</span>
+                                      <span class="n">MITC_ENVIRONMENT</span><span class="p">,</span>
+                                      <span class="n">OAUTH_USER</span><span class="p">,</span>
+                                      <span class="n">OAUTH_PW</span><span class="p">,</span>
+                                      <span class="n">OAUTH_SCOPE</span><span class="p">,</span>
+                                      <span class="n">L7_BASE_DEFAULT_URL</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">secure_registration_base</span> <span class="k">import</span> <span class="p">(</span><span class="n">SecureRegistrationBase</span><span class="p">,</span>
+                                      <span class="n">DIAGCS</span><span class="p">,</span>
+                                      <span class="n">DIAGC_LVL</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.services.deviceproperties</span> <span class="k">import</span> <span class="n">LEGACY_REG_STATE</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+
+
+<span class="n">UNREGISTERED_SONOS_ID</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+
+<span class="n">AUTOMATION_OAUTH_SCOPE_DELETE</span> <span class="o">=</span> <span class="s1">&#39;remove-player&#39;</span>
+<span class="n">OAUTH_SCOPE_REMOVE</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;OAUTH_SCOPE_REMOVE&#39;</span><span class="p">,</span>
+                               <span class="n">default</span><span class="o">=</span><span class="n">AUTOMATION_OAUTH_SCOPE_DELETE</span><span class="p">)</span>
+
+<span class="c1"># URI and request parameters for Secure Registration</span>
+<span class="n">REG_SERVER_URL</span> <span class="o">=</span> <span class="n">L7_BASE_DEFAULT_URL</span> <span class="o">+</span> <span class="s2">&quot;/product/v2/households/</span><span class="si">{}</span><span class="s2">/players/</span><span class="si">{}</span><span class="s2">/&quot;</span>
+<span class="n">OK_NO_CONTENT_RESPONSE_CODE</span> <span class="o">=</span> <span class="mi">204</span>
+
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest">[docs]</a><span class="k">class</span> <span class="nc">PlayerRevokeCertificateTest</span><span class="p">(</span><span class="n">SecureRegistrationBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Secure registration tests on standalone players.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.setUpFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture. Disable all non test devices</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_account_transfer_mode</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_clear_transfer_state_in_hh</span><span class="p">()</span>
+                <span class="k">break</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> : Test Zone&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_all_devices_except</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disabled_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span> <span class="k">if</span> <span class="ow">not</span>
+                                 <span class="n">zp</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.setUpTest"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up test. QA Reset test device and set overrides.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">qa_reset</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_string_overrides_and_bounce_anacapa</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_configure_dev_file</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.tearDownFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down fixture. QA Reset test device and enable all disabled devices</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Tear down fixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">qa_reset</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_disabled_devices</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.qa_reset_zp"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.qa_reset_zp">[docs]</a>    <span class="k">def</span> <span class="nf">qa_reset_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        QA reset zp</span>
+<span class="sd">        :param zp: sonos zone player to be qa reset</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Note sys setting version is not updated on qa reset</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Performing QA reset !!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">qa_reset</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.disable_all_devices_except"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.disable_all_devices_except">[docs]</a>    <span class="k">def</span> <span class="nf">disable_all_devices_except</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disable all devices in hh except &#39;zp&#39;</span>
+<span class="sd">        :param zp: sonos zone player which is NOT to be disabled.</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disabling HH devices not under test&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">device</span> <span class="o">!=</span> <span class="n">zp</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disabling </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="p">))</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.enable_disabled_devices"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.enable_disabled_devices">[docs]</a>    <span class="k">def</span> <span class="nf">enable_disabled_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable hh devices that were disabled</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Enabling all HH devices that were disabled&quot;</span><span class="p">)</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">disabled_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.is_sonos_cert_id_consistent"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.is_sonos_cert_id_consistent">[docs]</a>    <span class="k">def</span> <span class="nf">is_sonos_cert_id_consistent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check if customer ID on status/registration page and on system settings match</span>
+<span class="sd">        :param zp: sonos zone player for which to check customer id</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        return bool: Is the information same in both places.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">cust_id</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">getURL</span><span class="p">(</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/status/registration&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="n">status_cust_id</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">Registration</span><span class="o">.</span><span class="n">CustomerID</span><span class="o">.</span><span class="n">value</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: System settings CustomerID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">cust_id</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Status pg. CustomerID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">status_cust_id</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">cust_id</span> <span class="o">==</span> <span class="n">status_cust_id</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.get_registration_token_and_sonosID"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.get_registration_token_and_sonosID">[docs]</a>    <span class="k">def</span> <span class="nf">get_registration_token_and_sonosID</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                                           <span class="n">scope</span><span class="o">=</span><span class="n">OAUTH_SCOPE</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get registration token and sonos id from server</span>
+<span class="sd">        :param zp: sonos zone player for which to get registration token</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: Registration token and sonos ID tuple</span>
+<span class="sd">        :rtype: :`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">oauth_optuple</span> <span class="o">=</span> <span class="n">OAuth</span><span class="o">.</span><span class="n">get_oauth_token</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="n">OAUTH_USER</span><span class="p">,</span>
+                                              <span class="n">password</span><span class="o">=</span><span class="n">OAUTH_PW</span><span class="p">,</span>
+                                              <span class="n">scope</span><span class="o">=</span><span class="n">scope</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: oauth_optuple: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">oauth_optuple</span><span class="p">))</span>
+        <span class="n">access_token</span> <span class="o">=</span> <span class="n">oauth_optuple</span><span class="o">.</span><span class="n">token</span>
+        <span class="n">owner</span> <span class="o">=</span> <span class="n">oauth_optuple</span><span class="o">.</span><span class="n">owner</span>
+        <span class="n">registration_token</span> <span class="o">=</span> <span class="n">PlayerRegistration</span><span class="o">.</span><span class="n">get_init_token</span><span class="p">(</span><span class="n">access_token</span><span class="p">,</span>
+                                                               <span class="n">owner</span><span class="p">,</span>
+                                                               <span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                                                               <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.get_de_registration_token"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.get_de_registration_token">[docs]</a>    <span class="k">def</span> <span class="nf">get_de_registration_token</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get de registration token from registration server</span>
+<span class="sd">        :param zp: sonos zone player for which to get de registration token</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return str dereg_token: De Registration token</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">oauth_optuple</span> <span class="o">=</span> <span class="n">OAuth</span><span class="o">.</span><span class="n">get_oauth_token</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="n">OAUTH_USER</span><span class="p">,</span>
+                                              <span class="n">password</span><span class="o">=</span><span class="n">OAUTH_PW</span><span class="p">,</span>
+                                              <span class="n">scope</span><span class="o">=</span><span class="n">OAUTH_SCOPE_REMOVE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: oauth_optuple: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">oauth_optuple</span><span class="p">))</span>
+        <span class="n">dereg_token</span> <span class="o">=</span> <span class="n">oauth_optuple</span><span class="o">.</span><span class="n">token</span>
+        <span class="k">return</span> <span class="n">dereg_token</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.secure_register_zp"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.secure_register_zp">[docs]</a>    <span class="k">def</span> <span class="nf">secure_register_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="nb">id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_account_transfer</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Secure register zp, put player in transfer mode is set to True</span>
+<span class="sd">        :param zp: sonos zone player to register</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str id: Sonos id to use when registering else use from the</span>
+<span class="sd">            server</span>
+<span class="sd">        :param bool use_account_transfer: Put player in account transfer</span>
+<span class="sd">            before registering ?</span>
+<span class="sd">        :return bool: Secure registration successfull.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Secure registering. Putting in account transfer&quot;</span>
+                         <span class="s2">&quot; :</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">use_account_transfer</span><span class="p">))</span>
+        <span class="c1"># set all diagcs in case they are wiped due to qa_reset or reboots</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="n">DIAGC_LVL</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Existing R_Customer ID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="n">zp</span><span class="o">.</span><span class="n">has_services</span><span class="p">())</span>
+        <span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_registration_token_and_sonosID</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">use_account_transfer</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Putting in transfer mode&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">put_device_in_account_transfer_mode</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">id</span><span class="p">:</span>
+            <span class="n">owner</span> <span class="o">=</span> <span class="nb">id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> : Now registering using ID: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">owner</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">secure_register</span><span class="p">(</span><span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sec. registration request.HTTP response code </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">last_status_code</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_secure_registered</span><span class="p">(),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="n">diagid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sec. Registration Failed. DIAG : </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">diagid</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">sonos_cert_id</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;SonosCert ID: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sonos_cert_id</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Owner ID : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">owner</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">sonos_cert_id</span> <span class="o">==</span> <span class="n">owner</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: SonosCertID and owner ID mismatch&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.get_customer_id_and_reg_state_from_status"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.get_customer_id_and_reg_state_from_status">[docs]</a>    <span class="k">def</span> <span class="nf">get_customer_id_and_reg_state_from_status</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get customer_id and RegState from status/registration page</span>
+<span class="sd">        :param zp: sonos zone player to query</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: customer id and reg_state info</span>
+<span class="sd">        :rtype: :`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">getURL</span><span class="p">(</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/status/registration&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="n">cust_id</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">Registration</span><span class="o">.</span><span class="n">CustomerID</span><span class="o">.</span><span class="n">value</span>
+        <span class="n">reg_state</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">Registration</span><span class="o">.</span><span class="n">RegState</span><span class="o">.</span><span class="n">value</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Customer ID : </span><span class="si">{}</span><span class="s2"> Registration State: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cust_id</span><span class="p">,</span> <span class="n">reg_state</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">cust_id</span><span class="p">,</span> <span class="n">reg_state</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_revoke_cert</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Revoke registration certificate</span>
+<span class="sd">        :param zp: sonos zone player of which to revoke the cert</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return bool: Was call to revoke cert successful.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Revoking cert for player: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">dereg_token</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_de_registration_token</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="n">REG_SERVER_URL</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">authorization_value</span> <span class="o">=</span> <span class="s2">&quot;Bearer </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dereg_token</span><span class="p">)</span>
+        <span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;accept&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">,</span>
+                   <span class="s2">&quot;Authorization&quot;</span><span class="p">:</span> <span class="n">authorization_value</span><span class="p">}</span>
+        <span class="n">response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">delete</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span> <span class="n">verify</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Cert revoke return code: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">status_code</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">response</span><span class="o">.</span><span class="n">status_code</span> <span class="o">==</span> <span class="n">OK_NO_CONTENT_RESPONSE_CODE</span>
+
+<div class="viewcode-block" id="PlayerRevokeCertificateTest.test_cert_revocation_on_player"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.test_cert_revocation.PlayerRevokeCertificateTest.test_cert_revocation_on_player">[docs]</a>    <span class="k">def</span> <span class="nf">test_cert_revocation_on_player</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify secure registration of an unregistered player passes</span>
+<span class="sd">        if not using account transfer mode</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># secure register device</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_register_zp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Secure registration failed&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">cust_id</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_customer_id_and_reg_state_from_status</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Secure registration OK. Customer ID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">,</span> <span class="n">cust_id</span><span class="p">))</span>
+        <span class="c1"># revoke cert on registration server</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_revoke_cert</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Cert revocation call registration server failed.&quot;</span>
+                      <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Rebooting..&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="n">DIAGC_LVL</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+        <span class="c1"># verify player gets legacy registered</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span>
+                 <span class="o">.</span><span class="n">DeviceProperties</span>
+                 <span class="o">.</span><span class="n">get_secure_registration_state</span><span class="p">())</span> <span class="o">==</span> <span class="nb">int</span><span class="p">(</span><span class="n">LEGACY_REG_STATE</span><span class="p">),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Sec Reg State: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_secure_registration_state</span><span class="p">()))</span>
+            <span class="n">diag_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Device not legacy registered after cert revocation&quot;</span>
+                      <span class="s2">&quot; Diag ID: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">,</span> <span class="n">diag_id</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">cust_id</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">,</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expect legacy reg. customer ID same as original cust_id:</span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">,</span> <span class="n">cust_id</span><span class="p">))</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">PlayerRevokeCertificateTest</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span>
+               <span class="n">PlayerRevokeCertificateTest</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,810 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>secure_registration.replication_secure_registration &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for secure_registration.replication_secure_registration</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">from</span> <span class="nn">custom_dicts</span> <span class="k">import</span> <span class="n">FrozenAttributeDict</span>
+<span class="kn">from</span> <span class="nn">requests</span> <span class="k">import</span> <span class="n">codes</span> <span class="k">as</span> <span class="n">HTTPStatusCodes</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="p">(</span><span class="n">combinatorial</span><span class="p">,</span> <span class="n">AssertionLevel</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="p">(</span><span class="n">wait_until_true</span><span class="p">,</span> <span class="n">XMLAccessor</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="p">(</span><span class="n">PlayerRegistration</span><span class="p">,</span>
+                                      <span class="n">OAuth</span><span class="p">,</span>
+                                      <span class="n">L7_REGISTRATION_HOST</span><span class="p">,</span> <span class="n">L7_TLD</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">secure_registration_base</span> <span class="k">import</span> <span class="p">(</span><span class="n">SecureRegistrationBase</span><span class="p">,</span>
+                                      <span class="n">DeviceInPrepTransferMode</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.services.systemproperties</span> <span class="k">import</span> <span class="n">TEST_CUSTOMER_ID</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="kn">from</span> <span class="nn">secure_registration.secure_registration_base</span> <span class="k">import</span> <span class="n">LEGACY_REG_STATE</span>
+<span class="kn">from</span> <span class="nn">sonos.netstart</span> <span class="k">import</span> <span class="n">NetstartTest</span>
+
+<span class="n">MITC_ENVIRONMENT</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;MITC_ENVIRONMENT&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="s1">&#39;test&#39;</span><span class="p">)</span>
+
+<span class="n">LEGACY_SONOS_ID</span> <span class="o">=</span> <span class="n">TEST_CUSTOMER_ID</span>
+<span class="n">UNREGISTERED_SONOS_ID</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+
+<span class="n">AUTOMATION_OAUTH_SCOPE</span> <span class="o">=</span> <span class="s1">&#39;add-player&#39;</span>
+<span class="n">AUTOMATION_NODE_NAME</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;NODE_NAME&#39;</span><span class="p">)</span>
+<span class="n">AUTOMATION_SONOS_USER</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">@test.sonos.com&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">AUTOMATION_NODE_NAME</span><span class="p">)</span>
+<span class="n">AUTOMATION_SONOS_PW</span> <span class="o">=</span> <span class="s1">&#39;R!nc0n123&#39;</span>
+
+<span class="n">OAUTH_USER</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;OAUTH_USER&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">AUTOMATION_SONOS_USER</span><span class="p">)</span>
+<span class="n">OAUTH_PW</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;OAUTH_PW&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">AUTOMATION_SONOS_PW</span><span class="p">)</span>
+<span class="n">OAUTH_SCOPE</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;OAUTH_SCOPE&#39;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">AUTOMATION_OAUTH_SCOPE</span><span class="p">)</span>
+
+
+<span class="c1">#TEMP ids</span>
+<span class="c1"># SonosID330652201</span>
+<span class="n">TEMP_LEGACY_SONOS_ID</span> <span class="o">=</span> <span class="s1">&#39;12345&#39;</span>
+<span class="n">TEMP_OAUTH_USER</span> <span class="o">=</span> <span class="s1">&#39;temp-test@sonos.com&#39;</span>
+<span class="n">TEMP_OAUTH_PW</span> <span class="o">=</span> <span class="n">OAUTH_PW</span>
+
+<span class="n">DIAGCS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;buttons&#39;</span><span class="p">,</span> <span class="s1">&#39;zp&#39;</span><span class="p">,</span> <span class="s1">&#39;mod_zp&#39;</span><span class="p">,</span> <span class="s1">&#39;dp_impl&#39;</span><span class="p">,</span> <span class="s1">&#39;upnp&#39;</span><span class="p">,</span> <span class="s1">&#39;register&#39;</span><span class="p">,</span>
+          <span class="s1">&#39;httpauth&#39;</span><span class="p">,</span> <span class="s1">&#39;dataio&#39;</span><span class="p">,</span> <span class="s1">&#39;regcert&#39;</span><span class="p">]</span>
+<span class="n">DIAGC_LVL</span> <span class="o">=</span> <span class="mi">4</span>
+
+<span class="n">UNKNOWN_REG_STATE</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span> <span class="c1">#not tested</span>
+<span class="n">UNREGISTERED_REG_STATE</span> <span class="o">=</span> <span class="s1">&#39;1&#39;</span>
+<span class="n">LEGACY_REG_STATE</span> <span class="o">=</span><span class="s1">&#39;2&#39;</span>
+<span class="n">SECURE_REG_STATE</span> <span class="o">=</span> <span class="s1">&#39;3&#39;</span>
+<span class="n">ACC_TRANSFER_REG_STATE</span> <span class="o">=</span> <span class="s1">&#39;4&#39;</span>
+<span class="n">TEST_MODE_REG_STATE</span> <span class="o">=</span> <span class="s1">&#39;5&#39;</span> <span class="c1">#not tested</span>
+<span class="n">PREP_TRANSFER_STATE</span> <span class="o">=</span> <span class="s1">&#39;6&#39;</span>
+
+<span class="n">UNREGISTERED</span> <span class="o">=</span> <span class="s1">&#39;unregistered&#39;</span>
+<span class="n">LEGACY_REGISTERED</span> <span class="o">=</span> <span class="s1">&#39;legacy_registered&#39;</span>
+<span class="n">SECURE_REGISTERED</span> <span class="o">=</span> <span class="s1">&#39;secure_registered&#39;</span>
+
+<span class="n">ACTIVE_ZP_SYS_SET_VER</span> <span class="o">=</span> <span class="mi">50</span>
+<span class="n">VERSION_DELTA</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">GREATER_THAN_ACTIVE</span> <span class="o">=</span> <span class="s1">&#39;&gt;&#39;</span>
+<span class="n">LESS_THAN_ACTIVE</span> <span class="o">=</span> <span class="s1">&#39;&lt;&#39;</span>
+<span class="n">ACTIVE_ZP</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">NEW_ZP</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">WAIT_FOR_FINAL_VERSION_BUMP</span> <span class="o">=</span> <span class="mi">20</span>
+
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests">[docs]</a><span class="k">class</span> <span class="nc">SecureRegSysSettingsReplicationTests</span><span class="p">(</span><span class="n">SecureRegistrationBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Secure registration tests for cases when a player belonging to same hh</span>
+<span class="sd">    is powered up. The new player state can have</span>
+<span class="sd">    1. A secure reg state from unregistered, legacy registered or secure reg.</span>
+<span class="sd">    2. system setting file version that can be higher or lower than the version</span>
+<span class="sd">       on active player in hh</span>
+<span class="sd">    3. Customer ID that can be different from the one on the active player.</span>
+<span class="sd">    ..note:</span>
+<span class="sd">    1. The test needs account set up on www.sonos.com depending on which</span>
+<span class="sd">       environment the test is run on. Example for stage, www-stage.sonos.com</span>
+<span class="sd">    2. Bridge, Dock and Bridge are not included in this test</span>
+<span class="sd">    3. The test uses env OAUTH_USER, OAUTH_PW which should be same as the one</span>
+<span class="sd">       used in 1 above. Else env &#39;NODE_NAME@sonos.com&#39; is used or auto1137ian</span>
+<span class="sd">       Set all account and envs first before running the test.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+
+    <span class="n">ACTIVE_ZP_REG_STATES</span> <span class="o">=</span> <span class="p">[</span><span class="n">UNREGISTERED</span><span class="p">,</span> <span class="n">LEGACY_REGISTERED</span><span class="p">,</span> <span class="n">SECURE_REGISTERED</span><span class="p">]</span>
+    <span class="n">OUT_OF_CLOSET_ZP_STATES</span> <span class="o">=</span> <span class="p">[</span><span class="n">UNREGISTERED</span><span class="p">,</span> <span class="n">LEGACY_REGISTERED</span><span class="p">,</span>
+                                <span class="n">SECURE_REGISTERED</span><span class="p">]</span>
+    <span class="n">ACTIVE_ZP_REG_STATES_DIFF_CUST_ID</span> <span class="o">=</span> <span class="p">[</span><span class="n">LEGACY_REGISTERED</span><span class="p">,</span> <span class="n">SECURE_REGISTERED</span><span class="p">]</span>
+    <span class="n">OUT_OF_CLOSET_ZP_STATES_DIFF_CUST_ID</span> <span class="o">=</span> <span class="p">[</span><span class="n">LEGACY_REGISTERED</span><span class="p">,</span> <span class="n">SECURE_REGISTERED</span><span class="p">]</span>
+    <span class="c1"># version of sys settings version file on player that is brought out of</span>
+    <span class="c1"># closet</span>
+    <span class="n">OUT_OF_CLOSET_SYS_VER</span> <span class="o">=</span> <span class="p">[</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">,</span> <span class="n">LESS_THAN_ACTIVE</span><span class="p">]</span>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.generate_active_and_new_zp_state"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.generate_active_and_new_zp_state">[docs]</a>    <span class="k">def</span> <span class="nf">generate_active_and_new_zp_state</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate active (powered up) zp and new zp (newly powered up) zp</span>
+<span class="sd">        registration state and its sys settinfg version higer or lower than the</span>
+<span class="sd">        active player sys setting version to determine which way replication</span>
+<span class="sd">        will occur</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">active_zp_state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ACTIVE_ZP_REG_STATES</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">new_zp_state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">OUT_OF_CLOSET_ZP_STATES</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">new_zp_sys_version</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">OUT_OF_CLOSET_SYS_VER</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="p">(</span><span class="n">active_zp_state</span><span class="p">,</span>
+                           <span class="n">new_zp_state</span><span class="p">,</span>
+                           <span class="n">new_zp_sys_version</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.generate_active_and_new_zp_state_different_cust_id"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.generate_active_and_new_zp_state_different_cust_id">[docs]</a>    <span class="k">def</span> <span class="nf">generate_active_and_new_zp_state_different_cust_id</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate active (powered up) zp and new zp (newly powered up) zp</span>
+<span class="sd">        registration state and its sys settinfg version higer or lower than the</span>
+<span class="sd">        active player sys setting version to determine which way replication</span>
+<span class="sd">        will occur. In this case the new powered zp has same hhid but</span>
+<span class="sd">        different customer id.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">active_zp_state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ACTIVE_ZP_REG_STATES_DIFF_CUST_ID</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">new_zp_state</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">OUT_OF_CLOSET_ZP_STATES_DIFF_CUST_ID</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">new_zp_sys_version</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">OUT_OF_CLOSET_SYS_VER</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="p">(</span><span class="n">active_zp_state</span><span class="p">,</span>
+                           <span class="n">new_zp_state</span><span class="p">,</span>
+                           <span class="n">new_zp_sys_version</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.setUpFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture&quot;</span><span class="p">)</span>
+        <span class="c1"># store copy of devices</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_transfer_state_in_hh</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span> <span class="k">if</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;BR200&quot;</span><span class="p">,</span> <span class="s2">&quot;ZB100&quot;</span><span class="p">,</span> <span class="s2">&quot;WD100&quot;</span><span class="p">]]</span>
+        <span class="c1"># we need at least 2 devices</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span><span class="p">)</span> <span class="o">&gt;=</span><span class="mi">2</span><span class="p">,</span>
+                              <span class="s2">&quot;At least 2 or more devices needed for test&quot;</span><span class="p">)</span>
+        <span class="c1"># pick any 2 devices for test.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="c1"># existing active hh player</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># out of closet player with same hhid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Test zones selected: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;HH player: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Out of closet player: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">))</span>
+        <span class="c1"># stop anacapa on all devices other than our test devices</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_all_devices_except</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disabled_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span> <span class="k">if</span> <span class="n">zp</span> <span class="ow">not</span> <span class="ow">in</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.tearDownFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear Down Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># wait to make sure Device Properties attribute is available before</span>
+        <span class="c1"># attempting to get state variable. Do nothing on exception but at least</span>
+        <span class="c1"># enable previously disabled devices.</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;DeviceProperties&#39;</span><span class="p">))</span>
+                <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_account_transfer_mode</span><span class="p">():</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_clear_transfer_state_in_hh</span><span class="p">()</span>
+                    <span class="k">break</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">TimeoutError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
+            <span class="k">pass</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_disabled_devices</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.disable_all_devices_except"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.disable_all_devices_except">[docs]</a>    <span class="k">def</span> <span class="nf">disable_all_devices_except</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">test_zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disable all devices in hh except &#39;test_zps&#39;</span>
+<span class="sd">        :param test_zps: sonos zone players which arre NOT to be disabled.</span>
+<span class="sd">        :type test_zps: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disabling HH devices not under test&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">device_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">device</span> <span class="ow">in</span> <span class="n">test_zps</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disabling </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="p">))</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.enable_disabled_devices"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.enable_disabled_devices">[docs]</a>    <span class="k">def</span> <span class="nf">enable_disabled_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable hh devices that were disabled</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Enabling all HH devices that were disabled&quot;</span><span class="p">)</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">disabled_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.setUpTest"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up test. QA Reset test device and set overrides.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Test&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">qa_reset_zps</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_string_overrides_and_bounce_anacapa</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.qa_reset_zps"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.qa_reset_zps">[docs]</a>    <span class="k">def</span> <span class="nf">qa_reset_zps</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        QA reset zp</span>
+<span class="sd">        :param zp: sonos zone player to be qa reset</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1">#Note sys setting version is not updated on qa reset</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Performing QA reset !!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">qa_reset</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Performing QA reset !!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="o">.</span><span class="n">qa_reset</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.put_zp_in_closet"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.put_zp_in_closet">[docs]</a>    <span class="k">def</span> <span class="nf">put_zp_in_closet</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Simulate putting device in closet</span>
+<span class="sd">        param zp: sonos zone player to be put in closet</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.bring_zp_out_of_closet"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.bring_zp_out_of_closet">[docs]</a>    <span class="k">def</span> <span class="nf">bring_zp_out_of_closet</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Simulate bringing device out of closet closet</span>
+<span class="sd">        param zp: sonos zone player to be brought out of closet</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.does_hh_have_new_zp"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.does_hh_have_new_zp">[docs]</a>    <span class="k">def</span> <span class="nf">does_hh_have_new_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">new_zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify new zp is present in hh</span>
+<span class="sd">        param new_zp: sonos zone player</span>
+<span class="sd">        :type new_zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: Is device in household ?</span>
+<span class="sd">        :rtype: :`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">dl</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_devices_by_hhid</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hhid</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">new_zp</span> <span class="ow">in</span> <span class="n">dl</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.legacy_register_zp"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.legacy_register_zp">[docs]</a>    <span class="k">def</span> <span class="nf">legacy_register_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">id_</span><span class="o">=</span><span class="n">LEGACY_SONOS_ID</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set registered customer id as in legacy registration.</span>
+<span class="sd">        Note: System setting file version is not incremented, so there is no</span>
+<span class="sd">        replication.</span>
+<span class="sd">        :param zp: sonos zone player which is to be registered.</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str id: Customer ID</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Legacy registering using ID:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">id_</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">set_registered_customer_id</span><span class="p">(</span><span class="n">id_</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.get_registration_token_and_sonosID"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.get_registration_token_and_sonosID">[docs]</a>    <span class="k">def</span> <span class="nf">get_registration_token_and_sonosID</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">username</span><span class="p">,</span> <span class="n">password</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get registration token and sonos id from server</span>
+<span class="sd">        :param zp: sonos zone player for which to get registration token</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: Registration token and sonos ID tuple</span>
+<span class="sd">        :rtype: :`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">oauth_optuple</span> <span class="o">=</span> <span class="n">OAuth</span><span class="o">.</span><span class="n">get_oauth_token</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="n">username</span><span class="p">,</span>
+                                              <span class="n">password</span><span class="o">=</span><span class="n">password</span><span class="p">,</span>
+                                              <span class="n">scope</span><span class="o">=</span><span class="n">OAUTH_SCOPE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: oauth_optuple: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">oauth_optuple</span><span class="p">))</span>
+        <span class="n">access_token</span> <span class="o">=</span> <span class="n">oauth_optuple</span><span class="o">.</span><span class="n">token</span>
+        <span class="n">owner</span> <span class="o">=</span> <span class="n">oauth_optuple</span><span class="o">.</span><span class="n">owner</span>
+        <span class="n">registration_token</span> <span class="o">=</span> <span class="n">PlayerRegistration</span><span class="o">.</span><span class="n">get_init_token</span><span class="p">(</span><span class="n">access_token</span><span class="p">,</span>
+                                                               <span class="n">owner</span><span class="p">,</span>
+                                                               <span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                                                               <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.secure_register_zp"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.secure_register_zp">[docs]</a>    <span class="k">def</span> <span class="nf">secure_register_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="nb">id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                           <span class="n">user_acc</span><span class="o">=</span><span class="n">OAUTH_USER</span><span class="p">,</span> <span class="n">user_acc_pw</span><span class="o">=</span><span class="n">OAUTH_PW</span><span class="p">,</span>
+                           <span class="n">use_account_transfer</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Secure register zp, put player in transfer mode is set to True</span>
+<span class="sd">        :param zp: sonos zone player to register</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str id: Sonos id to use when registering else use from the</span>
+<span class="sd">            server</span>
+<span class="sd">        :param bool use_account_transfer: Put player in account transfer</span>
+<span class="sd">            before registering ?</span>
+<span class="sd">        :return bool: Secure registration successful.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">user_acc</span><span class="o">==</span><span class="n">AUTOMATION_SONOS_USER</span><span class="p">:</span>
+            <span class="n">user_acc</span> <span class="o">=</span> <span class="n">user_acc</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;NODE_NAME&#39;</span><span class="p">)</span> <span class="ow">or</span>
+                                           <span class="s1">&#39;auto1137ian&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Secure registering. Putting in account transfer&quot;</span>
+                         <span class="s2">&quot; :</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">use_account_transfer</span><span class="p">))</span>
+        <span class="c1"># set all diags incase they are wiped due to qa_reset or reboots</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="n">zp</span><span class="o">.</span><span class="n">has_services</span><span class="p">())</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="n">DIAGC_LVL</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Existing R_Customer ID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_registration_token_and_sonosID</span><span class="p">(</span>
+                                        <span class="n">zp</span><span class="p">,</span> <span class="n">user_acc</span><span class="p">,</span> <span class="n">user_acc_pw</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="kn">import</span> <span class="nn">traceback</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Error when getting oauth token or &quot;</span>
+                              <span class="s2">&quot;registration token.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Error: Args: </span><span class="si">{}</span><span class="s2"> Message: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">args</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">message</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Exception traceback: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">traceback</span><span class="o">.</span><span class="n">format_exc</span><span class="p">()))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">use_account_transfer</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Putting in transfer mode&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">put_device_in_account_transfer_mode</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">id</span><span class="p">:</span>
+            <span class="n">owner</span><span class="o">=</span><span class="nb">id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> : Now registering using ID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">owner</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">secure_register</span><span class="p">(</span><span class="n">registration_token</span><span class="p">,</span> <span class="n">owner</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sec. registration request.HTTP response code </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">last_status_code</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_secure_registered</span><span class="p">(),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="n">diagid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sec. Registration Failed. DIAG : </span><span class="si">{}</span><span class="s2">&quot;</span>
+                <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">diagid</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">sonos_cert_id</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;SonosCert ID: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sonos_cert_id</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Owner ID : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">owner</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">sonos_cert_id</span><span class="o">==</span><span class="n">owner</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: SonosCertID and owner ID mismatch&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.get_customer_id_and_reg_state_from_status"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.get_customer_id_and_reg_state_from_status">[docs]</a>    <span class="k">def</span> <span class="nf">get_customer_id_and_reg_state_from_status</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get customer_id and RegState from status/registration page</span>
+<span class="sd">        :param zp: sonos zone player to query</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: customer id and reg_state info</span>
+<span class="sd">        :rtype: :`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">getURL</span><span class="p">(</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/status/registration&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="n">cust_id</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">Registration</span><span class="o">.</span><span class="n">CustomerID</span><span class="o">.</span><span class="n">value</span>
+        <span class="n">reg_state</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">Registration</span><span class="o">.</span><span class="n">RegState</span><span class="o">.</span><span class="n">value</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">cust_id</span><span class="p">,</span> <span class="n">reg_state</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.get_reg_state_from_status"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.get_reg_state_from_status">[docs]</a>    <span class="k">def</span> <span class="nf">get_reg_state_from_status</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get customer_id and RegState from status page</span>
+<span class="sd">        :param zp: sonos zone player to query</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: customer id and reg_state info</span>
+<span class="sd">        :rtype: :`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">cust_id</span><span class="p">,</span> <span class="n">reg_state</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_customer_id_and_reg_state_from_status</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">reg_state</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.setup_zp_state"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.setup_zp_state">[docs]</a>    <span class="k">def</span> <span class="nf">setup_zp_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zp_state</span><span class="p">,</span> <span class="n">zp_sys_version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup zp registration state as well as version in sys setting version</span>
+<span class="sd">        :param zp: sonos zone player to set</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str zp_state: registration state to set on zp</span>
+<span class="sd">        :param int zp_sys_version: Verion to set on zp</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">legacy_register_zp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">legacy_register_zp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">secure_register_zp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="c1"># from the time we are in transfer mode and download cert, the sys</span>
+        <span class="c1"># setting version increments to its final version after 13 seconds.</span>
+        <span class="c1"># When setting version in syssetting, wait for atleast that much time</span>
+        <span class="c1"># else our setting will be overwritten</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">WAIT_FOR_FINAL_VERSION_BUMP</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zp_sys_version</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_syssettings_version</span><span class="p">(</span><span class="n">zp_sys_version</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.setup_zps_for_test_same_cust_id"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.setup_zps_for_test_same_cust_id">[docs]</a>    <span class="k">def</span> <span class="nf">setup_zps_for_test_same_cust_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                        <span class="n">new_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                        <span class="n">new_zp_state</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                        <span class="n">new_zp_sys_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                        <span class="n">hh_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                        <span class="n">hh_zp_state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up new zp and hh zp states</span>
+<span class="sd">        :param new_zp: Out of closet zp</span>
+<span class="sd">        :type new_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str new_zp_state: Secure reg state of out of closet zp</span>
+<span class="sd">        :param int new_zp_sys_version: Sys setting version to set</span>
+<span class="sd">        :param hh_zp: Active zp in hh</span>
+<span class="sd">        :type hh_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str hh_zp_state:Secure reg state of active zp to set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># step 1 : Disable new ZP</span>
+        <span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="c1"># step 2 : Setup hh zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_zp_state</span><span class="p">(</span><span class="n">hh_zp</span><span class="p">,</span> <span class="n">hh_zp_state</span><span class="p">,</span>
+                            <span class="n">zp_sys_version</span><span class="o">=</span><span class="n">ACTIVE_ZP_SYS_SET_VER</span><span class="p">)</span>
+        <span class="n">active_cust_id</span> <span class="o">=</span> <span class="n">hh_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+        <span class="c1"># step 3 : Disable hh zp</span>
+        <span class="n">hh_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="c1"># step 4 : Enable new zp (diabled in step 1)</span>
+        <span class="n">new_zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="c1"># step 5 : Setup new zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_zp_state</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span> <span class="n">new_zp_state</span><span class="p">,</span>
+                            <span class="n">zp_sys_version</span><span class="o">=</span><span class="n">new_zp_sys_version</span><span class="p">)</span>
+        <span class="n">new_cust_id</span> <span class="o">=</span> <span class="n">new_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+        <span class="c1"># step 6 : put new zp in closet</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">put_zp_in_closet</span><span class="p">(</span><span class="n">new_zp</span><span class="p">)</span>
+        <span class="c1"># step 7 : bring up active hh zp</span>
+        <span class="n">hh_zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">active_cust_id</span><span class="p">,</span> <span class="n">new_cust_id</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.setup_zps_for_test_different_cust_id"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.setup_zps_for_test_different_cust_id">[docs]</a>    <span class="k">def</span> <span class="nf">setup_zps_for_test_different_cust_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                             <span class="n">new_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                             <span class="n">new_zp_state</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                             <span class="n">new_zp_sys_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                             <span class="n">hh_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                             <span class="n">hh_zp_state</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up new zp and hh zp states</span>
+<span class="sd">        :param new_zp: Out of closet zp</span>
+<span class="sd">        :type new_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str new_zp_state: Secure reg state of out of closet zp</span>
+<span class="sd">        :param int new_zp_sys_version: Sys setting version to set</span>
+<span class="sd">        :param hh_zp: Active zp in hh</span>
+<span class="sd">        :type hh_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str hh_zp_state:Secure reg state of active zp to set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># step 1 : Disable new ZP</span>
+        <span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="c1"># step 2 : Setup hh zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_zp_state</span><span class="p">(</span><span class="n">hh_zp</span><span class="p">,</span>
+                            <span class="n">hh_zp_state</span><span class="p">,</span>
+                            <span class="n">zp_sys_version</span><span class="o">=</span><span class="n">ACTIVE_ZP_SYS_SET_VER</span><span class="p">)</span>
+        <span class="n">active_cust_id</span> <span class="o">=</span> <span class="n">hh_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+        <span class="c1"># step 3 : Disable hh zp</span>
+        <span class="n">hh_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="c1"># step 4 : Enable new zp (disabled in step 1)</span>
+        <span class="n">new_zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="c1"># step 5 : Setup new zp</span>
+        <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">legacy_register_zp</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span> <span class="n">id_</span><span class="o">=</span><span class="n">TEMP_LEGACY_SONOS_ID</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">legacy_register_zp</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span> <span class="n">id_</span><span class="o">=</span><span class="n">TEMP_LEGACY_SONOS_ID</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">secure_register_zp</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span>
+                                    <span class="n">user_acc</span><span class="o">=</span><span class="n">TEMP_OAUTH_USER</span><span class="p">,</span>
+                                    <span class="n">user_acc_pw</span><span class="o">=</span><span class="n">TEMP_OAUTH_PW</span><span class="p">,</span>
+                                    <span class="n">use_account_transfer</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">new_cust_id</span> <span class="o">=</span> <span class="n">new_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: New player customer id: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span> <span class="n">new_cust_id</span><span class="p">))</span>
+        <span class="c1"># from the time we are in transfer mode and download cert, the sys</span>
+        <span class="c1"># setting version increments to its final version after 13 seconds.</span>
+        <span class="c1"># When setting version in syssetting, wait for atleast that much time</span>
+        <span class="c1"># else our setting will be overwritten</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">WAIT_FOR_FINAL_VERSION_BUMP</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="p">:</span>
+            <span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_syssettings_version</span><span class="p">(</span><span class="n">new_zp_sys_version</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sys setting version: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span>
+                                     <span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_syssettings_version</span><span class="p">()))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sys setting version: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">new_zp</span><span class="p">,</span>
+                                     <span class="n">new_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_syssettings_version</span><span class="p">()))</span>
+        <span class="c1"># step 6 : put new zp in closet</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">put_zp_in_closet</span><span class="p">(</span><span class="n">new_zp</span><span class="p">)</span>
+        <span class="c1"># step 7 : bring up active hh zp</span>
+        <span class="n">hh_zp</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">active_cust_id</span><span class="p">,</span> <span class="n">new_cust_id</span></div>
+
+    <span class="k">def</span> <span class="nf">_do_verifications</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">exp_state_hh_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exp_state_new_zp</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># hh zp</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">:</span>
+                <span class="n">expected_reg_state</span> <span class="o">=</span> <span class="n">exp_state_hh_zp</span>
+            <span class="k">elif</span> <span class="n">zp</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">:</span>
+                <span class="n">expected_reg_state</span> <span class="o">=</span> <span class="n">exp_state_new_zp</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">get_reg_state_from_status</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span><span class="o">==</span><span class="n">expected_reg_state</span><span class="p">,</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="n">diagid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Sec. Registration DIAG : </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">diagid</span><span class="p">))</span>
+                <span class="n">active_r_customer_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+                <span class="n">new_r_customer_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Active player: R_CustomerID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span> <span class="n">active_r_customer_id</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: New player: R_CustomerID: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">,</span> <span class="n">new_r_customer_id</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Does not have expected registration state.&quot;</span>
+                          <span class="s2">&quot;Current State: </span><span class="si">{}</span><span class="s2">. Expected: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">get_reg_state_from_status</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span><span class="n">expected_reg_state</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">AssertionLevel</span><span class="o">.</span><span class="n">PASS</span><span class="p">,</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Registration state </span><span class="si">{}</span><span class="s2">. OK:&quot;</span>
+                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">expected_reg_state</span><span class="p">))</span>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.test_add_player_to_hh_test_same_customer_id"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.test_add_player_to_hh_test_same_customer_id">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_active_and_new_zp_state&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_add_player_to_hh_test_same_customer_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                     <span class="n">active_zp_state</span><span class="p">,</span>
+                                                     <span class="n">new_zp_state</span><span class="p">,</span>
+                                                     <span class="n">new_zp_sys_version</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test cases where the new player being brought out closet as same</span>
+<span class="sd">        HHID with same R_CustomerID</span>
+<span class="sd">        :param str active_zp_state: registration version on active player</span>
+<span class="sd">        :param str new_zp_state: registration version on new player</span>
+<span class="sd">        :param int new_zp_sys_version: Sys setting version to set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">new_zp_sys_version_value</span><span class="o">=</span><span class="n">ACTIVE_ZP_SYS_SET_VER</span> <span class="o">+</span> <span class="n">VERSION_DELTA</span>
+        <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">new_zp_sys_version_value</span><span class="o">=</span><span class="n">ACTIVE_ZP_SYS_SET_VER</span> <span class="o">-</span> <span class="n">VERSION_DELTA</span>
+        <span class="p">(</span><span class="n">active_cid</span><span class="p">,</span> <span class="n">new_cid</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">setup_zps_for_test_same_cust_id</span><span class="p">(</span>
+                                    <span class="n">new_zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">,</span>
+                                    <span class="n">new_zp_state</span><span class="o">=</span><span class="n">new_zp_state</span><span class="p">,</span>
+                                    <span class="n">new_zp_sys_version</span><span class="o">=</span><span class="n">new_zp_sys_version_value</span><span class="p">,</span>
+                                    <span class="n">hh_zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span>
+                                    <span class="n">hh_zp_state</span><span class="o">=</span><span class="n">active_zp_state</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bring_zp_out_of_closet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_sys_settings</span><span class="p">()</span>
+        <span class="c1"># manually check each permutation until more efficient option is</span>
+        <span class="c1"># available</span>
+        <span class="n">exp_reg_state</span> <span class="o">=</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">active_zp_state</span><span class="o">==</span><span class="n">UNREGISTERED</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">UNREGISTERED</span><span class="p">:</span>
+                <span class="c1"># no action, all shows reg state = 1</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># HH gets legacy registered</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+
+        <span class="k">elif</span> <span class="n">active_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">UNREGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE: cert is kept on new</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+        <span class="k">elif</span> <span class="n">active_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">UNREGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE the active player keeps certs</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">UNREGISTERED_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE the active player keeps certs</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_do_verifications</span><span class="p">(</span><span class="n">exp_state_hh_zp</span><span class="o">=</span><span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">],</span>
+                               <span class="n">exp_state_new_zp</span><span class="o">=</span><span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">expected_cust_id</span> <span class="o">=</span> <span class="n">new_cid</span>
+        <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">expected_cust_id</span> <span class="o">=</span> <span class="n">active_cid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">expected_cust_id</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">,</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> :Expect Customer ID to be &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span>
+                                                       <span class="n">expected_cust_id</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SecureRegSysSettingsReplicationTests.test_add_player_to_hh_different_customer_id"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.replication_secure_registration.SecureRegSysSettingsReplicationTests.test_add_player_to_hh_different_customer_id">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_active_and_new_zp_state_different_cust_id&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_add_player_to_hh_different_customer_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                    <span class="n">active_zp_state</span><span class="p">,</span>
+                                                    <span class="n">new_zp_state</span><span class="p">,</span>
+                                                    <span class="n">new_zp_sys_version</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test cases where the new player being brought out closet as same</span>
+<span class="sd">        HHID but differnt R_CustomerID</span>
+<span class="sd">        :param str active_zp_state: registration version on active player</span>
+<span class="sd">        :param str new_zp_state: registration version on new player</span>
+<span class="sd">        :param int new_zp_sys_version: Sys setting version to set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">new_zp_sys_version_value</span> <span class="o">=</span> <span class="n">ACTIVE_ZP_SYS_SET_VER</span> <span class="o">+</span> <span class="n">VERSION_DELTA</span>
+        <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">new_zp_sys_version_value</span> <span class="o">=</span> <span class="n">ACTIVE_ZP_SYS_SET_VER</span> <span class="o">-</span> <span class="n">VERSION_DELTA</span>
+        <span class="p">(</span><span class="n">active_cid</span><span class="p">,</span> <span class="n">new_cid</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">setup_zps_for_test_different_cust_id</span><span class="p">(</span>
+                                    <span class="n">new_zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">,</span>
+                                    <span class="n">new_zp_state</span><span class="o">=</span><span class="n">new_zp_state</span><span class="p">,</span>
+                                    <span class="n">new_zp_sys_version</span><span class="o">=</span><span class="n">new_zp_sys_version_value</span><span class="p">,</span>
+                                    <span class="n">hh_zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span>
+                                    <span class="n">hh_zp_state</span><span class="o">=</span><span class="n">active_zp_state</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bring_zp_out_of_closet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">new_zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_sys_settings</span><span class="p">()</span>
+        <span class="c1"># manually check each permutation until more efficient option is</span>
+        <span class="c1"># available</span>
+        <span class="n">exp_reg_state</span> <span class="o">=</span> <span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">active_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># cert is kept!!!!!!! on new</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+        <span class="k">elif</span> <span class="n">active_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">LEGACY_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE the active player keeps certs</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+            <span class="k">elif</span> <span class="n">new_zp_state</span><span class="o">==</span><span class="n">SECURE_REGISTERED</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE the active player keeps certs</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+                    <span class="c1"># NOTE the new player keeps certs</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">SECURE_REG_STATE</span>
+                    <span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">]</span> <span class="o">=</span> <span class="n">LEGACY_REG_STATE</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_do_verifications</span><span class="p">(</span><span class="n">exp_state_hh_zp</span><span class="o">=</span><span class="n">exp_reg_state</span><span class="p">[</span><span class="n">ACTIVE_ZP</span><span class="p">],</span>
+                               <span class="n">exp_state_new_zp</span><span class="o">=</span><span class="n">exp_reg_state</span><span class="p">[</span><span class="n">NEW_ZP</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">GREATER_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">expected_cust_id</span> <span class="o">=</span> <span class="n">new_cid</span>
+        <span class="k">elif</span> <span class="n">new_zp_sys_version</span><span class="o">==</span><span class="n">LESS_THAN_ACTIVE</span><span class="p">:</span>
+            <span class="n">expected_cust_id</span> <span class="o">=</span> <span class="n">active_cid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">expected_cust_id</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">,</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> :Expect Customer ID to be &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hh_zp</span><span class="p">,</span>
+                                                       <span class="n">expected_cust_id</span><span class="p">))</span></div></div>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">SecureRegSysSettingsReplicationTests</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span>
+               <span class="n">SecureRegSysSettingsReplicationTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,552 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>voice.voice_end_to_end.voice_arbitration &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for voice.voice_end_to_end.voice_arbitration</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="k">import</span> <span class="n">Event</span>
+
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">voice_util.voice_overlay</span> <span class="k">import</span> <span class="n">VoiceOverlay</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.voice.constants</span> <span class="k">import</span> <span class="n">VoiceServices</span><span class="p">,</span> <span class="n">VoiceNicknames</span>
+
+<span class="n">NAS_VOICETAP_PATH</span> <span class="o">=</span> <span class="s2">&quot;/Automation/voicetap/alexa_tests/arbitration/&quot;</span>
+<span class="n">VOICETAP_FILE</span> <span class="o">=</span> <span class="s1">&#39;alexa_whats_the_weather.raw&#39;</span>
+<span class="n">VOICETAP_FILE_LOW_ENERGY</span> <span class="o">=</span> <span class="s1">&#39;alexa_whats_the_weather_noise_pink_00400.raw&#39;</span>
+<span class="n">VOICETAP_RAW_FILES</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">VOICETAP_FILE</span><span class="p">,</span> <span class="n">VOICETAP_FILE_LOW_ENERGY</span><span class="p">)</span>
+<span class="n">DEFAULT_WEB_PORT</span> <span class="o">=</span> <span class="mi">8090</span>
+<span class="n">MIN_VOICE_PLAYERS</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">MOD_LOG_LEVELS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;voictrlr&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
+    <span class="s1">&#39;vcduck&#39;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span>
+    <span class="s1">&#39;voicep&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s1">&#39;voiceupl&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="s1">&#39;avs2&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s1">&#39;extaudiosrc&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="s1">&#39;attenuation&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="s1">&#39;mixer&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">}</span>
+<span class="n">PERCEPTION_DATA_REGEX</span> <span class="o">=</span> <span class="s1">&#39;&quot;voiceEnergy&quot;:(\d+).*&quot;ambientEnergy&quot;:(\d+)&#39;</span>
+
+
+<div class="viewcode-block" id="VoiceArbitrationBase"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase">[docs]</a><span class="k">class</span> <span class="nc">VoiceArbitrationBase</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceArbitrationBase</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span> <span class="o">=</span> <span class="p">[]</span>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.fetch_voicetap_raw_files"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.fetch_voicetap_raw_files">[docs]</a>    <span class="k">def</span> <span class="nf">fetch_voicetap_raw_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">remote_path</span><span class="p">,</span> <span class="n">files</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Retrieves test files from NAS.</span>
+<span class="sd">        :param str remote_path: NAS directory</span>
+<span class="sd">        :param list files: Files for retrieve</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">test_file</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+                <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">remote_path</span> <span class="o">+</span> <span class="n">test_file</span><span class="p">,</span> <span class="n">test_file</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">test_file</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.setup_websrv"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.setup_websrv">[docs]</a>    <span class="k">def</span> <span class="nf">setup_websrv</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up the local web server.</span>
+<span class="sd">        :param str path: Absolute path directory for web server root</span>
+<span class="sd">        Starts web server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span> <span class="o">=</span> <span class="n">path</span> <span class="k">if</span> <span class="n">path</span> <span class="k">else</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="n">DEFAULT_WEB_PORT</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fetch_voicetap_raw_files</span><span class="p">(</span>
+            <span class="n">NAS_VOICETAP_PATH</span><span class="p">,</span> <span class="n">VOICETAP_RAW_FILES</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.setUpFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">playback_device</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">:</span>
+            <span class="n">google_account</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">get_account</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">GOOGLE</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">google_account</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">google_account</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;ACTIVE&quot;</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">set_service_status</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">GOOGLE</span><span class="p">,</span> <span class="s2">&quot;INACTIVE&quot;</span><span class="p">)</span>
+
+            <span class="n">alexa_account</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">get_account</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">AMAZON</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">alexa_account</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">alexa_account</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;INACTIVE&quot;</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">set_service_status</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">AMAZON</span><span class="p">,</span> <span class="s2">&quot;ACTIVE&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sonos_ones</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span> <span class="k">if</span>
+                           <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;S13&#39;</span><span class="p">,</span> <span class="s1">&#39;S18&#39;</span><span class="p">]]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">),</span>
+            <span class="n">MIN_VOICE_PLAYERS</span><span class="p">,</span>
+            <span class="s2">&quot;Required at least two voice enabled players&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_websrv</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span> <span class="o">=</span> <span class="n">MOD_LOG_LEVELS</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zps_with_speech</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">perception_data_reports</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finished_event</span> <span class="o">=</span> <span class="n">Event</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.tearDownFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop WEB server, remove raw files.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="n">audio_file</span><span class="p">)</span> <span class="k">for</span> <span class="n">audio_file</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.start_overlay"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.start_overlay">[docs]</a>    <span class="k">def</span> <span class="nf">start_overlay</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Common method to concurently start the loaded overlay</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">():</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mute_mic</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.start_persistent_log"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.start_persistent_log">[docs]</a>    <span class="k">def</span> <span class="nf">start_persistent_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp_log</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">_playback.log&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%H_%M_%S&quot;</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log_to_file</span><span class="p">(</span><span class="n">zp_log</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">[</span><span class="n">mod</span><span class="p">])</span>
+         <span class="k">for</span> <span class="n">mod</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.stop_persistent_log"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.stop_persistent_log">[docs]</a>    <span class="k">def</span> <span class="nf">stop_persistent_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">mod</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log_to_file</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.cleanup"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.cleanup">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone_players</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Resets the zones back to a known state</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_players</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.setUpTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone_players</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zone_players</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_players</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.tearDownTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone_players</span><span class="p">):</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stop_persistent_log</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_players</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zone_players</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_players</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.cb_speech_started"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.cb_speech_started">[docs]</a>    <span class="k">def</span> <span class="nf">cb_speech_started</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zps_with_speech</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps_with_speech</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="k">if</span> <span class="n">sn</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+                <span class="n">sn</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="s2">&quot;Received expected speech started from &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Received speech started from &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.cb_speech_finished"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.cb_speech_finished">[docs]</a>    <span class="k">def</span> <span class="nf">cb_speech_finished</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">sn</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrWarn</span><span class="p">(</span>
+                <span class="n">sn</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="s2">&quot;Received expected speech finished from &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Received speech finished from &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finished_event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.cb_perception_data"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.cb_perception_data">[docs]</a>    <span class="k">def</span> <span class="nf">cb_perception_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">perception_data_reports</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">perception_data_reports</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">PERCEPTION_DATA_REGEX</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+        <span class="n">energy</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">ambient</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; reports energy=</span><span class="si">{}</span><span class="s2"> ambient=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span> <span class="n">energy</span><span class="p">,</span> <span class="n">ambient</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.watch_speech_started"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.watch_speech_started">[docs]</a>    <span class="k">def</span> <span class="nf">watch_speech_started</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zps_with_speech</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="s2">&quot;SpeechStarted&quot;</span><span class="p">,</span>
+                <span class="k">lambda</span> <span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_speech_started</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">),</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.watch_speech_finished"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.watch_speech_finished">[docs]</a>    <span class="k">def</span> <span class="nf">watch_speech_finished</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">finished_event</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="s2">&quot;SpeechFinished&quot;</span><span class="p">,</span>
+                <span class="k">lambda</span> <span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_speech_finished</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">),</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">sn</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.watch_perception_data"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.watch_perception_data">[docs]</a>    <span class="k">def</span> <span class="nf">watch_perception_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">perception_data_reports</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="s2">&quot;ReportEchoSpatialPerceptionData&quot;</span><span class="p">,</span>
+                <span class="k">lambda</span> <span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="n">zp</span><span class="p">):</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_perception_data</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">),</span> <span class="p">(</span><span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.wait_for_event"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.wait_for_event">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">event</span><span class="o">.</span><span class="n">isSet</span><span class="p">(),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">45</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Failed to receive speech finished event&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.start_overlay_and_verify_results"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.start_overlay_and_verify_results">[docs]</a>    <span class="k">def</span> <span class="nf">start_overlay_and_verify_results</span><span class="p">(</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">zp_to_voice_overlay</span><span class="p">,</span> <span class="n">zp_exp_winner_sn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Starts the loaded overlays concurrently on the voice</span>
+<span class="sd">        players and confirms expected results.</span>
+<span class="sd">        Confirms:</span>
+<span class="sd">        1. Only one player is expected to play the response; this</span>
+<span class="sd">        is confirmed by a player eventing a speech started and speech</span>
+<span class="sd">        finished message. In tests where a specific voice player</span>
+<span class="sd">        is expected to respond, confirm the eventing was generated</span>
+<span class="sd">        by that player.</span>
+<span class="sd">        2. All voice players are expected to generate perception</span>
+<span class="sd">        event that captures the energy and ambient levels of the</span>
+<span class="sd">        raw voice tap file.</span>
+<span class="sd">        :param dict zp_to_voice_overlay: A dictionary of voice</span>
+<span class="sd">        mapped using the zone player object</span>
+<span class="sd">        :param str zp_exp_winner_sn: The serial number of the</span>
+<span class="sd">        expected voice arbitration &quot;winner&quot;. If empty string</span>
+<span class="sd">        only one of the voice players (any) will be the &quot;winner&quot;.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">voice_players</span> <span class="o">=</span> <span class="n">zp_to_voice_overlay</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">start_persistent_log</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">voice_players</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_speech_started</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="n">zp_exp_winner_sn</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_speech_finished</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="n">zp_exp_winner_sn</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_perception_data</span><span class="p">(</span><span class="n">voice_players</span><span class="p">)</span>
+        <span class="c1"># Simultaneously (almost),  unmute</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_overlay</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_event</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">finished_event</span><span class="p">),</span>
+            <span class="s2">&quot;Expect to receive finished event&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">voice_overlay</span> <span class="ow">in</span> <span class="n">zp_to_voice_overlay</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">voice_overlay</span><span class="o">.</span><span class="n">remove_overlay_file</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="mi">1</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zps_with_speech</span><span class="p">,</span>
+            <span class="s2">&quot;Expect only one voice player to play speech&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">voice_players</span><span class="p">),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">perception_data_reports</span><span class="p">,</span>
+            <span class="s2">&quot;Expect all voice players to report perception data&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.arbitration_setup_and_verify"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.arbitration_setup_and_verify">[docs]</a>    <span class="k">def</span> <span class="nf">arbitration_setup_and_verify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">,</span> <span class="n">choose_winner</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirms that only one voice capable player plays the</span>
+<span class="sd">        AVS response utterance when different voice tap</span>
+<span class="sd">        files are used to concurrently start the overlays.</span>
+<span class="sd">        The &quot;winning&quot; voice tap raw file is loaded on the</span>
+<span class="sd">        player that is expected to play the voice response.</span>
+<span class="sd">        The remaining players are loaded with a voice tap raw</span>
+<span class="sd">        file which has lower energy and ambient characteristics</span>
+<span class="sd">        than the &quot;winning&quot; voice tap raw file.</span>
+<span class="sd">        :param list voice_players:</span>
+<span class="sd">        :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param bool choose_winner: Test is expecting a specific voice</span>
+<span class="sd">        capable player to utter speech response</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_to_voice_overlay</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">choose_winner</span><span class="p">:</span>
+            <span class="n">zp_exp_winner</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">voice_players</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Expected voice arbitration winner &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_exp_winner</span><span class="p">))</span>
+            <span class="n">sn_exp_winner</span> <span class="o">=</span> <span class="n">zp_exp_winner</span><span class="o">.</span><span class="n">serialNumber</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">zp_exp_winner</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">sn_exp_winner</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">voice_players</span><span class="p">:</span>
+            <span class="n">voice_overlay</span> <span class="o">=</span> <span class="n">VoiceOverlay</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp_to_voice_overlay</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">voice_overlay</span>
+            <span class="n">uri</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">VOICETAP_FILE_LOW_ENERGY</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">zp</span> <span class="o">==</span> <span class="n">zp_exp_winner</span><span class="p">:</span>
+                <span class="n">uri</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">VOICETAP_FILE</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading URI </span><span class="si">{}</span><span class="s2"> on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uri</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="n">voice_overlay</span><span class="o">.</span><span class="n">load_voicetap</span><span class="p">(</span><span class="n">uri</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_overlay_and_verify_results</span><span class="p">(</span>
+            <span class="n">zp_to_voice_overlay</span><span class="p">,</span> <span class="n">sn_exp_winner</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitrationBase.arbitration_ht_setup_and_verify"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitrationBase.arbitration_ht_setup_and_verify">[docs]</a>    <span class="k">def</span> <span class="nf">arbitration_ht_setup_and_verify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">,</span> <span class="n">choose_winner</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up HT 5.0 with bootleg as satellites and runs</span>
+<span class="sd">        the voice arbitration test</span>
+<span class="sd">        :param tuple ht_config: A tuple of HT zones master and</span>
+<span class="sd">        satellites</span>
+<span class="sd">        :param bool choose_winner: Test is expecting a specific</span>
+<span class="sd">        voice capable player to respond</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span> <span class="o">=</span> <span class="n">ht_config</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">(),</span>
+            <span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; is expected to HT master&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">sat</span> <span class="ow">in</span> <span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                <span class="n">sat</span><span class="o">.</span><span class="n">is_satellite</span><span class="p">(),</span>
+                <span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; is  expected to be satellite&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sat</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">((</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">),</span> <span class="n">choose_winner</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="VoiceArbitration"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration">[docs]</a><span class="k">class</span> <span class="nc">VoiceArbitration</span><span class="p">(</span><span class="n">VoiceArbitrationBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify voice arbitration in the following configurations</span>
+<span class="sd">    1. Voice player stand alone</span>
+<span class="sd">    2. Stereo pairs</span>
+<span class="sd">    3. HT satellite</span>
+<span class="sd">    4. HT master</span>
+<span class="sd">    a) All voice players use the same raw voice tap file</span>
+<span class="sd">    b) One player uses the &quot;winning&quot; raw voice tap file while</span>
+<span class="sd">    the remaining voice players use a &quot;degraded&quot; (lower energy</span>
+<span class="sd">    and ambient level) raw voice tap file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="VoiceArbitration.generate_voice_players"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.generate_voice_players">[docs]</a>    <span class="k">def</span> <span class="nf">generate_voice_players</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">yield</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">,</span></div>
+    <span class="n">generate_voice_players_group</span> <span class="o">=</span> <span class="n">generate_voice_players</span>
+
+<div class="viewcode-block" id="VoiceArbitration.generate_voice_players_stereo_pair"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.generate_voice_players_stereo_pair">[docs]</a>    <span class="k">def</span> <span class="nf">generate_voice_players_stereo_pair</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">pair</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sonos_ones</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">yield</span> <span class="n">pair</span><span class="p">,</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.generate_ht_with_bootleg_sats"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.generate_ht_with_bootleg_sats">[docs]</a>    <span class="k">def</span> <span class="nf">generate_ht_with_bootleg_sats</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">sats</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sonos_ones</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_master_capable_devices</span><span class="p">():</span>
+            <span class="n">ht_config</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">,</span> <span class="n">sats</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">sats</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+            <span class="k">yield</span> <span class="n">ht_config</span><span class="p">,</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_standalone_different"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_standalone_different">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_standalone_different</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance when</span>
+<span class="sd">        all voice capable players are in stand alone mode.</span>
+<span class="sd">        The voice capable player which has loaded the &quot;winning&quot;</span>
+<span class="sd">        raw voice tap file is expected to respond.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_standalone_same"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_standalone_same">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_standalone_same</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance when</span>
+<span class="sd">        all voice capable players are in stand alone mode.</span>
+<span class="sd">        All voice capable players use the same raw voice tap</span>
+<span class="sd">        file and only one is expected to respond.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_stereo_pair_same"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_stereo_pair_same">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players_stereo_pair&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_stereo_pair_same</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stereo_pair</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance on</span>
+<span class="sd">        a stereo pair of voice capable players</span>
+<span class="sd">        Both L and R of the stereo pair use the same raw voice tap</span>
+<span class="sd">        file and only one is expected to respond.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_l</span> <span class="o">=</span> <span class="n">stereo_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">zp_r</span> <span class="o">=</span> <span class="n">stereo_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="n">zp_l</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_stereo_pair</span><span class="p">(</span><span class="n">zp_r</span><span class="p">),</span>
+            <span class="s2">&quot;Created stereo pair L &lt;</span><span class="si">{}</span><span class="s2">&gt; R &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">stereo_pair</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="n">zp_l</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">remove_stereo_pair</span><span class="p">(</span><span class="n">zp_r</span><span class="p">),</span>
+            <span class="s2">&quot;Removed stereo pair L &lt;</span><span class="si">{}</span><span class="s2">&gt; R &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_stereo_pair_different"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_stereo_pair_different">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players_stereo_pair&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_stereo_pair_different</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stereo_pair</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance on</span>
+<span class="sd">        a stereo pair of voice capable players when the L and R</span>
+<span class="sd">        sides are using the same utterance but with different</span>
+<span class="sd">        energy and ambient level characteristics.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_l</span> <span class="o">=</span> <span class="n">stereo_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">zp_r</span> <span class="o">=</span> <span class="n">stereo_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">zp_l</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_stereo_pair</span><span class="p">(</span><span class="n">zp_r</span><span class="p">),</span>
+            <span class="s2">&quot;Created stereo pair L &lt;</span><span class="si">{}</span><span class="s2">&gt; R &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">stereo_pair</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">zp_l</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">remove_stereo_pair</span><span class="p">(</span><span class="n">zp_r</span><span class="p">),</span>
+            <span class="s2">&quot;Removed stereo pair L &lt;</span><span class="si">{}</span><span class="s2">&gt; R &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_group_same"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_group_same">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players_group&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_group_same</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance on</span>
+<span class="sd">        grouped topology. All voice capable players use</span>
+<span class="sd">        the same raw utterance file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">gc</span> <span class="o">=</span> <span class="n">voice_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">voice_players</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_group_different"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_group_different">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_players_group&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_group_different</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voice_players</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm a specific player responds to AVS utterance on</span>
+<span class="sd">        grouped topology. The voice capable players that uses</span>
+<span class="sd">        the higher energy/ambient level should win the arbitration</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">gc</span> <span class="o">=</span> <span class="n">voice_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">voice_players</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_setup_and_verify</span><span class="p">(</span><span class="n">voice_players</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_ht_bootleg_sats_same"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_ht_bootleg_sats_same">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_ht_with_bootleg_sats&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_ht_bootleg_sats_same</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm only one player responds to AVS utterance on</span>
+<span class="sd">        a two satellite voice capable HT config. When the left and right</span>
+<span class="sd">        sides are using the same utterance raw file, only one should</span>
+<span class="sd">        respond to the utterance</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_ht_setup_and_verify</span><span class="p">(</span><span class="n">ht_config</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceArbitration.test_arbitration_ht_bootleg_sats_different"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_arbitration.VoiceArbitration.test_arbitration_ht_bootleg_sats_different">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_ht_with_bootleg_sats&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_arbitration_ht_bootleg_sats_different</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm a specific player responds to AVS utterance on</span>
+<span class="sd">        a two satellite voice capable HT config. When the left and right</span>
+<span class="sd">        sides are using the same utterance but with different</span>
+<span class="sd">        energy and ambient level characteristics, the side that&#39;s using</span>
+<span class="sd">        the higher energy/ambient level should win the arbitration</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arbitration_ht_setup_and_verify</span><span class="p">(</span><span class="n">ht_config</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">VoiceArbitration</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">VoiceArbitration</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,355 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.test_mic_state &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.test_mic_state</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This is a suite of tests for testing the mic state of voice capable</span>
+<span class="sd">devices. This includes toggling mic state, maintaining states across reboots,</span>
+<span class="sd">and state with/without voice accounts configured.</span>
+
+<span class="sd">Questions/concerns: james.park@sonos.com or SYSSW QA</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.voice.amazon.account</span> <span class="k">import</span> <span class="n">PreAuthorizedAmazonVoiceServiceAccount</span>
+
+
+<span class="n">MAX_UPNP_WAIT_TIME</span> <span class="o">=</span> <span class="mi">360</span>  <span class="c1"># borrowed the value for internal.py</span>
+
+
+<span class="k">def</span> <span class="nf">_add_voice_account</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Adds voice account with a pre-authorized account that only works on</span>
+<span class="sd">    PRE_AUTH testbeds. Also confirms if voice account was added successfully.</span>
+<span class="sd">    NOTE: Do not use this if your test is not running on a PRE_AUTH testbed.</span>
+
+<span class="sd">    :param zp: Zone player</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">    :return: Nothing</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create pre auth Amazon account and un-mute mic</span>
+    <span class="n">PreAuthorizedAmazonVoiceServiceAccount</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">_confirm_voice_account</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_confirm_voice_account</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Confirms a voice account exists by checking for the existence of</span>
+<span class="sd">    /jffs/settings/voice.json</span>
+<span class="sd">    This is not a thorough check of a VALID voice account. It merely checks for</span>
+<span class="sd">    the existence of the json file. Since this test only cares about toggling</span>
+<span class="sd">    the mic button and nothing else related to voice, it is usable.</span>
+
+<span class="sd">    :param zp: Zone player</span>
+<span class="sd">    :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">    :return: Nothing</span>
+<span class="sd">    :raises: :exc:AssertionError if ZP does not have the file</span>
+<span class="sd">    voiceaccounts.json</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Using this instead of zp.voice_service.get_account() since it seems flaky</span>
+    <span class="c1"># and we don&#39;t care about validity of voice account. We just want to make</span>
+    <span class="c1"># sure the mic captouch can be toggled</span>
+    <span class="k">assert</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_voice_accounts</span><span class="p">(),</span> <span class="s2">&quot;Voice account does not exist &quot;</span> \
+                                        <span class="s2">&quot;on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="remove_voice_accounts"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.remove_voice_accounts">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">remove_voice_accounts</span><span class="p">(</span><span class="n">voice_capable_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This fixture will remove all voice accounts associated with a player</span>
+<span class="sd">    for the duration of the test. After, it will be added back.</span>
+<span class="sd">    NOTE: This fixture will only work on PRE_AUTH testbeds because the</span>
+<span class="sd">    re-adding of the voice accounts only works on PRE_AUTH.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Setup: Remove voice accounts</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Fixture removing voice account from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">voice_capable_device</span><span class="p">)</span>
+        <span class="p">)</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">remove_all_accounts</span><span class="p">()</span>
+    <span class="k">yield</span>
+    <span class="c1"># Teardown: Add voice accounts back and confirm</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Fixture adding voice account to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">voice_capable_device</span><span class="p">)</span>
+        <span class="p">)</span>
+    <span class="n">_add_voice_account</span><span class="p">(</span><span class="n">voice_capable_device</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="confirm_voice_account"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.confirm_voice_account">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">confirm_voice_account</span><span class="p">(</span><span class="n">voice_capable_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This fixture confirms if a voice capable device has a voice account</span>
+<span class="sd">    configured and configures it if it does not.</span>
+<span class="sd">    NOTE: This fixture will only work on PRE_AUTH testbeds because the</span>
+<span class="sd">    adding of the voice accounts only works on PRE_AUTH.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_voice_accounts</span><span class="p">():</span>
+        <span class="k">pass</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Fixture adding voice account to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">voice_capable_device</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="n">_add_voice_account</span><span class="p">(</span><span class="n">voice_capable_device</span><span class="p">)</span>
+    <span class="k">yield</span></div>
+    <span class="c1"># no tear down</span>
+
+
+<div class="viewcode-block" id="test_no_voice_account"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_no_voice_account">[docs]</a><span class="k">def</span> <span class="nf">test_no_voice_account</span><span class="p">(</span><span class="n">remove_voice_accounts</span><span class="p">,</span>
+                          <span class="n">voice_capable_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that mic is default off with no voice account.</span>
+<span class="sd">    Verify that mic button does nothing with no voice account.</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Check that mic is not on.</span>
+<span class="sd">    2. Check that an attempt to unmute causes a TimeoutError</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Mic should remain &quot;</span> \
+                                <span class="s2">&quot;muted with no voice account configured&quot;</span>
+    <span class="c1"># Confirm attempt to un-mute mic times out</span>
+    <span class="k">with</span> <span class="n">pytest</span><span class="o">.</span><span class="n">raises</span><span class="p">(</span><span class="ne">TimeoutError</span><span class="p">):</span>
+        <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">()</span></div>
+
+
+<span class="c1"># This test seems to fail because the path of voice setup via automation on a</span>
+<span class="c1"># PRE_AUTH testbed seems to have a different path than actually setting up an</span>
+<span class="c1"># account on a bootleg. Keeping it as a stub for now because it is a good test</span>
+<span class="c1"># to have but not sure if it applies to Syssw or is possible in automation.</span>
+<span class="c1"># refresh_voice_account would be a test scoped fixture that removes and adds</span>
+<span class="c1"># a voice account FIXME SWPBL-106415</span>
+<span class="c1">#</span>
+<span class="c1"># def test_voice_account_activate(refresh_voice_account,</span>
+<span class="c1">#                                 voice_capable_device):</span>
+<span class="c1">#     &quot;&quot;&quot;</span>
+<span class="c1">#     Verify that default mic state when voice account is configured is on</span>
+<span class="c1">#     &quot;&quot;&quot;</span>
+<span class="c1">#     for d in voice_capable_device:</span>
+<span class="c1">#         assert d.cli.is_mic_on()</span>
+
+
+<div class="viewcode-block" id="test_mic_toggle"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_mic_toggle">[docs]</a><span class="k">def</span> <span class="nf">test_mic_toggle</span><span class="p">(</span><span class="n">confirm_voice_account</span><span class="p">,</span>
+                    <span class="n">voice_capable_device</span><span class="p">,</span> <span class="n">unmute_mic</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that with a voice account mic button turns on and off the mic</span>
+<span class="sd">    Start in known unmuted state to make sure first test doesn&#39;t pass by</span>
+<span class="sd">    coincidence</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Unmute mic to put in known state.</span>
+<span class="sd">    2. Mute mic and check that it&#39;s muted</span>
+<span class="sd">    3. Unmute mic and check that it&#39;s unmuted</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mute_mic</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failed to mute mic in test on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">voice_capable_device</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Zone m simulated mic &quot;</span> \
+                                <span class="s2">&quot;mute did not turn off the mic.&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failed to unmute mic in test on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">voice_capable_device</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Zone m simulated mic &quot;</span> \
+                                <span class="s2">&quot;un-mute did not turn on the mic.&quot;</span></div>
+
+
+<div class="viewcode-block" id="test_mic_anacapa_shutdown"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_mic_anacapa_shutdown">[docs]</a><span class="k">def</span> <span class="nf">test_mic_anacapa_shutdown</span><span class="p">(</span><span class="n">confirm_voice_account</span><span class="p">,</span>
+                              <span class="n">voice_capable_device</span><span class="p">,</span> <span class="n">unmute_mic</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify when anacapa is down, mic cannot be toggled and remains off</span>
+<span class="sd">    regardless of status before it went down.</span>
+<span class="sd">    Start in known unmuted state to make sure first test doesn&#39;t pass by</span>
+<span class="sd">    coincidence</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Unmute mic to put in a known state</span>
+<span class="sd">    2. Stop anacapa</span>
+<span class="sd">    3. Confirm that mic is not on</span>
+<span class="sd">    4. Confirm that an attempt to unmute causes a TimeoutError</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Mic should be off when&quot;</span> \
+                                                     <span class="s2">&quot;anacapa dies&quot;</span>
+    <span class="k">with</span> <span class="n">pytest</span><span class="o">.</span><span class="n">raises</span><span class="p">(</span><span class="ne">TimeoutError</span><span class="p">):</span>
+        <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">()</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">(</span><span class="n">wait_for_upnp</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                       <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">MAX_UPNP_WAIT_TIME</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_mic_on_anacapa_restart"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_mic_on_anacapa_restart">[docs]</a><span class="k">def</span> <span class="nf">test_mic_on_anacapa_restart</span><span class="p">(</span><span class="n">confirm_voice_account</span><span class="p">,</span>
+                                <span class="n">voice_capable_device</span><span class="p">,</span> <span class="n">unmute_mic</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test to check that mic remains in the on setting across anacapa restart</span>
+<span class="sd">    Start in known unmuted state to make sure first test doesn&#39;t pass by</span>
+<span class="sd">    coincidence</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Unmute mic to put in known state</span>
+<span class="sd">    2. Bounce anacapa and wait for it to come back up</span>
+<span class="sd">    3. Confirm that mic is still unmuted</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Mic did not maintain ON &quot;</span> \
+                                                 <span class="s2">&quot;state across anacapa reset&quot;</span></div>
+
+
+<div class="viewcode-block" id="test_mic_off_anacapa_restart"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_mic_off_anacapa_restart">[docs]</a><span class="k">def</span> <span class="nf">test_mic_off_anacapa_restart</span><span class="p">(</span><span class="n">confirm_voice_account</span><span class="p">,</span>
+                                 <span class="n">voice_capable_device</span><span class="p">,</span> <span class="n">mute_mic</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test to check that mic remains in the off setting across anacapa</span>
+<span class="sd">    restart</span>
+<span class="sd">    Start in known muted state to make sure first test doesn&#39;t pass by</span>
+<span class="sd">    coincidence</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Mute mic to put in known state</span>
+<span class="sd">    2. Bounce anacapa and wait for it to come back up</span>
+<span class="sd">    3. Confirm that mic is still muted</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Mic did not maintain &quot;</span> \
+                                <span class="s2">&quot;OFF state across anacapa reset&quot;</span></div>
+
+
+<div class="viewcode-block" id="test_mic_off_reboot"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_mic_state.test_mic_off_reboot">[docs]</a><span class="k">def</span> <span class="nf">test_mic_off_reboot</span><span class="p">(</span><span class="n">confirm_voice_account</span><span class="p">,</span>
+                        <span class="n">voice_capable_device</span><span class="p">,</span> <span class="n">mute_mic</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test to check that mic remains in the off setting across a reboot.</span>
+<span class="sd">    Purposely not including mic on state reboot because it is mostly covered</span>
+<span class="sd">    in the anacapa reset test and two reboots would increase test</span>
+<span class="sd">    length. It is more important that mics do not turn on automatically</span>
+<span class="sd">    so the off reboot test was chosen.      </span>
+<span class="sd">    Start in known muted state to make sure first test doesn&#39;t pass by</span>
+<span class="sd">    coincidence</span>
+
+<span class="sd">    Test:</span>
+<span class="sd">    1. Mute mic to put in known state</span>
+<span class="sd">    2. Reboot the player and wait for anacapa to come back up</span>
+<span class="sd">    3. Confirm that the mic remained muted</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Rebooting </span><span class="si">{}</span><span class="s2"> to test mic state across reboot&quot;</span><span class="p">,</span>
+                       <span class="n">voice_capable_device</span><span class="p">)</span>
+    <span class="c1"># Reboot and wait for bootup with mic off</span>
+    <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">reboot</span><span class="p">(</span><span class="n">wait_for_upnp</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">voice_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">(),</span> <span class="s2">&quot;Mic should remain &quot;</span> \
+                                                     <span class="s2">&quot;muted across the reboot&quot;</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

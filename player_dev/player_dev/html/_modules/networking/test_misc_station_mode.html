@@ -1,0 +1,418 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.test_misc_station_mode &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.test_misc_station_mode</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">string</span>
+<span class="kn">import</span> <span class="nn">re</span>
+
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="k">import</span> <span class="n">Process</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.client.athconfiglib</span> <span class="k">import</span> <span class="n">Athconfig</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.tools.dumpregs</span> <span class="k">import</span> <span class="n">DumpRegs</span>
+<span class="kn">from</span> <span class="nn">common.networking.packet_capture</span> <span class="k">import</span> <span class="n">PacketCaptureMixin</span>
+<span class="kn">from</span> <span class="nn">common.networking.wireless_mode</span> <span class="k">import</span> <span class="n">WirelessModeMixin</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+
+<span class="n">WIRELESS_CAP_ID</span> <span class="o">=</span> <span class="s1">&#39;mon0&#39;</span>
+<span class="n">WIRELESS_INT_ID</span> <span class="o">=</span> <span class="s1">&#39;wlan0&#39;</span>
+<span class="n">CHANNEL</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">SNIFF_TIME</span> <span class="o">=</span> <span class="mi">60</span>
+
+<span class="n">NULL_10SEC_MIN</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">((</span><span class="n">SNIFF_TIME</span> <span class="o">/</span> <span class="mi">10</span><span class="p">)</span> <span class="o">*</span> <span class="o">.</span><span class="mi">5</span><span class="p">))</span>
+<span class="n">NULL_10SEC_MAX</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">((</span><span class="n">SNIFF_TIME</span> <span class="o">/</span> <span class="mi">10</span><span class="p">)))</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Class to test sonos specific station mode features</span>
+<span class="sd">or station mode features not covered in the OpenWrtInterop suite</span>
+<span class="sd">due to the need of wireless packet sniffer validation</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="MiscStationMode"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode">[docs]</a><span class="k">class</span> <span class="nc">MiscStationMode</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">,</span>
+                      <span class="n">WirelessModeMixin</span><span class="p">,</span>
+                      <span class="n">PacketCaptureMixin</span><span class="p">):</span>
+
+<div class="viewcode-block" id="MiscStationMode.setUpFixture"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zps</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_playback_device_per_platform</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">,</span>
+              <span class="s2">&quot;Test requires at least 2 zone players&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">key_col</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_testbed_has_wireless_ap</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">configure_basic_wireless_network</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="n">CHANNEL</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_ap_wireless_network</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap_bssid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_ap_bssid</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap_eth0_mac</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="s1">&#39;HWaddr ([A-Fa-f0-9:]*)&#39;</span><span class="p">,</span>
+                                      <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">ap_command</span><span class="p">(</span><span class="s1">&#39;ifconfig eth0 | &#39;</span>
+                                                         <span class="s1">&#39;grep HWaddr&#39;</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_wireless_credentials</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_station_mode</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="n">ssid_hex</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_ap_ssid</span><span class="p">()</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s1">&#39;hex&#39;</span><span class="p">)</span>
+        <span class="n">create_nfwssidtxt_cmd</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;echo -e </span><span class="se">\&#39;</span><span class="s2">Version: [1.0]</span><span class="se">\\</span><span class="s2">nNFWSSID: &quot;</span>
+                                 <span class="s2">&quot;[</span><span class="si">{}</span><span class="s2">]</span><span class="se">\&#39;</span><span class="s2"> &gt; /jffs/nfwssid.txt&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ssid_hex</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="n">Athconfig</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+            <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">create_nfwssidtxt_cmd</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Installing dumpregs utility on DUT zcs.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="n">DumpRegs</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">install</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;sh4&#39;</span><span class="p">,</span> <span class="s1">&#39;connect&#39;</span><span class="p">,</span> <span class="s1">&#39;connectx&#39;</span><span class="p">,</span> <span class="s1">&#39;ppc&#39;</span><span class="p">]:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="mi">5</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="mi">4</span></div>
+
+<div class="viewcode-block" id="MiscStationMode.tearDownFixture"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_testbed_to_wired_sonosnet_mode</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_wireless_credentials</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+  
+<div class="viewcode-block" id="MiscStationMode.tearDownTest"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">remove_wire</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span><span class="n">zp</span><span class="o">.</span><span class="n">wait_for_station_mode</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">clear_and_discover_devices</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">wait_for_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MiscStationMode.test_encrypt_keys_basic"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.test_encrypt_keys_basic">[docs]</a>    <span class="k">def</span> <span class="nf">test_encrypt_keys_basic</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This test verifies the following encryption key properties on</span>
+<span class="sd">        a zp given the output of dumpregs on each dut ZP:</span>
+<span class="sd">        1. Since the dut zps are in station mode with ap configured</span>
+<span class="sd">        for wpa2 psk aes by default, key slot 4 should have mac of ap</span>
+<span class="sd">        with AES-CCM as key type</span>
+<span class="sd">        2. key slots 0-3 are reserved for GTK from the AP</span>
+<span class="sd">        3. key slots 5 until the end are reserved for direct routed</span>
+<span class="sd">        sonos peers and they should be the same key for all peers</span>
+<span class="sd">        since they are in the same HH.</span>
+<span class="sd">        4. all encryption keys are hexidecimal and 8 bytes long</span>
+<span class="sd">        5. inherent in checking for points 1-4, we verify that</span>
+<span class="sd">        there is some key in slots 0-4 for station mode capable zps.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;====== Verifying </span><span class="si">{}</span><span class="s2"> DUT&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">modelName</span><span class="p">))</span>
+            <span class="n">peers</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">peer</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                         <span class="k">for</span> <span class="n">peer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span> <span class="k">if</span> <span class="n">peer</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">zc</span><span class="p">])</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">get_dump_regs</span><span class="p">(</span><span class="n">option</span><span class="o">=</span><span class="s1">&#39;-k&#39;</span><span class="p">))</span>
+            <span class="n">keys_0_3</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="mi">4</span><span class="p">]]</span>
+            <span class="n">s</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+            <span class="n">duplicates</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">x</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">keys_0_3</span> <span class="k">if</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">s</span> <span class="ow">or</span> <span class="n">s</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">x</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_bssid</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                                       <span class="n">res</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                                       <span class="s2">&quot;Verify mac of ap in slot index 4&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="s2">&quot;AES-CCM&quot;</span><span class="p">,</span>
+                                       <span class="n">res</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">3</span><span class="p">],</span>
+                                       <span class="s2">&quot;Verify encryption type &quot;</span>
+                                       <span class="s2">&quot;in ptk slot index 4&quot;</span><span class="p">)</span>
+            <span class="n">res_index</span> <span class="o">=</span> <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/ath_rincon/station |&#39;</span>
+                                 <span class="s1">&#39; grep &quot;type: AES&quot;&#39;</span><span class="p">)</span>
+            <span class="n">gtk_index_used</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="s1">&#39;GTKState([0,1,2,3])&#39;</span><span class="p">,</span> <span class="n">res_index</span><span class="p">)))</span>
+            <span class="k">for</span> <span class="n">gtk</span> <span class="ow">in</span> <span class="n">gtk_index_used</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">gtk</span><span class="p">)]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]],</span>
+                                           <span class="n">duplicates</span><span class="p">,</span>
+                                           <span class="s2">&quot;Verify GTK is unique&quot;</span><span class="p">)</span>
+            <span class="n">actual_peers</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">[</span><span class="mi">5</span><span class="p">:]])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">peers</span><span class="p">,</span>
+                                       <span class="n">actual_peers</span><span class="p">,</span>
+                                       <span class="s2">&quot;Verify key slot entry for each expected peer.&quot;</span><span class="p">)</span>
+            <span class="n">peers_keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">[</span><span class="mi">5</span><span class="p">:]])</span>
+            <span class="n">all_keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;-&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span>
+                                       <span class="nb">len</span><span class="p">(</span><span class="n">peers_keys</span><span class="p">),</span>
+                                       <span class="s2">&quot;Verify all peers have the same encryption key.&quot;</span><span class="p">)</span>
+            <span class="n">peers_key_type</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">3</span><span class="p">]</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">[</span><span class="mi">5</span><span class="p">:]])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="nb">set</span><span class="p">([</span><span class="s2">&quot;AES-CCM&quot;</span><span class="p">]),</span>
+                                       <span class="n">peers_key_type</span><span class="p">,</span>
+                                       <span class="s2">&quot;Verify all peers have AES-CCM encryption key type.&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">all_keys</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="nb">all</span><span class="p">(</span><span class="n">c</span> <span class="ow">in</span> <span class="n">string</span><span class="o">.</span><span class="n">hexdigits</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">key</span><span class="p">),</span>
+                                          <span class="s2">&quot;verify encryption key </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                                          <span class="s2">&quot;is hexidecimal&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">key</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span>
+                                           <span class="nb">len</span><span class="p">(</span><span class="n">key</span><span class="p">),</span>
+                                           <span class="s2">&quot;Verify encryption key </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                                           <span class="s2">&quot;is 8 byes long&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">key</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MiscStationMode.test_encrypted_data_ap"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.test_encrypted_data_ap">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zps&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_encrypted_data_ap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to validate the proper bits set in the encrypted</span>
+<span class="sd">        data frames sent to an AP:</span>
+<span class="sd">        - ZP sends encrypted data to AP with fc protected bit set</span>
+<span class="sd">        - ZP sends encrypted data to AP with wep key id 0 in 802.11 header</span>
+<span class="sd">        - initialization vector is incremented per frame for non-tries</span>
+<span class="sd">        - When ZP disconnects from the AP, the PTK and GTK keys entries</span>
+<span class="sd">        are reset</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_data_encrypt_test</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span>
+                                         <span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                         <span class="n">CHANNEL</span><span class="p">,</span>
+                                         <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;ath0&#39;</span><span class="p">),</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">ap_eth0_mac</span><span class="p">,</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">ap_info</span><span class="p">[</span><span class="s1">&#39;ip&#39;</span><span class="p">],</span>
+                                         <span class="n">ping_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                         <span class="n">ping_size</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>
+                                         <span class="n">sniff_time</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                         <span class="n">key_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                         <span class="n">wlan_fc_ds</span><span class="o">=</span><span class="s1">&#39;0x01&#39;</span><span class="p">)</span>
+        <span class="n">res_before</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">get_dump_regs</span><span class="p">(</span><span class="n">option</span><span class="o">=</span><span class="s1">&#39;-k&#39;</span><span class="p">))[:</span><span class="mi">5</span><span class="p">]</span>
+        <span class="n">ptk_before</span> <span class="o">=</span> <span class="n">res_before</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/ath_rincon/station |&#39;</span>
+                                 <span class="s1">&#39; grep &quot;type: AES&quot;&#39;</span><span class="p">)</span>
+        <span class="n">gtk_index_used</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="s1">&#39;GTKState([0,1,2,3])&#39;</span><span class="p">,</span> <span class="n">res</span><span class="p">)))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">add_wire</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+            <span class="n">res_after</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">get_dump_regs</span><span class="p">(</span><span class="n">option</span><span class="o">=</span><span class="s1">&#39;-k&#39;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="s1">&#39;00:00:00:00:00:00&#39;</span><span class="p">,</span>
+                                       <span class="n">res_after</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                                       <span class="s2">&quot;Verify AP  mac in slot index 4 is cleared&quot;</span><span class="p">)</span>
+            <span class="n">ptk_after</span> <span class="o">=</span> <span class="n">res_after</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span><span class="n">ptk_before</span><span class="p">,</span>
+                                          <span class="n">ptk_after</span><span class="p">,</span>
+                                          <span class="s2">&quot;Verify AP PTK is reset&quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">gtk</span> <span class="ow">in</span> <span class="n">gtk_index_used</span><span class="p">:</span>
+                <span class="n">gtk_before</span> <span class="o">=</span> <span class="n">res_before</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">gtk</span><span class="p">)]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                <span class="n">gtk_after</span> <span class="o">=</span> <span class="n">res_after</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">gtk</span><span class="p">)]</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="bp">self</span><span class="o">.</span><span class="n">key_col</span><span class="p">[</span><span class="n">zc</span><span class="p">]]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span><span class="n">gtk_before</span><span class="p">,</span>
+                                              <span class="n">gtk_after</span><span class="p">,</span>
+                                              <span class="s2">&quot;Verify AP GTK is reset&quot;</span><span class="p">)</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">remove_wire</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="MiscStationMode.test_encrypted_data_peer"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.test_encrypted_data_peer">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zps&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_encrypted_data_peer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to validate the proper bits set in the encrypted</span>
+<span class="sd">        data frames sent to a zc peer in the same HH:</span>
+<span class="sd">        - ZP sends encrypted data to peer with fc protected bit set</span>
+<span class="sd">        - ZP sends encrypted data to peer with wep key id 2 in 802.11 header</span>
+<span class="sd">        - initialization vector is incremented per frame for non-tries</span>
+<span class="sd">        - When peer is removed from bridge table, peer encryption key is</span>
+<span class="sd">        removed as well.</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># get some other peer that is not the dut zc</span>
+        <span class="n">peer</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">zc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_data_encrypt_test</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span>
+                                         <span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                         <span class="n">CHANNEL</span><span class="p">,</span>
+                                         <span class="n">zc</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="p">,</span>
+                                         <span class="n">peer</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="p">,</span>
+                                         <span class="n">peer</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+                                         <span class="n">ping_count</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                         <span class="n">ping_size</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>
+                                         <span class="n">sniff_time</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                         <span class="n">key_id</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                                         <span class="n">wlan_fc_ds</span><span class="o">=</span><span class="s1">&#39;0x00&#39;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">peer_mac</span> <span class="o">=</span> <span class="n">peer</span><span class="o">.</span><span class="n">direct_routing_mac_address</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">disable_zones</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">peer</span><span class="p">])</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="mi">45</span><span class="p">)</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dumpregs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">get_dump_regs</span><span class="p">(</span><span class="n">option</span><span class="o">=</span><span class="s1">&#39;-k&#39;</span><span class="p">))</span>
+            <span class="n">active_peers</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">res</span><span class="p">[</span><span class="mi">5</span><span class="p">:]])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">peer_mac</span><span class="p">,</span>
+                                       <span class="n">active_peers</span><span class="p">,</span>
+                                       <span class="s2">&quot;Verify key has been removed for peer that is gone&quot;</span><span class="p">)</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enable_zones</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">peer</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="MiscStationMode.test_null_10s"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.test_null_10s">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zps&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_null_10s</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to validate that the station mode zp sends a</span>
+<span class="sd">        null function packet every 10 seconds to keep</span>
+<span class="sd">        alive connection to AP.</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">output_file</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_null_10s.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">modelName</span><span class="p">)</span>
+        <span class="n">bpf_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;ath0&#39;</span><span class="p">))</span>
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;wlan.fc.type_subtype == 0x0024 and &quot;</span>
+                          <span class="s2">&quot;!(wlan.fc.retry == 1) and &quot;</span>
+                          <span class="s2">&quot;wlan.da == </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_bssid</span><span class="p">))</span>
+        <span class="n">verify_msg</span> <span class="o">=</span> <span class="s2">&quot;Verify null packet sent every 10 secs for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_sniffer_test</span><span class="p">(</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span> <span class="n">CHANNEL</span><span class="p">,</span>
+                                    <span class="n">output_file</span><span class="p">,</span> <span class="n">bpf_filter</span><span class="p">,</span>
+                                    <span class="n">display_filter</span><span class="p">,</span>
+                                    <span class="n">NULL_10SEC_MIN</span><span class="p">,</span>
+                                    <span class="n">NULL_10SEC_MAX</span><span class="p">,</span>
+                                    <span class="n">verify_msg</span><span class="p">,</span> <span class="n">SNIFF_TIME</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MiscStationMode.test_nfwssid_deauth_at_bootup"><a class="viewcode-back" href="../../networking.html#networking.test_misc_station_mode.MiscStationMode.test_nfwssid_deauth_at_bootup">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zps&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_nfwssid_deauth_at_bootup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to validate that a zc will scan for the</span>
+<span class="sd">        ssid specified in its nfwssid.txt during bootup</span>
+<span class="sd">        and send a deauth to it.</span>
+<span class="sd">        Need to test this for station mode and sonosnet</span>
+<span class="sd">        mode bootup.</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">output_file</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_reboot.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">modelName</span><span class="p">)</span>
+        <span class="n">bpf_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;ath0&#39;</span><span class="p">))</span>
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;(wlan.fc.type_subtype == 0x0024 and &quot;</span>
+                          <span class="s2">&quot;wlan.da == </span><span class="si">{}</span><span class="s2">) and &quot;</span>
+                          <span class="s2">&quot;(wlan.fc.type_subtype == 0x000c or &quot;</span>
+                          <span class="s2">&quot;wlan.fc.type_subtype == 0x000a&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_bssid</span><span class="p">))</span>
+        <span class="n">verify_msg</span> <span class="o">=</span> <span class="s2">&quot;Verify deauth sent at bootup for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">(</span><span class="n">wait</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_sniffer_test</span><span class="p">(</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span> <span class="n">CHANNEL</span><span class="p">,</span>
+                                    <span class="n">output_file</span><span class="p">,</span> <span class="n">bpf_filter</span><span class="p">,</span>
+                                    <span class="n">display_filter</span><span class="p">,</span>
+                                    <span class="mi">1</span><span class="p">,</span>
+                                    <span class="mi">2</span><span class="p">,</span>
+                                    <span class="n">verify_msg</span><span class="p">,</span>
+                                    <span class="n">timeout</span><span class="o">=</span><span class="mi">150</span><span class="p">)</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">enable</span><span class="p">()</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">wait_for_sonosnet_mode</span><span class="p">()</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">(</span><span class="n">wait</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_sniffer_test</span><span class="p">(</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span> <span class="n">CHANNEL</span><span class="p">,</span>
+                                    <span class="n">output_file</span><span class="p">,</span> <span class="n">bpf_filter</span><span class="p">,</span>
+                                    <span class="n">display_filter</span><span class="p">,</span>
+                                    <span class="mi">1</span><span class="p">,</span>
+                                    <span class="mi">2</span><span class="p">,</span>
+                                    <span class="n">verify_msg</span><span class="p">,</span>
+                                    <span class="n">timeout</span><span class="o">=</span><span class="mi">150</span><span class="p">)</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">disable</span><span class="p">()</span>
+        <span class="n">zc</span><span class="o">.</span><span class="n">wait_for_station_mode</span><span class="p">()</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">MiscStationMode</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">fixtures</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  <li><a href="../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,698 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.reporting.event_reporting &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.reporting.event_reporting</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">random</span>
+
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">DynamicPOSTHandler</span><span class="p">,</span> <span class="n">LocalShareServer</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">XMLAccessor</span><span class="p">,</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.usage_metrics</span> <span class="k">import</span> <span class="n">UsageMetrics</span><span class="p">,</span> <span class="n">PlayerReports</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span><span class="p">,</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.anacapa_trace</span> <span class="k">import</span> <span class="n">AnacapaTraceLogInspector</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.avtransport</span> <span class="k">import</span> <span class="n">AVTransportStateTransitionTimer</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+
+<span class="n">CONTINUOUS_PLAYING_SEC</span> <span class="o">=</span> <span class="mf">5.0</span>
+<span class="n">TRANSITION_TO_PLAYING_SEC</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="n">MSG</span> <span class="o">=</span> <span class="s2">&quot;&lt;usagemetrics,0&gt; Initializing reporting interval to (?:\d+)\. r=(?:\d+),c=(?:\d+)&quot;</span>
+<span class="n">PERF_URL</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:1400/status/perf&#39;</span>
+<span class="c1"># System properties report tracking variable</span>
+<span class="c1"># Possible values are &quot;Report&quot; or &quot;NoReport&quot;</span>
+<span class="c1"># or the variable may not exist</span>
+<span class="n">UMTRACKING</span> <span class="o">=</span> <span class="s2">&quot;UMTracking&quot;</span>
+<span class="n">AUDIO_TRACKS</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;MaggieFarm.mp3&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm.wav&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm.flac&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm.aiff&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm_HEAAC.mp4&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm_ALAC.m4a&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm_AAC.mp4&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm.wma&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;MaggieFarm.ogg&#39;</span><span class="p">)</span>
+<span class="n">AUDIO_TRACKS_PATH</span> <span class="o">=</span> <span class="s1">&#39;/Automation/cpu/MaggieFarm/&#39;</span>
+<span class="n">AUDIO_WEB_PORT</span> <span class="o">=</span> <span class="mi">8095</span>
+
+
+<div class="viewcode-block" id="EventReporting"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting">[docs]</a><span class="k">class</span> <span class="nc">EventReporting</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base class that implements common methods in the event reporting</span>
+<span class="sd">    suites.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Override O_EVENTMETRICS_URL</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span> <span class="o">=</span> <span class="s2">&quot;O_EVENTMETRICS_URL&quot;</span>
+    <span class="n">TEMPERATURE_REPORT_URL_OVERRIDE_NAME</span> <span class="o">=</span> <span class="s2">&quot;O_TEMPERATURE_REPORTING_INTERVAL&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Defined in all/oc/zone/zoneplayer/zp.cxx</span>
+<span class="sd">    as DEFAULT_TEMPERATURE_REPORTING_INTERVAL_STRING</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">DEFAULT_TEMPERATURE_REPORT_INTERVAL</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">EVENTMETRICS_URL_OVERRIDE_VALUE</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/metrics&quot;</span>
+    <span class="n">REPORTING_INTERVAL_MSG</span> <span class="o">=</span> <span class="s2">&quot;Initializing reporting interval to&quot;</span>
+    <span class="n">REPORTING_DIAG_LEVEL</span> <span class="o">=</span> <span class="s2">&quot;reporting&quot;</span>
+    <span class="n">BUTTONS_DIAG_LEVEL</span> <span class="o">=</span> <span class="s2">&quot;buttons&quot;</span>
+    <span class="n">CHSRC_DIAG_LEVEL</span> <span class="o">=</span> <span class="s2">&quot;chsrc&quot;</span>
+    <span class="n">FLUSH_EVENTS_DIAG_LEVEL</span> <span class="o">=</span> <span class="s2">&quot;zonereportmgr&quot;</span>
+    <span class="n">USAGE_METRICS_DIAG_LEVEL</span> <span class="o">=</span> <span class="s2">&quot;usagemetrics&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                 <span class="n">require_audio</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                 <span class="n">nas_audio_tracks</span><span class="o">=</span><span class="n">AUDIO_TRACKS</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param bool parameterized_setup: This test is parameterized ?</span>
+<span class="sd">        :param bool require_audio: Audio tracks required ?</span>
+<span class="sd">        :param list nas_audio_tracks: List of audio tracks on NAS</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">EventReporting</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">parameterized_setup</span><span class="o">=</span><span class="n">parameterized_setup</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">require_audio</span> <span class="o">=</span> <span class="n">require_audio</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nas_audio_tracks</span> <span class="o">=</span> <span class="n">nas_audio_tracks</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span> <span class="o">=</span> <span class="p">[]</span>
+
+<div class="viewcode-block" id="EventReporting.get_nas_audio_content"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.get_nas_audio_content">[docs]</a>    <span class="k">def</span> <span class="nf">get_nas_audio_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Fetches audio content from NAS</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">nas_audio_tracks</span><span class="p">:</span>
+                <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">AUDIO_TRACKS_PATH</span> <span class="o">+</span> <span class="n">track</span><span class="p">,</span> <span class="n">track</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">track</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.start_web_audio_server"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.start_web_audio_server">[docs]</a>    <span class="k">def</span> <span class="nf">start_web_audio_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Starts serving local audio content</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="n">AUDIO_WEB_PORT</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">getcwd</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="EventReporting.stop_web_audio_content"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.stop_web_audio_content">[docs]</a>    <span class="k">def</span> <span class="nf">stop_web_audio_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stops serving local audio content</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.remove_audio_content"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.remove_audio_content">[docs]</a>    <span class="k">def</span> <span class="nf">remove_audio_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes local audio content</span>
+
+<span class="sd">        :param list tracks: List of track names</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="n">track</span><span class="p">)</span> <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="EventReporting.queue_audio_tracks"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.queue_audio_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">queue_audio_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Queues local audio content on player</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :return: Number of tracks in play queue</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">track_uris</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">track_md</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span><span class="p">:</span>
+            <span class="n">track_uris</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">audio_server</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+                                                    <span class="n">track</span><span class="p">))</span>
+            <span class="n">track_md</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">())</span>
+
+        <span class="n">queued_data</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">AddMultipleURIsToQueue</span><span class="p">(</span>
+            <span class="n">num_uris</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span><span class="p">),</span>
+            <span class="n">uris</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">track_uris</span><span class="p">),</span>
+            <span class="n">metadata</span><span class="o">=</span><span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">track_md</span><span class="p">),</span>
+            <span class="n">container_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="n">container_metadata</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+            <span class="n">track_num</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+            <span class="n">as_next</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">qlen</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">queued_data</span><span class="p">[</span><span class="s1">&#39;NewQueueLength&#39;</span><span class="p">])</span>
+        <span class="k">assert</span> <span class="n">qlen</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">audio_tracks</span><span class="p">),</span> <span class="s2">&quot;Expect tracks in play queue&quot;</span>
+        <span class="k">return</span> <span class="n">qlen</span></div>
+
+<div class="viewcode-block" id="EventReporting.start_queue_playback"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.start_queue_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_queue_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">track_to_play</span><span class="o">=</span><span class="s1">&#39;random&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Queues tracks and starts playback in REPEAT mode</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param int track_to_play: Either a track number or random string</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">qlen</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">queue_audio_tracks</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;REPEAT_ALL&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="c1"># zp.AVTransport.Seek(&#39;TRACK_NR&#39;, random.randint(1, qlen))</span>
+        <span class="c1"># TBF!!! chasing noderx rx buffer full on track 4 ?</span>
+        <span class="c1"># All tests fail when starting with #3, #4</span>
+        <span class="c1"># All tests passed when starting with #5, #6, #7, #1, #2</span>
+        <span class="c1"># TBF!!! chasing &lt;chsnk,0&gt; Old/New packet mismatch</span>
+        <span class="c1">#                &lt;chsnk,0&gt; seamless source change failed (remote)</span>
+        <span class="c1"># when starting with #8</span>
+        <span class="c1">#</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">track_to_play</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">track_to_play</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="ow">or</span> <span class="n">track_to_play</span> <span class="o">&gt;</span> <span class="n">qlen</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Can&#39;t play track </span><span class="si">{}</span><span class="s2"> - &quot;</span>
+                                 <span class="s2">&quot; queue length </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">track_to_play</span><span class="p">,</span>
+                                                           <span class="n">qlen</span><span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Seek</span><span class="p">(</span><span class="s1">&#39;TRACK_NR&#39;</span><span class="p">,</span> <span class="n">track_to_play</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">track_to_play</span> <span class="o">==</span> <span class="s1">&#39;random&#39;</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Seek</span><span class="p">(</span><span class="s1">&#39;TRACK_NR&#39;</span><span class="p">,</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">qlen</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Unsupported keyword </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">track_to_play</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.save_tracking_mode"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.save_tracking_mode">[docs]</a>    <span class="k">def</span> <span class="nf">save_tracking_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Saves the UMTracking value if it exists</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">GetString</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span> <span class="k">as</span> <span class="n">err</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;UPnP error retrieving </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">,</span>
+                                                                   <span class="n">err</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;UMTracking value &#39;</span><span class="si">{}</span><span class="s2">&#39; saved&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="EventReporting.restore_tracking_mode"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.restore_tracking_mode">[docs]</a>    <span class="k">def</span> <span class="nf">restore_tracking_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Restores the UMTracking system properties variable to</span>
+<span class="sd">        its original value. If the value did not exist, it removes</span>
+<span class="sd">        the UMTracking variable from the system properties.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Removing </span><span class="si">{}</span><span class="s2"> variable&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Restoring </span><span class="si">{}</span><span class="s2"> variable to &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">UMTRACKING</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">umtracking_val</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_instantiate_override</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Make the HH use the override setting - once on suite set up</span>
+<span class="sd">        Save tracking variable and set tracking to report.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">save_tracking_mode</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="n">UMTRACKING</span><span class="p">,</span> <span class="sa">u</span><span class="s1">&#39;Report&#39;</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE_VALUE</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">,</span>
+            <span class="n">url</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temperature_report_override</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_remove_override</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove the override from the HH - once on suite tear down</span>
+<span class="sd">        Restores the UMTracking mode variable.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">restore_tracking_mode</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE_NAME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">TEMPERATURE_REPORT_URL_OVERRIDE_NAME</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_devices</span><span class="p">():</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_virtual</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+<div class="viewcode-block" id="EventReporting.temperature_report_override"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.temperature_report_override">[docs]</a>    <span class="k">def</span> <span class="nf">temperature_report_override</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="n">DEFAULT_TEMPERATURE_REPORT_INTERVAL</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given the zone, override or restore the zone&#39;s temperature</span>
+<span class="sd">        reporting interval.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param int interval: The reporting interval in 5 second units</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">TEMPERATURE_REPORT_URL_OVERRIDE_NAME</span><span class="p">,</span>
+            <span class="n">interval</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start the web server.</span>
+<span class="sd">        Make the event metrics URL override persistent.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">umh</span> <span class="o">=</span> <span class="n">UsageMetrics</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">LocalShareServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">handlers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;metrics&#39;</span><span class="p">:</span> <span class="n">DynamicPOSTHandler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">metrics_event_handler</span><span class="p">)})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_devices</span><span class="p">()</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_virtual</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_devices</span><span class="p">():</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_virtual</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">metrics_event_clear</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_str_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_instantiate_override</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">require_audio</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_nas_audio_content</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_web_audio_server</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Restore usage metrics reporting URL, stop the twisted web server.</span>
+<span class="sd">        Clear AVT states on tested zones.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_remove_override</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">require_audio</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_web_audio_content</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">remove_audio_content</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;RenderingControl&#39;</span><span class="p">):</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;AVTransport&#39;</span><span class="p">):</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">REPORTING_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">BUTTONS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">CHSRC_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">FLUSH_EVENTS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">USAGE_METRICS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.clear_watch_str_list"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.clear_watch_str_list">[docs]</a>    <span class="k">def</span> <span class="nf">clear_watch_str_list</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Un-registers all watch strings from  UDP logger for the device</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone component under test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">watch_str</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">watch_str_list</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.watch_diag"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.watch_diag">[docs]</a>    <span class="k">def</span> <span class="nf">watch_diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when UDP logger detects message string match.</span>
+<span class="sd">        :param str msg: Diagnostic string.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="EventReporting.wait_on_diag"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.wait_on_diag">[docs]</a>    <span class="k">def</span> <span class="nf">wait_on_diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits on the diagnostic to be received from the player.</span>
+<span class="sd">        Returns True when diagnostic received or False when the</span>
+<span class="sd">        wait time is exceeded.</span>
+
+<span class="sd">        :param int timeout_seconds: Maximum number of seconds to wait.</span>
+<span class="sd">        :return: True if diagnostic received else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span></div>
+
+<div class="viewcode-block" id="EventReporting.register_diag"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.register_diag">[docs]</a>    <span class="k">def</span> <span class="nf">register_diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Activates a watch in the UDP logger to match the specified string.</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone component under test.</span>
+<span class="sd">        :param str watch_str: The string in the diagnostic to match.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">watch_str</span><span class="p">,</span>
+                                         <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">watch_diag</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_str_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.set_diag_level"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.set_diag_level">[docs]</a>    <span class="k">def</span> <span class="nf">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the diagnostic logging level.</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone component under test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">REPORTING_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">BUTTONS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">CHSRC_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">FLUSH_EVENTS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">USAGE_METRICS_DIAG_LEVEL</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.wait_for_reporting_subsystem"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.wait_for_reporting_subsystem">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_reporting_subsystem</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">inspector</span> <span class="o">=</span> <span class="n">AnacapaTraceLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">inspector</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">MSG</span><span class="p">,</span> <span class="n">timeout</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+<div class="viewcode-block" id="EventReporting.wait_for_reporting_subsystems"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.wait_for_reporting_subsystems">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_reporting_subsystems</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">90</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        For a given list of zones, wait until all zones have initialized</span>
+<span class="sd">        their respective reporting subsystems.</span>
+<span class="sd">        Returns True when all zones have initialized, else False.</span>
+<span class="sd">        :param list zones: List of zones to wait</span>
+<span class="sd">        :param int timeout_seconds: Maximum time in seconds to wait for</span>
+<span class="sd">        all zones to initialize</span>
+<span class="sd">        :return: Have the zones initialized reporting ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_reporting_subsystem</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="n">failed_zones</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span><span class="p">,</span> <span class="n">initialized</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">results</span><span class="p">)</span>
+                        <span class="k">if</span> <span class="ow">not</span> <span class="n">initialized</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">failed_zones</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Zones failed to initialize reporting subsystem &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">failed_zones</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="n">results</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="EventReporting.flush_event_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.flush_event_report">[docs]</a>    <span class="k">def</span> <span class="nf">flush_event_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wrapper to force upload the event metrics report</span>
+<span class="sd">        :param :class:`~sonos.client.internal.SonosZoneComponent` zp: The DUT</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">flush_usage_metrics_events</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.verify_events_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.verify_events_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">verify_events_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">events</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests whether the events are present in the</span>
+<span class="sd">        usage metrics reports.</span>
+
+<span class="sd">        :param tuple events: Events to be verified</span>
+<span class="sd">        :param :class:`~sonos.client.internal.SonosZoneComponent` zp: The DUT</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">find_event_in_reports</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">event</span><span class="p">),</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">180</span><span class="p">,</span>
+                    <span class="n">retry</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">flush_event_report</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Timedout waiting for event </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">event</span><span class="p">))</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+                <span class="k">return</span></div>
+
+<div class="viewcode-block" id="EventReporting.verify_relative_events_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.verify_relative_events_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">verify_relative_events_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">events</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">operator</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests whether the events are present in the</span>
+<span class="sd">        usage metrics reports. This allows an operator to be</span>
+<span class="sd">        used for comparison in case the key&#39;s values are not</span>
+<span class="sd">        exactly known.</span>
+
+<span class="sd">        :param tuple events: Events to be verified</span>
+<span class="sd">        :param str ip: Internet address of device</span>
+<span class="sd">        :param obj operator: Operator</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">find_event_with_relative_value_in_reports</span><span class="p">(</span>
+                <span class="n">ip</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">operator</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">ret</span><span class="p">,</span>
+                <span class="s2">&quot;Expect </span><span class="si">{}</span><span class="s2"> , </span><span class="si">{}</span><span class="s2"> in report event&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">event</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+                    <span class="n">event</span><span class="p">[</span><span class="mi">2</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="EventReporting.flush_and_wait_for_events"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.flush_and_wait_for_events">[docs]</a>    <span class="k">def</span> <span class="nf">flush_and_wait_for_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                  <span class="n">zp</span><span class="p">,</span>
+                                  <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+                                  <span class="n">report_type</span><span class="o">=</span><span class="n">PlayerReports</span><span class="o">.</span><span class="n">USAGE_REPORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Captures the internal depth of events that were captured from</span>
+<span class="sd">        the player, flushes the player&#39;s event buffer and waits for</span>
+<span class="sd">        at least one event report of the specified type to be received.</span>
+<span class="sd">        Defaults to wait for usage metrics report.</span>
+<span class="sd">        Returns True if the report type has been received, False if the</span>
+<span class="sd">        specified timeout has been exceeded.</span>
+<span class="sd">        :param :class:`~sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param int timeout_seconds: Maximum number of seconds to wait</span>
+<span class="sd">        for player to send event report</span>
+<span class="sd">        :param: class:`PlayerReports` report_type: Report</span>
+<span class="sd">        :return: True if received event else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">current</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">metrics_event_depth</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Current internal metrics queue depth </span><span class="si">{}</span><span class="s2"> on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">current</span><span class="p">,</span>
+                                                                     <span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">flush_event_report</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+            <span class="s2">&quot;Flushed reporting events on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">metrics_event_depth</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">current</span> <span class="ow">and</span>
+                         <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">has_report</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="o">=</span><span class="n">report_type</span><span class="p">)),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="EventReporting.wait_for_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.wait_for_report">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="o">=</span><span class="n">PlayerReports</span><span class="o">.</span><span class="n">CONFIG_REPORT</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">90</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for the specified report to arrive from zone using the</span>
+<span class="sd">        specified IP address.</span>
+<span class="sd">        :param str ip: Zone IP address</span>
+<span class="sd">        :param str report_type: Report to wait - default &#39;PlayerConfigReport&#39;</span>
+<span class="sd">        :param int timeout_seconds: Maximum time in seconds to wait</span>
+<span class="sd">        for report arrival.</span>
+<span class="sd">        :return: True if report received from specified zone IP</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">has_report</span><span class="p">(</span><span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="o">=</span><span class="n">report_type</span><span class="p">),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> tardy reporting </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="EventReporting.wait_for_name_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.wait_for_name_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_name_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">count</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for the specified name in the metrics report.</span>
+<span class="sd">        :param str ip: Zone IP address</span>
+<span class="sd">        :param str name: The name of the field in the metrics report</span>
+<span class="sd">        :param int timeout_seconds: Maximum time in seconds to wait</span>
+<span class="sd">        for report arrival.</span>
+<span class="sd">        :param int count: The number of name reports expected to match or</span>
+<span class="sd">        exceed this count.</span>
+<span class="sd">        :return: True if the count of name report(s) received from specified</span>
+<span class="sd">        zone IP matches or exceeeds the expected count.</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Will wait to accumulate </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                          <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> reports from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">count</span><span class="p">,</span>
+                                                      <span class="n">name</span><span class="p">,</span>
+                                                      <span class="n">ip</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">find_names_in_reports</span><span class="p">(</span><span class="n">ip</span><span class="p">,</span> <span class="n">name</span><span class="p">))</span> <span class="o">&gt;=</span> <span class="n">count</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Gave up waiting on name </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                <span class="s2">&quot;from </span><span class="si">{}</span><span class="s2"> with count </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">name</span><span class="p">,</span>
+                                               <span class="n">ip</span><span class="p">,</span>
+                                               <span class="n">count</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="EventReporting.spoof_buttons"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.spoof_buttons">[docs]</a>    <span class="k">def</span> <span class="nf">spoof_buttons</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">function</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">hold_time</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wrapper to spoof buttons.</span>
+
+<span class="sd">        :param obj zp:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param obj function:`object`</span>
+<span class="sd">        :param str watch_str: Diagnostic to monitor for track change</span>
+<span class="sd">        :param int hold_time: Number of milliseconds to hold button.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch_str</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">watch_diag</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_str_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">function</span> <span class="o">==</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_mute</span><span class="p">:</span>
+            <span class="n">function</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">function</span><span class="p">(</span><span class="n">hold_time</span><span class="o">=</span><span class="n">hold_time</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.spoof_track"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.spoof_track">[docs]</a>    <span class="k">def</span> <span class="nf">spoof_track</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">change</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wrapper to spoof a next/previous track.</span>
+
+<span class="sd">        :param obj zp:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str change: String &#39;next&#39; or &#39;previous&#39;</span>
+<span class="sd">        :param str watch_str: Diagnostic to monitor for track change</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch_str</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">watch_diag</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">watch_str_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">spoof_track_changes</span><span class="p">(</span><span class="n">change</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="EventReporting.collect_perf_counters"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.collect_perf_counters">[docs]</a>    <span class="k">def</span> <span class="nf">collect_perf_counters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Collect performance counters from zp</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        :type zp: :class:`~sonos.client.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">perf_log</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">_perf_counters.xml&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span>
+            <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s1">&#39;%H_%M_%S&#39;</span><span class="p">))</span>
+        <span class="n">perf_data</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">getURL</span><span class="p">(</span><span class="n">PERF_URL</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">perf_log</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">perf_data</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Perf counters saved to: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">perf_log</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="EventReporting.verify_continuous_playing_state"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.event_reporting.EventReporting.verify_continuous_playing_state">[docs]</a>    <span class="k">def</span> <span class="nf">verify_continuous_playing_state</span><span class="p">(</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="n">continuous_playing_sec</span><span class="o">=</span><span class="n">CONTINUOUS_PLAYING_SEC</span><span class="p">,</span>
+            <span class="n">transition_to_playing_sec</span><span class="o">=</span><span class="n">TRANSITION_TO_PLAYING_SEC</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm the play state remains PLAYING on zone player during the</span>
+<span class="sd">        required continuous playing interval. Fails test when zone player</span>
+<span class="sd">        transitions out of the PLAYING_STATE during the sampling period.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone player under test</span>
+<span class="sd">        :param float continuous_playing_sec: The number of continuous seconds</span>
+<span class="sd">        to remain in PLAYING_STATE</span>
+<span class="sd">        :param float transition_to_playing_sec: The number of seconds before</span>
+<span class="sd">        sampling the state</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">avts</span> <span class="o">=</span> <span class="n">AVTransportStateTransitionTimer</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="p">)</span>
+        <span class="n">avts</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">continuous_playing_sec</span><span class="p">,</span>
+                   <span class="n">transition_to_playing_sec</span><span class="p">,</span>
+                   <span class="n">user_defined_start_states</span><span class="o">=</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYING_STATE</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="ow">not</span> <span class="n">avts</span><span class="o">.</span><span class="n">state_changed</span><span class="p">,</span>
+            <span class="s2">&quot;Expect AVT state to remain playing for </span><span class="si">{}</span><span class="s2"> seconds of &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">continuous_playing_sec</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()))</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

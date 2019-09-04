@@ -1,0 +1,599 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.acs.test_link_monitor &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.acs.test_link_monitor</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+
+<span class="kn">from</span> <span class="nn">networking.acs.base</span> <span class="k">import</span> <span class="n">AcsWorkflowTestFixure</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.athconfiglib</span> <span class="k">import</span> <span class="n">Athconfig</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.dmesg</span> <span class="k">import</span> <span class="n">DmesgLogInspector</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">INTERFACE_2GHZ</span><span class="p">,</span> <span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="n">SUB</span>
+<span class="kn">from</span> <span class="nn">sonos.configuration_creation</span> <span class="k">import</span> <span class="n">create_ht_51</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">StopRunningTestException</span>
+<span class="kn">from</span> <span class="nn">common.networking.wireless_mode</span> <span class="k">import</span> <span class="n">WirelessModeMixin</span>
+
+<span class="n">LM_SWITCH_MESSAGE</span> <span class="o">=</span> <span class="s1">&#39;acs: LM says to switch channels .*&#39;</span>
+<span class="n">SHORT_DELAY</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">LONG_DELAY</span> <span class="o">=</span> <span class="mi">10</span>
+
+<span class="c1"># experimentally derrived for cb-mcs9-3 in SWPBL-87033</span>
+<span class="n">CONSOLE_DELAYS</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s1">&#39;S9&#39;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s1">&#39;short&#39;</span> <span class="p">:</span> <span class="mf">0.15</span><span class="p">,</span>
+            <span class="s1">&#39;long&#39;</span>  <span class="p">:</span> <span class="mf">0.18</span>
+            <span class="p">},</span>
+        <span class="s1">&#39;S11&#39;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s1">&#39;short&#39;</span> <span class="p">:</span> <span class="mf">0.19</span><span class="p">,</span>
+            <span class="s1">&#39;long&#39;</span>  <span class="p">:</span> <span class="mf">0.20</span>
+            <span class="p">},</span>
+        <span class="s1">&#39;S14&#39;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s1">&#39;short&#39;</span> <span class="p">:</span> <span class="mf">0.20</span><span class="p">,</span>
+            <span class="s1">&#39;long&#39;</span>  <span class="p">:</span> <span class="mf">0.17</span>
+            <span class="p">},</span>
+        <span class="s1">&#39;S16&#39;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s1">&#39;short&#39;</span> <span class="p">:</span> <span class="mf">0.20</span><span class="p">,</span>
+            <span class="s1">&#39;long&#39;</span>  <span class="p">:</span> <span class="mf">0.17</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+<span class="n">SCAN_INTERVAL</span> <span class="o">=</span> <span class="mi">120</span>
+<span class="n">SCAN_TIME</span> <span class="o">=</span> <span class="mi">22</span>
+<span class="n">RANDOM_CM_BIAS</span> <span class="o">=</span> <span class="mi">63</span>
+<span class="n">MASTER_CM_BIAS</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">NUM_MASTERS_IN_SCREENROOM</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">LM_CHANGE_TIME_CM_VARIABILITY</span> <span class="o">=</span> <span class="p">(</span><span class="n">RANDOM_CM_BIAS</span> <span class="o">+</span>
+                                 <span class="n">MASTER_CM_BIAS</span> <span class="o">*</span> <span class="n">NUM_MASTERS_IN_SCREENROOM</span><span class="p">)</span>
+<span class="n">LM_BLACKLIST_RETRIES</span> <span class="o">=</span> <span class="mi">10</span>
+
+
+<div class="viewcode-block" id="LinkMonitorTestFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture">[docs]</a><span class="k">class</span> <span class="nc">LinkMonitorTestFixture</span><span class="p">(</span><span class="n">AcsWorkflowTestFixure</span><span class="p">,</span> <span class="n">WirelessModeMixin</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that 5GHz Link Monitor black listing, short and long intervals</span>
+
+<span class="sd">    Likely dropped links/packets can be simulated by</span>
+<span class="sd">    powering devices off,</span>
+<span class="sd">    disabling their radios,</span>
+<span class="sd">    or using swatten to drop frames in SW</span>
+
+<span class="sd">    .. seealso::</span>
+<span class="sd">        QMetry test cases</span>
+<span class="sd">        * `P-9791: Black Listing \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9017&gt;`_</span>
+<span class="sd">        * `P-8522: Short Interval \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9018&gt;`_</span>
+<span class="sd">        * `P-8523: Long Interval \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9019&gt;`_</span>
+
+<span class="sd">    .. note::</span>
+<span class="sd">        Qmetry test cases implicitly verified</span>
+<span class="sd">        * `P-8429: Channel Avialability Check with no radar \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/qmetry/Main.php?do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9007&gt;`_</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Removing this test from the HT_ACS suite. New LM firmware changes</span>
+    <span class="c1"># have &#39;broken&#39; this test. Please see SWPBL-105986 for more details:</span>
+    <span class="c1">#   TEST_TYPE = [&quot;HT_ACS&quot;]</span>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.setUpFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LinkMonitorTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sub</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="n">SUB</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">sub</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sats</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zone</span><span class="p">]</span> <span class="o">=</span> <span class="n">Athconfig</span><span class="p">(</span><span class="n">zone</span><span class="p">)</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">force_serial_cli</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="c1"># make satellites wireless and keep all other devices on to reduce churn</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_wireless_sonosnet_mode</span><span class="p">(</span>
+            <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">,</span>
+            <span class="n">wired_devices</span><span class="o">=</span><span class="p">[</span><span class="n">zone</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zone</span> <span class="ow">not</span> <span class="ow">in</span>
+                           <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.setUpTest"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_and_unbond_masters</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_lm_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reset_nol</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_nol_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_scan_interval</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">SCAN_INTERVAL</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_scan_complete</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">SCAN_TIME</span> <span class="o">+</span> <span class="mi">5</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.tearDownTest"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_wifi_on_sub_and_sats</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_and_unbond_masters</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.tearDownFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_lm_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_nol_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reset_nol</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_scan_interval</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">SCAN_INTERVAL</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_wifi_on_sub_and_sats</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_testbed_to_wired_sonosnet_mode</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">:</span>
+            <span class="n">zc</span><span class="o">.</span><span class="n">force_serial_cli</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_and_unbond_masters</span><span class="p">()</span>
+        <span class="c1"># ensure no subsequent tests are impacted by residual LM channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LinkMonitorTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.stop_and_unbond_masters"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.stop_and_unbond_masters">[docs]</a>    <span class="k">def</span> <span class="nf">stop_and_unbond_masters</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="p">[</span><span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span>
+         <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span> <span class="k">if</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()]</span>
+        <span class="c1"># manually calling this method on wireless satellites in the office has</span>
+        <span class="c1"># taken as long as 220 seconds, don&#39;t fail the link monitor test because</span>
+        <span class="c1"># of this, fail the test_bonded_zones test because of it</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="p">[</span><span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">(</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span> <span class="k">if</span> <span class="n">master</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()]</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s1">&#39;Caught TimeoutError calling cleanup_bonded_configuration </span><span class="si">{}</span><span class="s1">, &#39;</span>
+                <span class="s1">&#39;suspect intermittent high PER between devices, SWPBL-99729 &#39;</span>
+                <span class="s1">&#39;resulting in SWPBL-100069, bounce anacapa on sats to &#39;</span>
+                <span class="s1">&#39;recover&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">message</span><span class="p">))</span>
+            <span class="p">[</span><span class="n">sat</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">bounce_and_wait_anacapa</span><span class="p">()</span> <span class="k">for</span> <span class="n">sat</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">]</span>
+            <span class="p">[</span><span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">(</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span> <span class="k">if</span> <span class="n">master</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()]</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.enable_wifi_on_sub_and_sats"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.enable_wifi_on_sub_and_sats">[docs]</a>    <span class="k">def</span> <span class="nf">enable_wifi_on_sub_and_sats</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper to enable the ath0 radios of all secondary devices</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">enable_interface</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">]</span>
+        <span class="c1"># sleep to avoid intermittent connection state on status page while </span>
+        <span class="c1"># devices come back onto the network</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">30</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zc</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_for_status_page</span><span class="p">(</span><span class="n">wait_timeout</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span>
+         <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.sequentially_disable_wifi_on_sub_and_sats"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.sequentially_disable_wifi_on_sub_and_sats">[docs]</a>    <span class="k">def</span> <span class="nf">sequentially_disable_wifi_on_sub_and_sats</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">interval</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper to handle the short and long interval disable of the</span>
+<span class="sd">        secondary devices of the fixture when bonded and playing on a master&#39;s</span>
+<span class="sd">        5GHz channel</span>
+
+<span class="sd">        short - 3 seconds in a row of at least 20 packet drops in each 1 second</span>
+<span class="sd">            interval and it is threshold 0.</span>
+<span class="sd">        long - 3 10 second intervals containing at least 1 packet drop in each</span>
+<span class="sd">            10 second interval and it is threshold 1.</span>
+
+<span class="sd">        :param interval: the LM interval to trigger via satellite disable</span>
+<span class="sd">        :type interval: :obj:`str`</span>
+<span class="sd">        :param disable: the LM interval to trigger via satellite disable</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># make sure the connection is valid &amp; established to reduce latency</span>
+        <span class="p">[</span><span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;downing ath0 of sats for </span><span class="si">{}</span><span class="s1"> interval&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">interval</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">interval</span> <span class="o">==</span> <span class="s1">&#39;short&#39;</span><span class="p">:</span>
+            <span class="n">delay</span> <span class="o">=</span> <span class="n">SHORT_DELAY</span> <span class="o">-</span> <span class="n">CONSOLE_DELAYS</span><span class="p">[</span><span class="n">master</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">][</span><span class="n">interval</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">delay</span> <span class="o">=</span> <span class="n">LONG_DELAY</span> <span class="o">-</span> <span class="n">CONSOLE_DELAYS</span><span class="p">[</span><span class="n">master</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">][</span><span class="n">interval</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">:</span>
+            <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;ifconfig ath0 down; ifconfig ath0 up&#39;</span><span class="p">,</span>
+                           <span class="n">wait_for_response</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">delay</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.all_ht_devices_on_channel"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.all_ht_devices_on_channel">[docs]</a>    <span class="k">def</span> <span class="nf">all_ht_devices_on_channel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that all devices in the secondary devices of the fixture and the</span>
+<span class="sd">        master are on the same channel</span>
+
+<span class="sd">        :param master: the home theater master to check 5GHz channel against</span>
+<span class="sd">        :type zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param channel: the home theater 5GHz channel to check against the HT</span>
+<span class="sd">            devices</span>
+<span class="sd">        :type channel: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># this is here just to ensure if the sonoszonecomponent key for athconfigs is not broken as experienced durring debug</span>
+        <span class="c1"># master_key = [key for key in self.athconfigs.keys if key.serialNumber == master.serialNumber]</span>
+        <span class="n">channel_set</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zone</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span>
+             <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">]</span> <span class="o">+</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)])</span>
+        <span class="k">if</span> <span class="n">channel</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">channel_set</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">channel</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">channel_set</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.idle_scan_post_lm"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.idle_scan_post_lm">[docs]</a>    <span class="k">def</span> <span class="nf">idle_scan_post_lm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper to manipulate the idle scan of a master after an initial LM</span>
+<span class="sd">        black list to cause a blacklist clearing scan</span>
+
+<span class="sd">        :param master: the home theater master 5GHz channel to check</span>
+<span class="sd">        :type master: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param start_time: time when the first LM event occurs</span>
+<span class="sd">        :type start_time: :obj:`float`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># this is here just to ensure if the sonoszonecomponent key for athconfigs is not broken as experienced durring debug</span>
+        <span class="c1"># master_key = [key for key in self.athconfigs.keys if key.serialNumber == master.serialNumber]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">acs</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_next_idle_scan_to_start</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_scan_complete</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">SCAN_TIME</span> <span class="o">+</span> <span class="mi">5</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.trigger_lm_interval"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.trigger_lm_interval">[docs]</a>    <span class="k">def</span> <span class="nf">trigger_lm_interval</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">interval</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Method to cause the LM blacklist to trigger by disabling satellites</span>
+<span class="sd">        every second, this method does not guarantee a LM blacklist so it will</span>
+<span class="sd">        be called several times by the test method. The CM value prior to the</span>
+<span class="sd">        change does not account for the random CM bias change of 63 that is</span>
+<span class="sd">        applied when the channel change actaully happens. This means the</span>
+<span class="sd">        best CM channel before the change may not be the best CM channel</span>
+<span class="sd">        after the channel change.</span>
+
+<span class="sd">        :param master: the master on which we try to observe a LM blacklist</span>
+<span class="sd">        :type master: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :retruns: the success or failure in triggering the desired LM interval</span>
+<span class="sd">            as well as the channel which experienced the LM event</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># this is here just to ensure if the sonoszonecomponent key for athconfigs is not broken as experienced durring debug</span>
+        <span class="c1"># master_key_ath = [key for key in self.athconfigs.keys() if key.serialNumber == master.serialNumber][0]</span>
+        <span class="c1"># master_key_dmesg = [key for key in self.dmesg_inspectors.keys() if key.serialNumber == master.serialNumber][0]</span>
+        <span class="n">initial_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="n">initial_acs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getacs</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="n">initial_acs_channel_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;dut_ht_master acs_channel_table: </span><span class="se">\n</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">initial_acs_channel_table</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;dut_ht_master wifi/athconfig getacs ath1 before &#39;</span>
+            <span class="s1">&#39;LM switch </span><span class="se">\n</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                <span class="s1">&#39;wifi/athconfig getacs </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">))))</span>
+        <span class="n">dmesg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dmesg_inspectors</span><span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="n">dmesg</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;dut_ht_master last dmesg log entry: </span><span class="se">\n</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                <span class="n">dmesg</span><span class="o">.</span><span class="n">current_marker</span><span class="o">.</span><span class="n">message</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sequentially_disable_wifi_on_sub_and_sats</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">interval</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;dut_ht_master wifi/athconfig getacs ath1 after &#39;</span>
+            <span class="s1">&#39;LM switch </span><span class="se">\n</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                <span class="s1">&#39;wifi/athconfig getacs </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">))))</span>
+        <span class="n">new_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="n">found_lm_log</span> <span class="o">=</span> <span class="n">dmesg</span><span class="o">.</span><span class="n">find_next</span><span class="p">(</span><span class="n">LM_SWITCH_MESSAGE</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">found_lm_log</span><span class="p">:</span>
+            <span class="n">lm_log</span> <span class="o">=</span> <span class="n">dmesg</span><span class="o">.</span><span class="n">current_marker</span><span class="o">.</span><span class="n">message</span>
+            <span class="k">if</span> <span class="n">interval</span> <span class="o">==</span> <span class="s1">&#39;short&#39;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should have black listed </span><span class="si">{}</span><span class="s1"> channel after losing 3 &#39;</span>
+                    <span class="s1">&#39;satellites in 3 seconds&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">master</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should have black listed </span><span class="si">{}</span><span class="s1"> after 3+ frames missed by &#39;</span>
+                    <span class="s1">&#39;satellites over 3, 10 second intervals&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                        <span class="n">master</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">))</span>
+            <span class="n">interval_pattern</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;\d:\d+:\d+&#39;</span><span class="p">)</span>
+            <span class="n">lm_interval</span> <span class="o">=</span> <span class="n">interval_pattern</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">lm_log</span><span class="p">)</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">0</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">lm_short_interval_flag</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+            <span class="n">lm_long_interval_flag</span> <span class="o">=</span> <span class="s1">&#39;1&#39;</span>
+            <span class="n">expected_interval</span> <span class="o">=</span> <span class="p">(</span><span class="n">lm_short_interval_flag</span> <span class="k">if</span>
+                <span class="n">interval</span> <span class="o">==</span> <span class="s1">&#39;short&#39;</span> <span class="k">else</span> <span class="n">lm_long_interval_flag</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">lm_interval</span> <span class="o">!=</span> <span class="n">expected_interval</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">)</span>
+            <span class="n">initial_best_cm_chan</span><span class="p">,</span> <span class="n">initial_second_best_cm_chan</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="nb">str</span><span class="p">(</span><span class="n">chan</span><span class="p">)</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_get_channels_sorted_by_metric</span><span class="p">(</span><span class="n">initial_acs_channel_table</span><span class="p">)[</span><span class="mi">0</span><span class="p">:</span><span class="mi">2</span><span class="p">]]</span>
+            <span class="n">initial_expected_new_channel</span> <span class="o">=</span> <span class="p">(</span><span class="n">initial_second_best_cm_chan</span> <span class="k">if</span>
+                <span class="n">initial_channel</span> <span class="o">==</span> <span class="n">initial_best_cm_chan</span> <span class="k">else</span>
+                <span class="n">initial_best_cm_chan</span><span class="p">)</span>
+            <span class="n">new_acs_channel_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+            <span class="n">new_acs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getacs</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+            <span class="n">new_best_cm_chan</span><span class="p">,</span> <span class="n">new_second_best_cm_chan</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="nb">str</span><span class="p">(</span><span class="n">chan</span><span class="p">)</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_get_channels_sorted_by_metric</span><span class="p">(</span><span class="n">new_acs_channel_table</span><span class="p">)[</span><span class="mi">0</span><span class="p">:</span><span class="mi">2</span><span class="p">]]</span>
+            <span class="n">expected_new_channel</span> <span class="o">=</span> <span class="p">(</span><span class="n">new_second_best_cm_chan</span> <span class="k">if</span>
+                <span class="n">initial_channel</span> <span class="o">==</span> <span class="n">new_best_cm_chan</span> <span class="k">else</span> <span class="n">new_best_cm_chan</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;debug expected channel not found, </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">expected_new_channel</span><span class="p">,</span> <span class="n">initial_acs</span><span class="p">))</span>
+            <span class="n">pre_switch_best_channel_cm_old</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">([</span><span class="n">chan</span><span class="o">.</span><span class="n">cm</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span>
+                <span class="n">initial_acs</span> <span class="k">if</span> <span class="n">chan</span><span class="o">.</span><span class="n">freq</span> <span class="o">==</span> <span class="n">expected_new_channel</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span>
+            <span class="n">pre_switch_best_channel_cm_new</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">([</span><span class="n">chan</span><span class="o">.</span><span class="n">cm</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span>
+                <span class="n">new_acs</span> <span class="k">if</span> <span class="n">chan</span><span class="o">.</span><span class="n">freq</span> <span class="o">==</span> <span class="n">expected_new_channel</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span>
+            <span class="n">best_channel_cm_old</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">([</span><span class="n">chan</span><span class="o">.</span><span class="n">cm</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span> <span class="n">initial_acs</span> <span class="k">if</span>
+                <span class="n">chan</span><span class="o">.</span><span class="n">freq</span> <span class="o">==</span> <span class="n">expected_new_channel</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span>
+            <span class="n">best_channel_cm_new</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">([</span><span class="n">chan</span><span class="o">.</span><span class="n">cm</span> <span class="k">for</span> <span class="n">chan</span> <span class="ow">in</span> <span class="n">new_acs</span> <span class="k">if</span>
+                <span class="n">chan</span><span class="o">.</span><span class="n">freq</span> <span class="o">==</span> <span class="n">expected_new_channel</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> pre-LM switch</span><span class="se">\n</span><span class="s1">initial channel </span><span class="si">{}</span><span class="s1">, changed to </span><span class="si">{}</span><span class="s1"> where &#39;</span>
+                <span class="s1">&#39;pre-LM switch expected new channel is </span><span class="si">{}</span><span class="s1"> via LM </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                <span class="s1">&#39;interval&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">,</span> <span class="n">new_channel</span><span class="p">,</span>
+                    <span class="n">initial_expected_new_channel</span><span class="p">,</span> <span class="n">interval</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> post-LM switch</span><span class="se">\n</span><span class="s1">initial channel </span><span class="si">{}</span><span class="s1">, changed to </span><span class="si">{}</span><span class="s1"> where &#39;</span>
+                <span class="s1">&#39;post-LM switch expected new channel is </span><span class="si">{}</span><span class="s1"> via LM </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                <span class="s1">&#39;interval&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">,</span> <span class="n">new_channel</span><span class="p">,</span>
+                    <span class="n">expected_new_channel</span><span class="p">,</span> <span class="n">interval</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span>
+                <span class="nb">abs</span><span class="p">(</span><span class="n">pre_switch_best_channel_cm_new</span> <span class="o">-</span>
+                    <span class="n">pre_switch_best_channel_cm_old</span><span class="p">),</span>
+                <span class="n">LM_CHANGE_TIME_CM_VARIABILITY</span><span class="p">,</span>
+                <span class="s1">&#39;pre-LM switch best cm channel </span><span class="si">{}</span><span class="s1">, CM pre:</span><span class="si">{}</span><span class="s1">, post:</span><span class="si">{}</span><span class="s1"> switch &#39;</span>
+                <span class="s1">&#39;delta should be less than </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">expected_new_channel</span><span class="p">,</span> <span class="n">pre_switch_best_channel_cm_old</span><span class="p">,</span>
+                    <span class="n">pre_switch_best_channel_cm_new</span><span class="p">,</span>
+                    <span class="n">LM_CHANGE_TIME_CM_VARIABILITY</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span>
+                <span class="nb">abs</span><span class="p">(</span><span class="n">best_channel_cm_new</span> <span class="o">-</span> <span class="n">best_channel_cm_old</span><span class="p">),</span>
+                <span class="n">LM_CHANGE_TIME_CM_VARIABILITY</span><span class="p">,</span>
+                <span class="s1">&#39;post-LM switch best cm channel </span><span class="si">{}</span><span class="s1">, CM pre:</span><span class="si">{}</span><span class="s1">, post:</span><span class="si">{}</span><span class="s1"> switch &#39;</span>
+                <span class="s1">&#39;delta should be less than </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">expected_new_channel</span><span class="p">,</span> <span class="n">best_channel_cm_old</span><span class="p">,</span>
+                    <span class="n">best_channel_cm_new</span><span class="p">,</span> <span class="n">LM_CHANGE_TIME_CM_VARIABILITY</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">expected_new_channel</span> <span class="o">==</span> <span class="n">new_channel</span><span class="p">:</span>
+                <span class="k">return</span> <span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;unsuccessful LM interval, suspect intermittent high PER between &#39;</span>
+            <span class="s1">&#39;devices, SWPBL-99729, attempt to get dmesg and netstartd of &#39;</span>
+            <span class="s1">&#39;master and sats via diag to prove anacapa and networking &#39;</span>
+            <span class="s1">&#39;responsiveness&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">:</span>
+            <span class="n">netif</span> <span class="o">=</span> <span class="s1">&#39;ath0&#39;</span> <span class="k">if</span> <span class="n">zp</span> <span class="o">!=</span> <span class="n">master</span> <span class="k">else</span> <span class="s1">&#39;ath1&#39;</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">((</span>
+                <span class="n">zp</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;dmesg&#39;</span><span class="p">),</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /opt/log/netstartd.log&#39;</span><span class="p">),</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/ath_rincon_</span><span class="si">{}</span><span class="s1">/fullstatus&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">netif</span><span class="p">))))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_fullstatus</span><span class="p">(</span><span class="n">netif</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="n">initial_channel</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LinkMonitorTestFixture.test_link_monitor_intervals_and_black_listing"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_link_monitor.LinkMonitorTestFixture.test_link_monitor_intervals_and_black_listing">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;ht_masters&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_link_monitor_intervals_and_black_listing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut_ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to verify that a ht master is unable to transmit frames to</span>
+<span class="sd">        satellites sequentially each second on after another the ht master&#39;s LM</span>
+<span class="sd">        forces a channel change and removes the black listed channel from the</span>
+<span class="sd">        avialable 5GHz ACS channels list. This is to be verified via dmesg LM</span>
+<span class="sd">        logs, the resulting channel for the ht master and satellites, and the</span>
+<span class="sd">        channels listed in the ACS section of proc/ath_rincon_ath1/fullstatus</span>
+<span class="sd">        on the ht master</span>
+
+<span class="sd">        :param dut_ht_master: the HT  master on which we try to observe a LM</span>
+<span class="sd">            blacklist</span>
+<span class="sd">        :type dut_ht_master: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        Test case to cover:</span>
+<span class="sd">            P-9791: Black Listing</span>
+<span class="sd">            https://qmetry.sonos.com/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9017</span>
+<span class="sd">            P-8522: Short Interval</span>
+<span class="sd">            https://qmetry.sonos.com/Main.php?do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9018</span>
+<span class="sd">            P-8823: Long Interval</span>
+<span class="sd">            https://qmetry.sonos.com/Main.php?do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=9019</span>
+
+<span class="sd">            which are included in the Wifi Driver Re-Factoring Project PFS https://confluence.sonos.com/pages/viewpage.action?pageId=84872410</span>
+
+<span class="sd">            ACS - Automatic channel selection</span>
+<span class="sd">                Link metrics (LM) - switch to best avialable 5GHz channel if</span>
+<span class="sd">                enough HT packets fail TX</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># test short interval</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">dut_ht_master</span><span class="p">]</span> <span class="o">=</span> <span class="n">Athconfig</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dmesg_inspectors</span><span class="p">[</span><span class="n">dut_ht_master</span><span class="p">]</span> <span class="o">=</span> <span class="n">DmesgLogInspector</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">create_ht_51</span><span class="p">([</span><span class="n">dut_ht_master</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">secondary_zones</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> already in 5.1 config from previous iterion &#39;</span>
+                <span class="s1">&#39;prior to @retry&#39;</span><span class="p">)</span>
+        <span class="n">dut_ht_master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">dut_ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_buzzer</span><span class="p">()</span>
+        <span class="n">dut_ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_ht_devices_on_channel</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">success</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">blacklisted_channel</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">attempts</span> <span class="o">=</span> <span class="n">LM_BLACKLIST_RETRIES</span>
+        <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">attempts</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">success</span><span class="p">:</span>
+                <span class="k">pass</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s1">&#39;Attempting to trigger LM short interval, &#39;</span>
+                    <span class="s1">&#39;attempt: </span><span class="si">{}</span><span class="s1"> of </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attempt</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">attempts</span><span class="p">))</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">trigger_lm_interval</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">,</span> <span class="s1">&#39;short&#39;</span><span class="p">)</span>
+                <span class="n">success</span><span class="p">,</span> <span class="n">blacklisted_channel</span> <span class="o">=</span> <span class="n">res</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_wifi_on_sub_and_sats</span><span class="p">()</span>
+        <span class="n">post_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">dut_ht_master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_ht_devices_on_channel</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">,</span> <span class="n">post_channel</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">success</span><span class="p">,</span>
+            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> channel </span><span class="si">{}</span><span class="s1"> should have hit LM blacklist via LM short interval &#39;</span>
+            <span class="s1">&#39;and switched to the next best 5GHz channel after </span><span class="si">{}</span><span class="s1"> attempts &#39;</span>
+            <span class="s1">&#39;disabling satellites&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">dut_ht_master</span><span class="p">,</span> <span class="n">blacklisted_channel</span><span class="p">,</span> <span class="n">attempts</span><span class="p">))</span>
+        <span class="n">post_acs_channels_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">post_acs_freqs</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span><span class="o">.</span><span class="n">frequency</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">post_acs_channels_table</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">blacklisted_channel</span><span class="p">,</span> <span class="n">post_acs_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should be black listed via LM short interval and excluded from &#39;</span>
+            <span class="s1">&#39;5Gz channels list&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">blacklisted_channel</span><span class="p">))</span>
+        <span class="n">short_bl_channel</span> <span class="o">=</span> <span class="n">blacklisted_channel</span>
+        <span class="c1"># test long interval</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_ht_devices_on_channel</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">success</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">blacklisted_channel</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">attempts</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">success</span><span class="p">:</span>
+                <span class="k">pass</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s1">&#39;Attempting to trigger LM long interval, &#39;</span>
+                    <span class="s1">&#39;attempt: </span><span class="si">{}</span><span class="s1"> of </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attempt</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">attempts</span><span class="p">))</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">trigger_lm_interval</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">,</span> <span class="s1">&#39;long&#39;</span><span class="p">)</span>
+                <span class="n">success</span><span class="p">,</span> <span class="n">blacklisted_channel</span> <span class="o">=</span> <span class="n">res</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enable_wifi_on_sub_and_sats</span><span class="p">()</span>
+        <span class="n">initial_lm_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">post_channel</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">dut_ht_master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">all_ht_devices_on_channel</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">,</span> <span class="n">post_channel</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">success</span><span class="p">,</span>
+            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> channel </span><span class="si">{}</span><span class="s1"> should have hit LM blacklist via LM long interval &#39;</span>
+            <span class="s1">&#39;and switched to the next best 5GHz channel after </span><span class="si">{}</span><span class="s1"> attempts &#39;</span>
+            <span class="s1">&#39;disabling satellites&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">dut_ht_master</span><span class="p">,</span> <span class="n">blacklisted_channel</span><span class="p">,</span> <span class="n">attempts</span><span class="p">))</span>
+        <span class="n">post_lm_channels_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">post_lm_freqs</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span><span class="o">.</span><span class="n">frequency</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">post_lm_channels_table</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">blacklisted_channel</span><span class="p">,</span> <span class="n">post_lm_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> should be black listed via LM long interval and excluded from &#39;</span>
+            <span class="s1">&#39;5Gz channels list&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">blacklisted_channel</span><span class="p">))</span>
+        <span class="n">long_bl_channel</span> <span class="o">=</span> <span class="n">blacklisted_channel</span>
+        <span class="n">dut_ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s1">&#39;sleeping </span><span class="si">{}</span><span class="s1"> until an idle scan has occurred post blacklisting &#39;</span>
+            <span class="s1">&#39;channels&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">((</span><span class="n">SCAN_INTERVAL</span> <span class="o">+</span> <span class="n">SCAN_TIME</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1.1</span><span class="p">))</span>
+        <span class="n">guaranteed_sleep</span><span class="p">((</span><span class="n">SCAN_INTERVAL</span> <span class="o">+</span> <span class="n">SCAN_TIME</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1.1</span><span class="p">)</span>
+        <span class="n">pre_acs_channels_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">pre_acs_freqs</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">row</span><span class="o">.</span><span class="n">frequency</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">pre_acs_channels_table</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">,</span> <span class="n">pre_acs_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;LM short interval BL channel </span><span class="si">{}</span><span class="s1"> should not be in ACS channels &#39;</span>
+            <span class="s1">&#39;list until after subsequent scan&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">long_bl_channel</span><span class="p">,</span> <span class="n">pre_acs_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;LM long interval BL channel </span><span class="si">{}</span><span class="s1"> should not be in ACS channels list &#39;</span>
+            <span class="s1">&#39;until after subsequent scan&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">idle_scan_post_lm</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">post_acs_channels_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">dut_ht_master</span><span class="p">)</span>
+        <span class="n">post_acs_freqs</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span><span class="o">.</span><span class="n">frequency</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">post_acs_channels_table</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyInOrFailCase</span><span class="p">(</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">),</span> <span class="n">post_acs_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;LM short interval BL channel </span><span class="si">{}</span><span class="s1"> should be in ACS channels list &#39;</span>
+            <span class="s1">&#39;after susequent scan&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyInOrFailCase</span><span class="p">(</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">long_bl_channel</span><span class="p">),</span> <span class="n">post_acs_freqs</span><span class="p">,</span>
+            <span class="s1">&#39;LM long interval BL channel </span><span class="si">{}</span><span class="s1"> should be in ACS channels list &#39;</span>
+            <span class="s1">&#39;after subsequent scan&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">short_bl_channel</span><span class="p">))</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">LinkMonitorTestFixture</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">LinkMonitorTestFixture</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

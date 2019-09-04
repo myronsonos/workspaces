@@ -1,0 +1,921 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.muse_session_suspend_resume &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.muse_session_suspend_resume</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">itertools</span> <span class="k">import</span> <span class="n">ifilter</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">Error</span><span class="p">,</span> <span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">GroupStatus</span><span class="p">,</span>
+    <span class="n">PlaybackState</span><span class="p">,</span> <span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">SessionInfoEvent</span><span class="p">,</span>
+    <span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">SessionState</span><span class="p">,</span> <span class="n">SessionStatusEvent</span><span class="p">,</span>
+    <span class="n">Success</span><span class="p">,</span> <span class="n">sessionConditionCheckErrorEvent</span><span class="p">,</span> <span class="n">MetadataStatusEvent</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">BaseMuseFixture</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.ignore_invoke_errors</span> <span class="k">import</span> <span class="n">IgnoreInvokeErrors</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">upnp.api.queue.helpers</span> <span class="k">import</span> <span class="n">QueueServiceHelpers</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">import</span> <span class="nn">webserver.helpers.node_smapi_control</span>
+<span class="kn">from</span> <span class="nn">upnp.api.queue.helpers</span> <span class="k">import</span> <span class="n">QueueServiceHelpers</span>
+<span class="kn">from</span> <span class="nn">common.utils</span> <span class="k">import</span> <span class="n">is_locked_build</span>
+
+
+<span class="n">smapi_ctl</span> <span class="o">=</span> <span class="n">webserver</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">node_smapi_control</span><span class="o">.</span><span class="n">NodeSmapiControl</span><span class="p">()</span>
+<span class="n">queue_helpers</span> <span class="o">=</span> <span class="n">QueueServiceHelpers</span><span class="p">()</span>
+<span class="n">BEATS1</span> <span class="o">=</span> <span class="s2">&quot;http://itsliveradio.apple.com/streams/hub01/049jvm/master.m3u8&quot;</span>
+<span class="n">BEATS1_MD</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;HLS radio (Beats One)&quot;</span><span class="p">}</span>
+
+
+<div class="viewcode-block" id="bool_generator"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.bool_generator">[docs]</a><span class="k">def</span> <span class="nf">bool_generator</span><span class="p">():</span>
+    <span class="k">for</span> <span class="nb">bool</span> <span class="ow">in</span> <span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">):</span>
+        <span class="k">yield</span> <span class="nb">bool</span></div>
+
+
+<div class="viewcode-block" id="play_path_generator"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.play_path_generator">[docs]</a><span class="k">def</span> <span class="nf">play_path_generator</span><span class="p">():</span>
+    <span class="n">play_path</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="s2">&quot;muse&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="s2">&quot;upnp&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;upnp&quot;</span><span class="p">,</span> <span class="s2">&quot;muse&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;upnp&quot;</span><span class="p">,</span> <span class="s2">&quot;upnp&quot;</span><span class="p">)]</span>
+    <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">play_path</span><span class="p">:</span>
+        <span class="k">yield</span> <span class="n">item</span></div>
+
+
+<div class="viewcode-block" id="cq_server_version_generator"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.cq_server_version_generator">[docs]</a><span class="k">def</span> <span class="nf">cq_server_version_generator</span><span class="p">():</span>
+    <span class="k">for</span> <span class="n">version</span> <span class="ow">in</span> <span class="p">(</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">2.1</span><span class="p">):</span>
+        <span class="k">yield</span> <span class="n">version</span></div>
+
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests">[docs]</a><span class="k">class</span> <span class="nc">MuseSessionSuspendResumeTests</span><span class="p">(</span><span class="n">BaseMuseFixture</span><span class="p">):</span>
+    <span class="c1"># Covers SWBPL-55946, SWPBL-59666</span>
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionSuspendResumeTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_port</span> <span class="o">=</span> <span class="mi">3000</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">endpoint_version</span> <span class="o">=</span> <span class="mf">2.0</span>
+        <span class="c1"># Make the list of usable spare serviceId numbers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid_range</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">240</span><span class="p">,</span> <span class="mi">254</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid_range</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid_count</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span> <span class="o">=</span> <span class="mi">3200</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sid_range</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">sid_count</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">accountId</span> <span class="o">=</span> <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">get_account_type</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">)</span>
+        <span class="n">SERVER_CAPS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;search&#39;</span><span class="p">,</span> <span class="s1">&#39;logging&#39;</span><span class="p">,</span> <span class="s1">&#39;playbackLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;extendedMD&#39;</span><span class="p">,</span> <span class="s1">&#39;userInfo&#39;</span><span class="p">,</span> <span class="s1">&#39;manifest&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi</span> <span class="o">=</span> <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">start_node_smapi_server</span><span class="p">(</span><span class="n">server_port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span><span class="p">,</span>
+                                                       <span class="n">server_internal_id</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">get_account_type</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">),</span>
+                                                       <span class="n">server_sid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">,</span>
+                                                       <span class="n">cqport</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span>
+                                                                             <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">host_port</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">smapi_account_setup</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                            <span class="n">sid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">,</span>
+                                                            <span class="n">caps</span><span class="o">=</span><span class="n">SERVER_CAPS</span><span class="p">,</span>
+                                                            <span class="n">auth_type</span><span class="o">=</span><span class="s1">&#39;DeviceLink&#39;</span><span class="p">),</span>
+                              <span class="s2">&quot;Successfully added SMAPI account?&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span> <span class="o">=</span> <span class="s2">&quot;sn_&quot;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">get_service_account</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">accountId</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serial_number</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sid_count</span> <span class="o">+=</span> <span class="mi">1</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionSuspendResumeTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionSuspendResumeTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_cq</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.tearDownTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_port</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">host_port</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionSuspendResumeTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_restart_cq_server</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">endpoint_version</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">cq_port</span><span class="o">=</span><span class="mi">3000</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_cloud_queue_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_cloud_queue_server</span><span class="p">(</span><span class="n">endpoint_version</span><span class="o">=</span><span class="n">endpoint_version</span><span class="p">,</span>
+                                      <span class="n">cq_port</span><span class="o">=</span><span class="n">cq_port</span><span class="p">)</span>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.setup_cq"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.setup_cq">[docs]</a>    <span class="k">def</span> <span class="nf">setup_cq</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function for performing common options to setup the CQ server.</span>
+
+<span class="sd">        :param dict kwargs: Keyword arguments for start_cloud_queue_server. If</span>
+<span class="sd">            cq_port is not specified, it will be increased by one each time the server</span>
+<span class="sd">            is restarted.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_restart_cq_server</span><span class="p">(</span><span class="n">endpoint_version</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">endpoint_version</span><span class="p">,</span>
+                                <span class="n">cq_port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_port</span><span class="p">)</span>
+        <span class="c1"># Start playback from the webserver</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">track_source</span><span class="o">.</span><span class="n">tracks</span><span class="p">:</span>
+            <span class="n">track_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">track</span><span class="p">)</span>
+        <span class="n">track_list_md</span> <span class="o">=</span> <span class="n">queue_helpers</span><span class="o">.</span><span class="n">create_didl_lite_md</span><span class="p">(</span><span class="n">track_list</span><span class="p">)</span>
+        <span class="n">enqueued_uris_and_metadata</span> <span class="o">=</span> <span class="n">queue_helpers</span><span class="o">.</span><span class="n">create_uri_and_metadata_xml</span><span class="p">(</span><span class="n">track_list</span><span class="p">,</span> <span class="n">track_list_md</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">Queue</span><span class="o">.</span><span class="n">AddMultipleURIs</span><span class="p">(</span><span class="n">queue_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                      <span class="n">update_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                      <span class="n">container_uri</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                      <span class="n">container_metadata</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                      <span class="n">desired_first_track_number_enqueued</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                                      <span class="n">enqueue_as_next</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                      <span class="n">number_of_uris</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">track_list</span><span class="p">),</span>
+                                      <span class="n">enqueued_uris_and_metadata</span><span class="o">=</span><span class="n">enqueued_uris_and_metadata</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">avt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+                                                   <span class="n">accountId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># Subscribe to playback</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_load_play_and_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">itemId</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">,</span> <span class="n">modify_polling</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Common test setup, loads and plays a CQ and then suspends. Verifies that</span>
+<span class="sd">        player returns a sessionInfo event with &quot;suspended=True&quot;</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">()</span> <span class="ow">and</span> <span class="n">modify_polling</span><span class="p">:</span>
+            <span class="c1"># Change the version poll timer to 3 seconds and verify that the new settings are being used</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_cloudqueue_poll_timers</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                       <span class="n">playing_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                                                       <span class="n">paused_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Test case needs testpoint support&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="n">itemId</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">)</span>
+        
+        <span class="k">if</span> <span class="n">modify_polling</span><span class="p">:</span>
+            <span class="n">log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/version&#39;</span><span class="p">,</span>
+                                                        <span class="n">expected</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">log</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span>
+                                              <span class="s2">&quot;At least 2 version requests should have been made after playing interval change&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="s2">&quot;suspend&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Verify correct upnp values</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlIsSuspended&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for DirectControlIsSuspended==1&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                   <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlClientID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;DirectControlClientID should have expected value&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span><span class="p">,</span>
+                                   <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlAccountID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;DirectControlAccountID should have expected value&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_stream_and_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Common test setup for loadStreamUrl tests. Verifies that the session is suspended.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Verify correct upnp values</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlIsSuspended&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for DirectControlIsSuspended==1&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                   <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlClientID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;DirectControlClientID should have expected value&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span><span class="p">,</span>
+                                   <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlAccountID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;DirectControlAccountID should have expected value&quot;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_play_and_verify_avt_restored</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that the previous AVT source can be restored and played after a second </span>
+<span class="sd">        upnp play is sent after a session has been suspended</span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span>
+        <span class="c1"># Verify that second play restores the AVT</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">,</span>
+                          <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_SESSION_EVICTED&quot;</span><span class="p">),</span>
+                          <span class="n">connection</span><span class="o">=</span><span class="n">connection</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">avt</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for AVT to revert after second play command&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_previous_item_itemPlayed_data_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_previous_item_itemPlayed_data_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_previous_item_itemPlayed_data_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that when the player suspends, the following events occur:</span>
+<span class="sd">        1. previous item data reflects when the suspend occurred while a track is playing</span>
+<span class="sd">        2. current itemId is None</span>
+<span class="sd">        3. The /timePlayed report is accurate to when the suspend occurred</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;tpm&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()[</span><span class="s2">&quot;RelTime&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;0:00:03&quot;</span><span class="p">,</span>
+                        <span class="n">start_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=.</span><span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousPositionMillis</span> <span class="o">&gt;=</span> <span class="mi">3000</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">))</span>
+        <span class="n">log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/timePlayed&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">log</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span>
+                                          <span class="s2">&quot;Should have one /timePlayed report after suspend&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyAlmostEqualOrFailCase</span><span class="p">(</span><span class="mi">3000</span><span class="p">,</span> <span class="n">log</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;body&quot;</span><span class="p">][</span><span class="s2">&quot;items&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;durationPlayedMillis&quot;</span><span class="p">],</span>
+                                         <span class="s2">&quot;durationPlayedMillis should be 3 seconds&quot;</span><span class="p">,</span> <span class="n">delta</span><span class="o">=</span><span class="mi">2000</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyAlmostEqualOrFailCase</span><span class="p">(</span><span class="mi">3000</span><span class="p">,</span> <span class="n">log</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;body&quot;</span><span class="p">][</span><span class="s2">&quot;items&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;positionMillis&quot;</span><span class="p">],</span>
+                                         <span class="s2">&quot;positionMillis should be 3 seconds&quot;</span><span class="p">,</span> <span class="n">delta</span><span class="o">=</span><span class="mi">2000</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;tpm&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_avt_not_reverted_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_avt_not_reverted_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_avt_not_reverted_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the AVT has not changed after suspend</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">avt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">(),</span>
+                                      <span class="s2">&quot;The avt should not have reverted after suspend&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_suspend_while_inactive"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_suspend_while_inactive">[docs]</a>    <span class="k">def</span> <span class="nf">test_suspend_while_inactive</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">         Verify that the player is not able to suspend while INACTIVE(no loadCloudqueue)</span>
+<span class="sd">         :return:</span>
+<span class="sd">         &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Error</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">error_code</span><span class="o">==</span><span class="s2">&quot;ERROR_COMMAND_FAILED&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_rejoin_suspended_session"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_rejoin_suspended_session">[docs]</a>    <span class="k">def</span> <span class="nf">test_rejoin_suspended_session</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the rejoin action is successful while the player is suspended</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">is_locked_build</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;locked builds do not have rejoinSession avaliable for LAN use&#39;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">rejoin_session</span><span class="p">(</span><span class="n">hhId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="s2">&quot;rejoinSession&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_version_fetches_while_suspended"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_version_fetches_while_suspended">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_version_fetches_while_suspended</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player continues to fetch /version but not /itemWindow while suspended</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_playback_policy</span><span class="p">({</span><span class="s1">&#39;refreshAuthWhilePaused&#39;</span><span class="p">:</span> <span class="kc">False</span><span class="p">})</span>
+        <span class="n">playback_policy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">get_playback_policies</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">playback_policy</span><span class="p">[</span><span class="s1">&#39;refreshAuthWhilePaused&#39;</span><span class="p">],</span>
+                               <span class="s2">&quot;Container refreshAuthWhilePaused policy should be False&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">()</span>
+        <span class="n">version_log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">logEntry</span><span class="p">:</span> <span class="n">logEntry</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/version&#39;</span><span class="p">,</span>
+                                                            <span class="n">expected</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">version_log</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span>
+                                          <span class="s2">&quot;Player should have made at least 2 /version fetches after suspend&quot;</span><span class="p">)</span>
+        <span class="n">itemWindow_log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">logEntry</span><span class="p">:</span> <span class="n">logEntry</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/itemWindow&#39;</span><span class="p">,</span>
+                                                                          <span class="n">expected</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">itemWindow_log</span><span class="p">),</span>
+                                   <span class="s2">&quot;No /itemWindow fetches should have been made while suspended&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_load_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_load_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_load_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that loadCloudqueue while suspended will bring the player out of suspend</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;1&#39;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;CurrentTrack&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_load_after_muse_play_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_load_after_muse_play_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_load_after_muse_play_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72370</span>
+<span class="sd">        SWPBL-73438</span>
+<span class="sd">        Verify that loadCloudQueue works after a muse play after suspending the session</span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="c1"># Send muse play command</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># the zp should not be playing</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;1&#39;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_skipToItem_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_skipToItem_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_skipToItem_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that skipToItem while suspended will bring the player out of suspend</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                               <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;2&quot;</span><span class="p">,</span> <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;2&quot;</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;CurrentTrack&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">3</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_skipToItem_after_muse_play_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_skipToItem_after_muse_play_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_skipToItem_after_muse_play_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72370</span>
+<span class="sd">        SWPBL-73438</span>
+<span class="sd">        Verify that skipToItem works after a muse play after suspending the session</span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="c1"># Send muse play command</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                               <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;2&quot;</span><span class="p">,</span> <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;2&quot;</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_upnp_play_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_upnp_play_after_suspend">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">cq_server_version_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_verify_upnp_play_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">version</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that &quot;suspended=false&quot; after a PLAY is sent to the player and that the session</span>
+<span class="sd">        will be evicted and AVT reverted after a second play command</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_restart_cq_server</span><span class="p">(</span><span class="n">endpoint_version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">version</span> <span class="o">==</span> <span class="mf">2.1</span><span class="p">:</span>
+            <span class="c1"># SWPBL-67824</span>
+            <span class="c1"># Arm the 202 response so that the /itemWindow request from the player doesn&#39;t have</span>
+            <span class="c1"># an actual track list</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">arm_error_script</span><span class="p">(</span><span class="n">call</span><span class="o">=</span><span class="s2">&quot;itemWindow&quot;</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="mi">202</span><span class="p">,</span> <span class="n">num_errors</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+
+        <span class="c1"># the zp should not be playing</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="c1"># Verify correct upnp events</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlIsSuspended&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for DirectControlIsSuspended==0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                   <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlClientID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;DirectControlClientID should have expected value&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;CurrentTrack&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                       <span class="s2">&quot;CurrentTrack should have expected value&quot;</span><span class="p">)</span>
+
+        <span class="c1"># A second play command within 5 seconds of the first one is ignored (SWPBL-72370)</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+
+        <span class="c1"># Verify second play restores the AVT</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_play_and_verify_avt_restored</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_loadCloudqueue_muse_play_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_loadCloudqueue_muse_play_after_suspend">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">play_path_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_loadCloudqueue_muse_play_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">play1</span><span class="p">,</span> <span class="n">play2</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72370</span>
+<span class="sd">        SWPBL-73438</span>
+<span class="sd">        Verify that no combination of consecutive muse/upnp play commands with 5 seconds</span>
+<span class="sd">        of each other will result in the player resuming playback</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># load CQ and play</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="c1"># Send play command</span>
+        <span class="k">if</span> <span class="n">play1</span> <span class="o">==</span> <span class="s2">&quot;muse&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># Send second play command &lt; 5 seconds after the first</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">play2</span> <span class="o">==</span> <span class="s2">&quot;muse&quot;</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="c1"># the zp should not be playing since the second play command should be ignored</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">expect_event</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">iterations</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_play_after_suspend_without_CQ_autoplay"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_play_after_suspend_without_CQ_autoplay">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_play_after_suspend_without_CQ_autoplay</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that the a second play after suspend restores the AVT value prior to</span>
+<span class="sd">        loading the CQ</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Load but don&#39;t autoplay and suspend</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># verify that a first play restores the session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># A second play command within 5 seconds of the first one is ignored (SWPBL-72370)</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+
+        <span class="c1"># Verify correct upnp events</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlIsSuspended&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for DirectControlIsSuspended==0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlClientID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                               <span class="s2">&quot;DirectControlClientID should have expected value&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;CurrentTrack&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                                   <span class="s2">&quot;CurrentTrack should have expected value&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Verify second play restores the AVT</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_play_and_verify_avt_restored</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_play_after_suspend_with_big_queue"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_play_after_suspend_with_big_queue">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_play_after_suspend_with_big_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that the player fetches the itemWindow when the session suspends</span>
+<span class="sd">        if isStart/isEnd is false</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Create a big queue and start playback in the middle so that</span>
+        <span class="c1"># the first /itemWindow doesn&#39;t have the start or end of the tracklist</span>
+        <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">add_track_to_end</span><span class="p">(</span><span class="n">track_id</span><span class="o">=</span><span class="n">x</span><span class="p">)</span>
+        <span class="c1"># Set the polling modification in the setup to false to workaround SWPBL-72800</span>
+        <span class="c1"># Note that this clears the api log just before suspending.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">(</span><span class="n">itemId</span><span class="o">=</span><span class="s2">&quot;15&quot;</span><span class="p">,</span> <span class="n">modify_polling</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="c1"># Verify that the /itemWindow was fetched after suspend and includes the start of the track list</span>
+        <span class="n">iw_log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">logEntry</span><span class="p">:</span> <span class="p">(</span><span class="n">logEntry</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/itemWindow&#39;</span><span class="p">),</span>
+                                                                     <span class="n">expected</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                                                                     <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">iw_log</span><span class="p">),</span>
+            <span class="s2">&quot;Player should not have made a /itemWindow fetch after suspend, log &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">iw_log</span><span class="p">))</span>
+
+        <span class="c1"># Verify first play restores session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># A second play command within 5 seconds of the first one is ignored (SWPBL-72370)</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+
+        <span class="c1"># Verify correct upnp events</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlIsSuspended&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for DirectControlIsSuspended==0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable_and_time</span><span class="p">(</span><span class="s2">&quot;DirectControlClientID&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                               <span class="s2">&quot;DirectControlClientID should have expected value&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Verify second play restores the AVT</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_play_and_verify_avt_restored</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_session_eviction_after_avt_change"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_session_eviction_after_avt_change">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_session_eviction_after_avt_change</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the current muse session is evicted if the AVT is explicitly changed</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_SESSION_EVICTED&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_session_still_suspended_after_delegation"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_session_still_suspended_after_delegation">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_session_still_suspended_after_delegation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a suspended session stays suspended after delegation. The delegated</span>
+<span class="sd">        session should be restorable and the AVT on the first player can be reverted.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrSkip</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;need at least 2 ZPs to run this test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+
+        <span class="c1"># Get another ZP and delegate to it</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span> <span class="o">=</span> <span class="n">ifilter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">device</span><span class="p">:</span> <span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span>
+                                          <span class="ow">and</span> <span class="ow">not</span> <span class="n">device</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()</span>
+                                          <span class="ow">and</span> <span class="n">device</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">),</span>
+                           <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+        <span class="c1"># Join group</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+        <span class="c1"># Leave group</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">is_group_coordinator_local</span><span class="p">())</span>
+
+        <span class="c1"># Join the existing muse session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse2</span><span class="o">.</span><span class="n">join_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">(),</span>
+                                <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+
+        <span class="c1"># Verify the existing session is still suspended and that a play to ZP2</span>
+        <span class="c1"># will restore the session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse2</span><span class="o">.</span><span class="n">subscribe_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                     <span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># SWPBL-70169</span>
+        <span class="c1"># Verify second play restores the AVT on the second ZP</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_loadStream_avt_restored_after_second_play"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_loadStream_avt_restored_after_second_play">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_avt_restored_after_second_play</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that the AVT can be restored after using loadStreamUrl</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Load, play and suspend. Verify that the first play restores the session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stream_and_suspend</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># A second play command within 5 seconds of the first one is ignored (SWPBL-72370)</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+
+        <span class="c1"># Verify second play restores the AVT</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_play_and_verify_avt_restored</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_loadStream_while_suspended"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_loadStream_while_suspended">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_while_suspended</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that a loadStreamUrl while suspended will restore the session and</span>
+<span class="sd">        start playback</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stream_and_suspend</span><span class="p">()</span>
+
+        <span class="c1"># Clear the historical test muse events list</span>
+        <span class="c1"># Makes verifying the events after the next load easier</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">test_events</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># load a stream and verify playback and AVT should not have been restored</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">avt</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;AVT should not have reverted&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_loadStream_muse_play_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_loadStream_muse_play_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_muse_play_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that sending a muse play command after suspending the session will not restart playback</span>
+<span class="sd">        and an error event should be sent</span>
+<span class="sd">        This behavior could change with SWPBL-73438</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stream_and_suspend</span><span class="p">()</span>
+
+        <span class="c1"># Send muse play command and verify playback is resumed and that AVT is not restored</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">avt</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;AVT should not have reverted&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_suspend_preconditions_while_playing"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_suspend_preconditions_while_playing">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">bool_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_suspend_preconditions_while_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">playing</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72613</span>
+<span class="sd">        Verify that the suspend playing preconditions works correctly when the player is playing</span>
+<span class="sd">        :param playing: </span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Load and play</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+
+        <span class="c1"># Attempt to suspend with playing true and false</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">conditions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;playing&quot;</span><span class="p">:</span> <span class="n">playing</span><span class="p">})</span>
+        <span class="c1"># Should work if playing is true and fail if playing is false</span>
+        <span class="k">if</span> <span class="n">playing</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">sessionConditionCheckErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                              <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_PRECONDITION_CHECK_FAILED&quot;</span> <span class="ow">and</span>
+                                                        <span class="n">e</span><span class="o">.</span><span class="n">reason</span> <span class="o">==</span> <span class="s2">&quot;playing&quot;</span> <span class="ow">and</span>
+                                                        <span class="n">e</span><span class="o">.</span><span class="n">currentValues</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_suspend_preconditions_while_paused"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_suspend_preconditions_while_paused">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">bool_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_suspend_preconditions_while_paused</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">playing</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72613</span>
+<span class="sd">        Verify that the suspend playing condition works correctly when the player is paused</span>
+<span class="sd">        :param playing: </span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Load, play, and pause</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">pause</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PAUSED</span><span class="p">))</span>
+
+        <span class="c1"># Attempt to suspend</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">conditions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;playing&quot;</span><span class="p">:</span> <span class="n">playing</span><span class="p">})</span>
+        <span class="c1"># Should work is playing is false, fail if playing is true</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">playing</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                              <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                        <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                              <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">sessionConditionCheckErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                              <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_PRECONDITION_CHECK_FAILED&quot;</span> <span class="ow">and</span>
+                                                        <span class="n">e</span><span class="o">.</span><span class="n">reason</span> <span class="o">==</span> <span class="s2">&quot;playing&quot;</span> <span class="ow">and</span>
+                                                        <span class="n">e</span><span class="o">.</span><span class="n">currentValues</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_suspend_with_unsupported_precondition"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_suspend_with_unsupported_precondition">[docs]</a>    <span class="k">def</span> <span class="nf">test_suspend_with_unsupported_precondition</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-72613</span>
+<span class="sd">        Verify that previous suspend failures don&#39;t have any carry on effects and</span>
+<span class="sd">        that the suspend command works with unsupported preconditions</span>
+<span class="sd">        :return: </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Load and play</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                   <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">))</span>
+
+        <span class="c1"># Verify suspend fails if playing is true and player is idle</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">conditions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;playing&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">sessionConditionCheckErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_PRECONDITION_CHECK_FAILED&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">reason</span> <span class="o">==</span> <span class="s2">&quot;playing&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">currentValues</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">))</span>
+
+        <span class="c1"># Verify suspend works if the command has an unsupported precondition along with</span>
+        <span class="c1"># a valid precondition</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">suspend_session</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">sessionId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">conditions</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;UNSUPPORTED&quot;</span><span class="p">:</span> <span class="s2">&quot;PRECONDITION&quot;</span><span class="p">,</span>
+                                              <span class="s2">&quot;playing&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">suspended</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionSuspendResumeTests.test_verify_playback_resumes_after_suspend"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionSuspendResumeTests.test_verify_playback_resumes_after_suspend">[docs]</a>    <span class="k">def</span> <span class="nf">test_verify_playback_resumes_after_suspend</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-67824</span>
+<span class="sd">        With a &gt;2.1 CQ server, the player should resume playback of the cq content after a single</span>
+<span class="sd">        play command while suspended</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_restart_cq_server</span><span class="p">(</span><span class="n">endpoint_version</span><span class="o">=</span><span class="mf">2.1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_play_and_suspend</span><span class="p">()</span>
+        <span class="n">md0</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">get_track_metadata</span><span class="p">(</span><span class="s2">&quot;0&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+
+        <span class="c1"># The player should restart playback</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">current_item</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">current_item</span><span class="p">[</span><span class="s2">&quot;track&quot;</span><span class="p">][</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">md0</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]))</span></div></div>
+
+
+<div class="viewcode-block" id="MuseSessionNamespaceSuspendResumeTests"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_suspend_resume.MuseSessionNamespaceSuspendResumeTests">[docs]</a><span class="k">class</span> <span class="nc">MuseSessionNamespaceSuspendResumeTests</span><span class="p">(</span><span class="n">MuseSessionSuspendResumeTests</span><span class="p">,</span>
+                                             <span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_MUSE_SESSION_NAMESPACE&#39;</span><span class="p">]</span></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Muse Session Suspend Resume Tests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">MuseSessionNamespaceSuspendResumeTests</span><span class="p">()])</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span> <span class="k">if</span> <span class="n">suite</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">is_pass</span><span class="p">()</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,616 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.playback.test_ht_spdif_tap_regression &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.playback.test_ht_spdif_tap_regression</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">signal</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">math</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">zipfile</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">OrderedDict</span>
+<span class="kn">from</span> <span class="nn">audio_playback.mplayer_playback</span> <span class="k">import</span> <span class="n">MplayerAc3Playback</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+
+<span class="n">WEBSERVER_PORT</span> <span class="o">=</span> <span class="mi">8080</span>
+<span class="n">NAS_MOUNTPOINT</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba&#39;</span>
+<span class="n">DD_REGRESSION_TAPS_BASE</span> <span class="o">=</span> <span class="s2">&quot;/Automation/audiotap/DD-RegressionTaps/&quot;</span>
+<span class="n">SHARE_PATH</span> <span class="o">=</span> <span class="n">NAS_MOUNTPOINT</span> <span class="o">+</span> <span class="n">DD_REGRESSION_TAPS_BASE</span>
+<span class="n">S9_TAPS_NAS_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">SHARE_PATH</span><span class="p">,</span> <span class="s2">&quot;S9&quot;</span><span class="p">)</span>
+<span class="n">S11_TAPS_NAS_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">SHARE_PATH</span><span class="p">,</span> <span class="s2">&quot;S11&quot;</span><span class="p">)</span>
+<span class="n">AUDIOTAP_FILE_EXTENSIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;.tap&quot;</span><span class="p">,</span> <span class="s2">&quot;.spdif&quot;</span><span class="p">,</span> <span class="s2">&quot;.audiotap&quot;</span><span class="p">]</span>
+<span class="n">AUDIOTAP_METADATA_PATH</span> <span class="o">=</span> <span class="s2">&quot;_audiotap_regression_metadata&quot;</span>
+<span class="n">AUDIOTAP_BIT_DEPTH_IN_BYTES</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">AUDIOTAP_NUM_CHANNELS</span> <span class="o">=</span> <span class="mi">2</span>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps">[docs]</a><span class="k">class</span> <span class="nc">PlaybackDDRegressionTaps</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="c1"># &quot;&quot;&quot;</span>
+    <span class="c1"># Performs on-device playback of regression tap library and outputs</span>
+    <span class="c1"># captured dspout taps on each ZP, plus anacapa.trace for each ZP.</span>
+    <span class="c1"># Audiotap regression library is located on Perforce at:</span>
+    <span class="c1"># //audio-engineering/test/audiotap/</span>
+    <span class="c1">#</span>
+    <span class="c1"># However, this script expects the files to be mirrored on the Automation</span>
+    <span class="c1"># NAS drive (this is a manual process that could be incorporated in a</span>
+    <span class="c1"># future revision)</span>
+    <span class="c1">#</span>
+    <span class="c1"># Each audiotap file is located in either an S9 (Playbar) or S11 (Playbase)</span>
+    <span class="c1"># folder, and recursively inside a folder labeled with the JIRA ticket.</span>
+    <span class="c1"># In addition, a .json file must be present for each audiotap which</span>
+    <span class="c1"># describes the samplerate, JIRA ID and further data which to date is</span>
+    <span class="c1"># not used. The intention is to use the .json metadata about each file</span>
+    <span class="c1"># to describe characteristics of the signal at various stages throughout</span>
+    <span class="c1"># the duration of the capture. This will help us add future automation</span>
+    <span class="c1"># around signal analysis for each audiotap test case.</span>
+    <span class="c1">#</span>
+    <span class="c1"># AC3 clock files are used to drive the SPDIF input on the target</span>
+    <span class="c1"># ht_master ZP, which helps OSX users who would otherwise need to</span>
+    <span class="c1"># manually change their audio interface sample rate settings.</span>
+    <span class="c1"># The clock files are needed to start playback of the local audiotap on</span>
+    <span class="c1"># a ZP, as described here:</span>
+    <span class="c1"># https://confluence.sonos.com/pages/viewpage.action?pageId=5243181</span>
+    <span class="c1"># &quot;&quot;&quot;</span>
+
+    <span class="n">LOCAL_TEST_DATA_DIR</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba/Automation/SPDIF/functional/playback&#39;</span> <span class="c1"># used for ref clock files</span>
+    <span class="n">DD_REGRESSION_TAP_TEST_FILES</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([])</span>
+    <span class="n">AUDIOTAP_CAPTURE_CMD</span> <span class="o">=</span> <span class="s2">&quot;curl http://</span><span class="si">{}</span><span class="s2">:1400/audio_tap?tap=dspout &quot;</span> \
+                           <span class="s2">&quot;-N -o </span><span class="si">{}</span><span class="s2">&quot;</span>
+    <span class="n">AUDIOTAP_CAPTURE_FILE</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-Config_</span><span class="si">{}</span><span class="s2">.tap&quot;</span>
+    <span class="n">ARCHIVE_FILE</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">-Config_</span><span class="si">{}</span><span class="s2">.zip&quot;</span>
+    <span class="n">SPDIF_CLOCK_FILES</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)),</span>
+            <span class="n">LOCAL_TEST_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;44k1_clock_180s.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">44100</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">)),</span>
+            <span class="n">LOCAL_TEST_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;48k_clock_180s.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">48000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">})</span>
+    <span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">WorkflowTestFixture</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Mute all ZPs</span>
+<span class="sd">        Remove collateral folders, if they exist</span>
+<span class="sd">        Create audiotap resource folders</span>
+<span class="sd">        Set up web server instance with NAS drive folder as contents source</span>
+<span class="sd">        Load metadata from .json files</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config_iter</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_check_for_NAS_connection</span><span class="p">(</span><span class="n">SHARE_PATH</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting web server&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_setup_webserver</span><span class="p">(</span><span class="n">SHARE_PATH</span><span class="p">)</span>
+        <span class="c1"># create dict of audiotaps and metadata from S9/S11 resource paths</span>
+        <span class="k">for</span> <span class="n">resourcepath</span> <span class="ow">in</span> <span class="p">[</span><span class="n">S9_TAPS_NAS_PATH</span><span class="p">,</span> <span class="n">S11_TAPS_NAS_PATH</span><span class="p">]:</span>
+            <span class="k">for</span> <span class="n">root</span><span class="p">,</span> <span class="n">subFolder</span><span class="p">,</span> <span class="n">files</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">resourcepath</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_scrape_tap_files_and_metadata</span><span class="p">(</span><span class="n">files</span><span class="p">,</span> <span class="n">root</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_off</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                <span class="c1"># remove any possible resident local audiotap file and</span>
+                <span class="c1"># ensure playback has been stopped:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;rm -rf /jffs/audiotap.spdif&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_anacapa</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set autoplay on ht_master zps</span>
+<span class="sd">        :param ht_master: HT master capable device</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Master: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove audiotap file (otherwise will continually play tap from last</span>
+<span class="sd">        test case after tear down)</span>
+<span class="sd">        :param ht_master: HT master capable device</span>
+<span class="sd">        &quot;&quot;&quot;</span></div>
+        <span class="c1"># ht_master.cli.command(&quot;rm -rf /jffs/audiotap.spdif&quot;)</span>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop web server</span>
+<span class="sd">        Remove collateral files</span>
+<span class="sd">        Unmute all ZPs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Teardown fixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;rm -rf /jffs/audiotap.spdif&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_anacapa</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_on</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">spdif_silence_threshold</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear avt and queue, remove bonded config if it exists</span>
+<span class="sd">        :param zp: Sonos zone component</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing cleanup&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">(</span><span class="n">timeout_standalone_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">spdif_silence_threshold</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_check_for_NAS_connection</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">files_src_path</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks to make sure NAS path is available for file access</span>
+<span class="sd">        @param files_src_path: path to audiotap regression files</span>
+<span class="sd">        @type files_src_path: string</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">files_src_path</span><span class="p">),</span> \
+            <span class="s2">&quot;NAS mapping not established for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">SHARE_PATH</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_scrape_tap_files_and_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">files</span><span class="p">,</span> <span class="n">root</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Searches through specified location for audiotap file names,</span>
+<span class="sd">        then retrieves associated metadata files, populates audiotap</span>
+<span class="sd">        metadata for each audiotap found</span>
+<span class="sd">        :param files: items in target folder / sub-folders</span>
+<span class="sd">        :param root: parent directory containing files</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+            <span class="c1"># look for tap files:</span>
+            <span class="n">itemURL</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">item</span><span class="p">)</span>
+            <span class="n">itemURL_extension</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">item</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+
+            <span class="k">if</span> <span class="n">item</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">itemURL</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="p">(</span>
+                    <span class="n">itemURL_extension</span> <span class="ow">in</span> <span class="n">AUDIOTAP_FILE_EXTENSIONS</span><span class="p">):</span>
+                <span class="k">continue</span>
+            <span class="n">itemMetadataURL</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">AUDIOTAP_METADATA_PATH</span><span class="p">,</span>
+                                           <span class="n">item</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">itemURL_extension</span><span class="p">,</span>
+                                                           <span class="s2">&quot;.json&quot;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Checking json file for </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                             <span class="s2">&quot;against </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">itemURL</span><span class="p">,</span>
+                                <span class="n">itemMetadataURL</span><span class="p">))</span>
+            <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">itemMetadataURL</span><span class="p">)</span>
+            <span class="n">itemMetadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="nb">open</span><span class="p">(</span><span class="n">itemMetadataURL</span><span class="p">))</span>
+            <span class="n">jiraid</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">itemMetadata</span><span class="p">[</span><span class="s2">&quot;jira&quot;</span><span class="p">][</span><span class="s2">&quot;id&quot;</span><span class="p">])</span>
+            <span class="n">model</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">itemMetadata</span><span class="p">[</span><span class="s2">&quot;target&quot;</span><span class="p">][</span><span class="s2">&quot;model&quot;</span><span class="p">])</span>
+            <span class="n">samplerate</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">itemMetadata</span><span class="p">[</span><span class="s2">&quot;metadata&quot;</span><span class="p">]</span>
+                             <span class="p">[</span><span class="s2">&quot;samplerate&quot;</span><span class="p">])</span>
+            <span class="c1"># calculate file duration</span>
+            <span class="n">duration</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getsize</span><span class="p">(</span><span class="n">itemURL</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">AUDIOTAP_BIT_DEPTH_IN_BYTES</span>
+                                            <span class="o">*</span> <span class="n">AUDIOTAP_NUM_CHANNELS</span>
+                                            <span class="o">*</span> <span class="n">samplerate</span><span class="p">))</span>
+            <span class="c1"># add file details to dict</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">DD_REGRESSION_TAP_TEST_FILES</span><span class="o">.</span><span class="n">update</span><span class="p">([</span>
+                    <span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;Source&#39;</span><span class="p">:</span> <span class="n">model</span><span class="p">,</span>
+                            <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="n">samplerate</span><span class="p">,</span>
+                            <span class="s1">&#39;JiraID&#39;</span><span class="p">:</span> <span class="n">jiraid</span><span class="p">,</span>
+                            <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="n">duration</span><span class="p">})</span>
+                <span class="p">]</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_setup_webserver</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">WEBSERVER_PORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup local web server</span>
+<span class="sd">        :param resource_path: location of files to be served</span>
+<span class="sd">        :param port: port number for http access</span>
+<span class="sd">        :return: webserver instance</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Could not start web server&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started web server&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">websrv</span>
+
+    <span class="k">def</span> <span class="nf">_get_SPDIF_clock_track_for_samplerate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samplerate</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Finds the appropriate clock source file corresponding with samplerate</span>
+<span class="sd">        Confirms file exists</span>
+<span class="sd">        Returns the file location and metadata</span>
+<span class="sd">        :param samplerate: requested samplerate</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">clockfilename</span><span class="p">,</span> <span class="n">clockfileinfo</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_CLOCK_FILES</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">clockfileinfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">samplerate</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">clockfilename</span><span class="p">),</span> \
+                    <span class="s2">&quot;failed to find SPDIF clock track </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">clockfilename</span><span class="p">)</span>
+                <span class="k">return</span> <span class="p">[(</span><span class="n">clockfilename</span><span class="p">,</span> <span class="n">clockfileinfo</span><span class="p">)]</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_capture_output_tap_and_trace</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                      <span class="n">tapfilename</span><span class="p">,</span>
+                                      <span class="n">tapfileinfo</span><span class="p">,</span>
+                                      <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start dspout tap capture for each ZP</span>
+<span class="sd">        Wait for a sufficient amount of time (audiotap duration)</span>
+<span class="sd">        Stop dspout tap on each ZP</span>
+<span class="sd">        Download, archive and delete trace files</span>
+<span class="sd">        Add tap files to archive and tidy up</span>
+<span class="sd">        :param tapfilename: filename of audiotap file to be played back</span>
+<span class="sd">        :param tapfileinfo: metadata of audiotap file to be played back</span>
+<span class="sd">        :param ht_master: zp (HT Master)</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># start audiotap capture subprocesses</span>
+        <span class="n">zp_proc</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">audiotap_capture_file_zp_list</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_tap_capture_process</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="n">tapfileinfo</span><span class="p">,</span>
+                                        <span class="n">tapfilename</span><span class="p">,</span>
+                                        <span class="n">zp_proc</span><span class="p">,</span>
+                                        <span class="n">audiotap_capture_file_zp_list</span><span class="p">)</span>
+        <span class="c1"># Wait for audiotap playback to complete</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sleep</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;Duration&#39;</span><span class="p">])</span>
+        <span class="c1"># kill audiotap capture process(es)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_kill_audiotap_capture_processes</span><span class="p">(</span><span class="n">zp_proc</span><span class="p">)</span>
+        <span class="c1"># create an archive file</span>
+        <span class="n">archive_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_create_zip_file</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">tapfileinfo</span><span class="p">,</span> <span class="n">tapfilename</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">archive_file</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s2">&quot;Failed to create zip archive for &quot;</span> \
+                                         <span class="s2">&quot;results capture for file: {&quot;</span> \
+                                         <span class="s2">&quot;}&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tapfilename</span><span class="p">)</span>
+        <span class="c1"># download, archive and delete trace files</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_archive_trace_file</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                 <span class="n">tapfileinfo</span><span class="p">,</span>
+                                 <span class="n">tapfilename</span><span class="p">,</span>
+                                 <span class="n">archive_file</span><span class="p">)</span>
+        <span class="c1"># add tap files to archive and tidy up</span>
+        <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">audiotap_capture_file_zp_list</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">file</span><span class="p">),</span> \
+                <span class="s2">&quot;failed to find local version of tap file </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+            <span class="n">archive_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_start_tap_capture_process</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                   <span class="n">zp</span><span class="p">,</span>
+                                   <span class="n">tapfileinfo</span><span class="p">,</span>
+                                   <span class="n">tapfilename</span><span class="p">,</span>
+                                   <span class="n">proc_array</span><span class="p">,</span>
+                                   <span class="n">audiotap_filename_array</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start dspout tap capture for each ZP</span>
+<span class="sd">        Add dspout tap capture file name to array for archive later</span>
+<span class="sd">        :param zp: zp</span>
+<span class="sd">        :param tapfilename: filename of audiotap file to be played back</span>
+<span class="sd">        :param tapfileinfo: metadata of audiotap file to be played back</span>
+<span class="sd">        :param proc_array: array for capture processes running across all zps</span>
+<span class="sd">        :param audiotap_filename_array:  array of dspout audiotap filenames</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">mac_address</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span>
+        <span class="n">model_number</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span>
+        <span class="n">version</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">version</span>
+        <span class="n">audiotap_capture_file_zp</span> <span class="o">=</span> \
+            <span class="bp">self</span><span class="o">.</span><span class="n">AUDIOTAP_CAPTURE_FILE</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">version</span><span class="p">,</span>
+                <span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;JiraID&#39;</span><span class="p">],</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">tapfilename</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                <span class="n">mac_address</span><span class="p">,</span>
+                <span class="n">model_number</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config_iter</span><span class="p">)</span>
+        <span class="n">audiotap_capture_cmd_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">AUDIOTAP_CAPTURE_CMD</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+            <span class="n">audiotap_capture_file_zp</span>
+        <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Beginning audiotap capture on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+        <span class="n">proc_array</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span>
+                <span class="n">audiotap_capture_cmd_zp</span><span class="p">,</span>
+                <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+                <span class="n">preexec_fn</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">setsid</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="c1"># add to list of tap files for zip archive processing</span>
+        <span class="n">audiotap_filename_array</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">audiotap_capture_file_zp</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_kill_audiotap_capture_processes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">proc_array</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Terminate dspout audiotap capture processes</span>
+<span class="sd">        :param proc_array: array for capture processes running across all zps</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">iter_proc</span> <span class="ow">in</span> <span class="n">proc_array</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">killpg</span><span class="p">(</span><span class="n">iter_proc</span><span class="o">.</span><span class="n">pid</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGTERM</span><span class="p">)</span>
+            <span class="n">iter_proc</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_create_zip_file</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">,</span> <span class="n">tapfileinfo</span><span class="p">,</span> <span class="n">tapfilename</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates an archive instance for adding trace and dspout tap files</span>
+<span class="sd">        :param ht_master: zp (HT Master)</span>
+<span class="sd">        :param tapfilename: filename of audiotap file to be played back</span>
+<span class="sd">        :param tapfileinfo: metadata of audiotap file to be played back</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">zipfile</span><span class="o">.</span><span class="n">ZipFile</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">ARCHIVE_FILE</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">ht_master</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
+                <span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;JiraID&#39;</span><span class="p">],</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">tapfilename</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">config_iter</span><span class="p">),</span>
+            <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_archive_trace_file</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                            <span class="n">zp</span><span class="p">,</span>
+                            <span class="n">tapfileinfo</span><span class="p">,</span>
+                            <span class="n">tapfilename</span><span class="p">,</span>
+                            <span class="n">archive_file</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add anacapa.trace file to archive instance, tidy up local folder after</span>
+<span class="sd">        :param zp: zp</span>
+<span class="sd">        :param tapfileinfo: metadata of audiotap file to be played back</span>
+<span class="sd">        :param tapfilename: filename of audiotap file to be played back</span>
+<span class="sd">        :param archive_file:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">mac_address</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span>
+        <span class="n">model_number</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span>
+        <span class="n">version</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">version</span>
+        <span class="n">trace_log_file</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">-</span><span class="si">{}</span><span class="s1">-</span><span class="si">{}</span><span class="s1">-&#39;</span> \
+                         <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">-</span><span class="si">{}</span><span class="s1">-Config_</span><span class="si">{}</span><span class="s1">-anacapa.trace&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">version</span><span class="p">,</span>
+            <span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;JiraID&#39;</span><span class="p">],</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">tapfilename</span><span class="p">)[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="n">mac_address</span><span class="p">,</span>
+            <span class="n">model_number</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">config_iter</span>
+        <span class="p">)</span>
+        <span class="n">trace</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_anacapa_trace</span><span class="p">()</span>
+        <span class="c1"># write trace to file</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">trace_log_file</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">trace</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Anacapa trace saved to: &quot;</span>
+                             <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">trace_log_file</span><span class="p">))</span>
+        <span class="c1"># archive trace in zip file</span>
+        <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">trace_log_file</span><span class="p">),</span> \
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> trace file failed to create locally&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">trace_log_file</span><span class="p">)</span>
+        <span class="n">archive_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">trace_log_file</span><span class="p">,</span>
+                           <span class="n">compress_type</span><span class="o">=</span><span class="n">zipfile</span><span class="o">.</span><span class="n">ZIP_DEFLATED</span><span class="p">)</span>
+        <span class="c1"># delete/tidy trace file from local drive</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">trace_log_file</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_toggle_anacapa</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggles anacapa off then on</span>
+<span class="sd">        Used to start or stop local audiotap file playback from jffs dir</span>
+<span class="sd">        :param zp: Zone Player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">wait_for_upnp_alive</span><span class="p">()</span>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.generate_unique_ht_master_devices"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.generate_unique_ht_master_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_unique_ht_master_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">ht_master</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_master_capable_devices</span><span class="p">():</span>
+                <span class="k">yield</span> <span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="p">)</span></div>
+
+<div class="viewcode-block" id="PlaybackDDRegressionTaps.test_playback_dd_regression_taps"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_tap_regression.PlaybackDDRegressionTaps.test_playback_dd_regression_taps">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_ht_master_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_playback_dd_regression_taps</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Increment config field for file naming purposes</span>
+<span class="sd">        Enable SPDIF input for external clock input</span>
+<span class="sd">        Set AVTransport to play TV</span>
+<span class="sd">        Iterate through previously scraped list of audiotap files:</span>
+<span class="sd">            Determine the clock frequency for the AC3 external file</span>
+<span class="sd">            Stop Anacapa</span>
+<span class="sd">            Upload the audiotap for this iteration</span>
+<span class="sd">            Start up Anacapa</span>
+<span class="sd">            Start playback of external clock reference signal (triggers</span>
+<span class="sd">                audiotap playback to start)</span>
+<span class="sd">            Start dspout tap capture for each ZP</span>
+<span class="sd">            Wait for a sufficient amount of time (audiotap duration)</span>
+<span class="sd">            Stop dspout tap on each ZP</span>
+<span class="sd">            Download, archive and delete trace files</span>
+<span class="sd">            Add tap files to archive and tidy up</span>
+<span class="sd">        :param ht_master: HT master capable device</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_spdif</span><span class="p">()</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config_iter</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="k">for</span> <span class="n">tapfilename</span><span class="p">,</span> <span class="n">tapfileinfo</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">DD_REGRESSION_TAP_TEST_FILES</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+
+            <span class="k">if</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">!=</span> <span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;Source&#39;</span><span class="p">]:</span>
+                <span class="k">continue</span>
+
+            <span class="p">[(</span><span class="n">spdif_clock_track</span><span class="p">,</span> <span class="n">spdif_clock_track_meta</span><span class="p">)]</span> <span class="o">=</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">_get_SPDIF_clock_track_for_samplerate</span><span class="p">(</span><span class="n">tapfileinfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">])</span>
+
+            <span class="c1"># make sure we are not already playing an audiotap which is</span>
+            <span class="c1"># still loaded into memory, because</span>
+            <span class="c1"># zp.diag.get_toslink_stream_type() would return whatever is in</span>
+            <span class="c1"># the audiotap, not actual SPDIF input...</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;rm -rf /jffs/audiotap.spdif&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_anacapa</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+
+            <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="n">spdif_clock_track</span><span class="p">,</span> <span class="s1">&#39;hwac3&#39;</span><span class="p">):</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span> <span class="o">==</span>
+                    <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()</span> <span class="o">==</span>
+                    <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Expected SPDIF input Stream Type: </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                           <span class="s2">&quot;Actual SPDIF Stream Type: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                                <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()))</span>
+
+                <span class="c1"># copy SPDIF audiotap AFTER checking the input clock file,</span>
+                <span class="c1"># otherwise audiotap will start to play and our check will</span>
+                <span class="c1"># be faulty</span>
+                <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;wget http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2"> &quot;</span>
+                                      <span class="s2">&quot;-O /jffs/audiotap.spdif&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+                                        <span class="n">tapfileinfo</span><span class="p">[</span><span class="s2">&quot;Source&quot;</span><span class="p">],</span>
+                                        <span class="n">tapfileinfo</span><span class="p">[</span><span class="s2">&quot;JiraID&quot;</span><span class="p">],</span>
+                                        <span class="n">tapfilename</span><span class="p">))</span>
+
+                <span class="c1"># start local audiotap playback:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_anacapa</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">_capture_output_tap_and_trace</span><span class="p">(</span><span class="n">tapfilename</span><span class="p">,</span>
+                                                   <span class="n">tapfileinfo</span><span class="p">,</span>
+                                                   <span class="n">ht_master</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Playback DD Regression Taps&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">PlaybackDDRegressionTaps</span><span class="p">()]</span>
+    <span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

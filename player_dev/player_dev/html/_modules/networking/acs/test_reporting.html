@@ -1,0 +1,633 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.acs.test_reporting &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.acs.test_reporting</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+
+<span class="kn">from</span> <span class="nn">common.networking.access_point</span> <span class="k">import</span> <span class="n">OpenWrtWifiFixtureMixin</span>
+<span class="kn">from</span> <span class="nn">networking.acs.base</span> <span class="k">import</span> <span class="n">AcsWorkflowTestFixure</span>
+<span class="kn">from</span> <span class="nn">sonos.client.athconfiglib</span> <span class="k">import</span> <span class="n">Athconfig</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">INTERFACE_5GHZ</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+<span class="kn">from</span> <span class="nn">wifi.channels</span> <span class="k">import</span> <span class="n">N_CHANNEL_MAPPING</span>
+<span class="kn">from</span> <span class="nn">wifi.openWrt</span> <span class="k">import</span> <span class="n">WirelessRadio</span>
+
+
+<span class="n">RANDOM_CM_PENALTY</span> <span class="o">=</span> <span class="mi">63</span>
+
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture">[docs]</a><span class="k">class</span> <span class="nc">AcsReportingWorkflowFixture</span><span class="p">(</span><span class="n">AcsWorkflowTestFixure</span><span class="p">,</span> <span class="n">OpenWrtWifiFixtureMixin</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies /proc/ath_rincon_ath1/fullstatus ACS reporting that is not</span>
+<span class="sd">    implicitly verified by other test fixtures</span>
+
+<span class="sd">    .. seealso::</span>
+<span class="sd">        QMetry test cases</span>
+<span class="sd">        * `P-8672: Access Point Channel Change \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/qmetry/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=11006&gt;`_</span>
+<span class="sd">        * `P-8997: Abort Clearing CAC - Playback Started \</span>
+<span class="sd">          &lt;https://qmetry.sonos.com/qmetry/Main.php?type=tm&amp;do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=11009&gt;`_</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># no test tag to prevent running in hallway (ex. HT_ACS) rather needs</span>
+    <span class="c1"># screenroom so only runs on a job which picks screenroom</span>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.setUpFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AcsReportingWorkflowFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># We will only be using the 5GHz radio</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">radio_device</span> <span class="o">=</span> <span class="n">WirelessRadio</span><span class="o">.</span><span class="n">FIVE_GHZ</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span>
+        <span class="c1"># sleep to avoid issues with the initial boot scan which complicates</span>
+        <span class="c1"># manipulating scan settings</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">master</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">primary_setup</span><span class="p">(</span><span class="n">master</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.tearDownFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AcsReportingWorkflowFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">scanenable</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span>
+         <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.primary_setup"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.primary_setup">[docs]</a>    <span class="k">def</span> <span class="nf">primary_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_ps_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">ps_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_lm_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reset_nol</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_nol_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">cac_state</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_initial_scan_interval</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">toggle_scan</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">()</span><span class="o">.</span><span class="n">acs</span><span class="o">.</span><span class="n">timer</span><span class="o">.</span><span class="n">time_to_next_scan</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_acs_scan</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">expect_cac</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.setUpTest"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">master</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">primary_setup</span><span class="p">(</span><span class="n">master</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.get_channel_info"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.get_channel_info">[docs]</a>    <span class="k">def</span> <span class="nf">get_channel_info</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">channel_frequency</span><span class="p">,</span> <span class="n">proc_primary</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the current channel metric value for channel_frequency from</span>
+<span class="sd">        primary proc file</span>
+
+<span class="sd">        :param channel_frequency: the 5 GHz channel frequency to get a metric</span>
+<span class="sd">            for</span>
+<span class="sd">        :type channel_frequency: :obj:`int`</span>
+<span class="sd">        :param proc_primary: a snapshot of the primary procfile</span>
+<span class="sd">        :type: :class:`~sonos.parsers.procfs.primary.PrimaryProcfile`</span>
+<span class="sd">        :return: the channel metric for channel_frequency</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        :raises ValueError: if proc_primary provided to method does not have an</span>
+<span class="sd">            acs attribute</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">proc_primary</span><span class="p">,</span> <span class="s1">&#39;acs&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;proc_primary needs to have an &#39;acs&#39; section, &quot;</span>
+                <span class="s2">&quot;which is only supported by HT masters&quot;</span><span class="p">)</span>
+        <span class="n">channel_entry</span> <span class="o">=</span> <span class="p">[</span><span class="n">channel_row</span> <span class="k">for</span> <span class="n">channel_row</span> <span class="ow">in</span>
+                         <span class="n">proc_primary</span><span class="o">.</span><span class="n">acs</span><span class="o">.</span><span class="n">channels_table</span>
+                         <span class="k">if</span> <span class="n">channel_row</span><span class="o">.</span><span class="n">frequency</span> <span class="o">==</span> <span class="n">channel_frequency</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">channel_entry</span> <span class="ow">and</span> <span class="n">channel_entry</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.toggle_scan"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.toggle_scan">[docs]</a>    <span class="k">def</span> <span class="nf">toggle_scan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">,</span> <span class="n">interface</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disables and enables the scan of zone on interface</span>
+
+<span class="sd">        :param zone: the zone to get the primary detection info of</span>
+<span class="sd">        :type zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param interface: the interface of zone to toggle scanning</span>
+<span class="sd">        :type interface: :str:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zone</span><span class="p">]</span><span class="o">.</span><span class="n">scanenable</span><span class="p">(</span><span class="n">interface</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zone</span><span class="p">]</span><span class="o">.</span><span class="n">scanenable</span><span class="p">(</span><span class="n">interface</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.get_ap_info"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.get_ap_info">[docs]</a>    <span class="k">def</span> <span class="nf">get_ap_info</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">proc_primary</span><span class="p">,</span> <span class="n">ap_mac</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get AP info from the ACS AP list in the primary proc file for the DUT AP</span>
+
+<span class="sd">        :param proc_primary: a snapshot of the primary procfile</span>
+<span class="sd">        :type: :class:`~sonos.parsers.procfs.primary.PrimaryProcfile`</span>
+<span class="sd">        :param ap_mac: MAC address of Access Point</span>
+<span class="sd">        :type: :obj:`str`</span>
+<span class="sd">        :return: the AP info from primary ACS section</span>
+<span class="sd">        :rtype: :obj:`namedtuple`</span>
+<span class="sd">        :raises ValueError: if primary provided to method does not have an</span>
+<span class="sd">            acs attribute</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">proc_primary</span><span class="p">,</span> <span class="s1">&#39;acs&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;proc_primary needs to have an &#39;acs&#39; section, which is only &quot;</span>
+                <span class="s2">&quot;supported by HT masters&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">proc_primary</span><span class="o">.</span><span class="n">acs</span><span class="p">,</span> <span class="s1">&#39;ap_table&#39;</span><span class="p">):</span>
+            <span class="c1"># the AP table is empty.</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+        <span class="n">ap_entry</span> <span class="o">=</span> <span class="p">[</span><span class="n">ap_row</span> <span class="k">for</span> <span class="n">ap_row</span> <span class="ow">in</span> <span class="n">proc_primary</span><span class="o">.</span><span class="n">acs</span><span class="o">.</span><span class="n">ap_table</span>
+                    <span class="k">if</span> <span class="n">ap_row</span><span class="o">.</span><span class="n">bssid</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">ap_mac</span><span class="o">.</span><span class="n">lower</span><span class="p">()]</span>
+
+        <span class="k">return</span> <span class="n">ap_entry</span> <span class="ow">and</span> <span class="n">ap_entry</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">or</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.get_primary_channel"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.get_primary_channel">[docs]</a>    <span class="k">def</span> <span class="nf">get_primary_channel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">proc_primary</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get Sonos primary channel from the proc_primary ACS AP table</span>
+
+<span class="sd">        :param: proc_primary: the parsed primary proc file</span>
+<span class="sd">        :type: :class:`~sonos.parsers.primary.PrimaryProcFile`</span>
+<span class="sd">        :param zone: the zone to get the primary detection info of</span>
+<span class="sd">        :type zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: the primary channel obtained from ACS AP list</span>
+<span class="sd">        :rtype: :obj:`int` or None</span>
+<span class="sd">        :raises ValueError: if proc_primary provided to method does not have an</span>
+<span class="sd">            acs attribute</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">proc_primary</span><span class="p">,</span> <span class="s1">&#39;acs&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;proc_primary is missing &#39;acs&#39; section&quot;</span><span class="p">)</span>
+
+        <span class="n">primary_entry</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">ap_row</span> <span class="k">for</span> <span class="n">ap_row</span> <span class="ow">in</span> <span class="n">proc_primary</span><span class="o">.</span><span class="n">acs</span><span class="o">.</span><span class="n">ap_table</span>
+            <span class="k">if</span> <span class="n">ap_row</span><span class="o">.</span><span class="n">bssid</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">zone</span><span class="o">.</span><span class="n">mac_address_5ghz</span><span class="o">.</span><span class="n">lower</span><span class="p">()]</span>
+
+        <span class="k">return</span> <span class="n">primary_entry</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">primary_channel</span> <span class="k">if</span> <span class="n">primary_entry</span> <span class="k">else</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.wait_for_zones_started_scan"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.wait_for_zones_started_scan">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_zones_started_scan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">timeout</span><span class="o">=</span><span class="n">AcsWorkflowTestFixure</span><span class="o">.</span><span class="n">MIN_INITIAL_SCAN_INTERVAL</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Starts a scan on zones and waits for it to start</span>
+
+<span class="sd">        :param zones: the zones to check scan status of</span>
+<span class="sd">        :type list:zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param timeout_seconds: the number of seconds to wait before timeout</span>
+<span class="sd">        :type timeout_seconds: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">enable_scan</span><span class="p">(</span><span class="n">zone</span><span class="p">,</span> <span class="n">wait_for_scan</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span>
+         <span class="p">(</span><span class="n">zones</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)]</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="nb">all</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">is_zone_scanning</span><span class="p">(</span><span class="n">zone</span><span class="p">)</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="p">(</span>
+                            <span class="n">zones</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)]),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">timeout</span> <span class="o">*</span> <span class="mf">0.2</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span> <span class="o">*</span> <span class="mf">1.2</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;zones should be scanning after </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">timeout</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.wait_until_zones_not_scanning"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.wait_until_zones_not_scanning">[docs]</a>    <span class="k">def</span> <span class="nf">wait_until_zones_not_scanning</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for timeout_seconds for all zones to not be scanning</span>
+
+<span class="sd">        :param zones: the zones to check scan status of</span>
+<span class="sd">        :type list:zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param timeout_seconds: the number of seconds to wait before timeout</span>
+<span class="sd">        :type timeout_seconds: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">timeout</span> <span class="o">=</span> <span class="n">timeout_seconds</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">TOTAL_ACS_SCAN_TIME</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="nb">any</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">is_zone_scanning</span><span class="p">(</span><span class="n">zone</span><span class="p">)</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="p">(</span>
+                            <span class="n">zones</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)]),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">timeout</span> <span class="o">*</span> <span class="mf">0.2</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span> <span class="o">*</span> <span class="mf">1.2</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;idle scan should end after </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">timeout</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.wait_for_zones_started_scan_complete"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.wait_for_zones_started_scan_complete">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_zones_started_scan_complete</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                             <span class="n">timeout_seconds</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Starts a scan on zones and Waits for zones finish scanning</span>
+
+<span class="sd">        :param zones: the zones to check scan status of</span>
+<span class="sd">        :type list:zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param timeout_seconds: the number of seconds to wait before timeout</span>
+<span class="sd">        :type timeout_seconds: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">timeout</span> <span class="o">=</span> <span class="n">timeout_seconds</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">MIN_INITIAL_SCAN_INTERVAL</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_started_scan</span><span class="p">(</span><span class="n">zones</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_until_zones_not_scanning</span><span class="p">(</span><span class="n">zones</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.config_and_scan_network"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.config_and_scan_network">[docs]</a>    <span class="k">def</span> <span class="nf">config_and_scan_network</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configures the dut AP of the testbed to a given channel then causes and</span>
+<span class="sd">        verified zone&#39;s scan</span>
+
+<span class="sd">        :param zones: the zones to check scan status of</span>
+<span class="sd">        :type list:zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param channel: the wireless channel for the network</span>
+<span class="sd">        :type channel: obj:`int` or :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">channel</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">configure_basic_wireless_network</span><span class="p">(</span><span class="n">channel</span><span class="o">=</span><span class="n">channel</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+
+        <span class="n">WAIT_FOR_AP_NETWORK_READY_SEC</span> <span class="o">=</span> <span class="mi">10</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">WAIT_FOR_AP_NETWORK_READY_SEC</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_scan</span><span class="p">(</span><span class="n">zone</span><span class="p">,</span> <span class="n">wait_for_scan</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_acs_scan</span><span class="p">(</span><span class="n">zone</span><span class="p">,</span> <span class="n">expect_cac</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.set_primary_chans_and_get_scans"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.set_primary_chans_and_get_scans">[docs]</a>    <span class="k">def</span> <span class="nf">set_primary_chans_and_get_scans</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">scanner</span><span class="p">,</span> <span class="n">txer</span><span class="p">,</span> <span class="n">channels</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets txer to each channel while bonded to allow the scanner to detect it</span>
+<span class="sd">        and returns the primary file containing the resulting scans</span>
+
+<span class="sd">        :return: list of primary files corresponding to a scan for each channel</span>
+<span class="sd">        :rtype: :class:`~sonos.parsers.primary.PrimaryProcFile`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">txer</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sats</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">sats</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">channel</span> <span class="ow">in</span> <span class="n">channels</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">txer</span><span class="p">]</span><span class="o">.</span><span class="n">scanenable</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">txer</span><span class="p">]</span><span class="o">.</span><span class="n">setchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="n">channel</span><span class="p">)</span>
+
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                <span class="n">channel</span> <span class="o">==</span> <span class="n">txer</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_operating_channel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">),</span>
+                <span class="n">start_delay</span><span class="o">=</span><span class="mf">5.0</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">30.0</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_started_scan_complete</span><span class="p">([</span><span class="n">scanner</span><span class="p">])</span>
+            <span class="n">res</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">scanner</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">())</span>
+
+        <span class="n">txer</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.verify_needs_cac_penalty"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.verify_needs_cac_penalty">[docs]</a>    <span class="k">def</span> <span class="nf">verify_needs_cac_penalty</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that a channel which has a needs CAC flag set is penalized</span>
+<span class="sd">        relative to not have the needs CAC flag set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">cac_state</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_timeout</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_scan</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">wait_for_scan</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_started_scan_complete</span><span class="p">([</span><span class="n">master</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_cac_begin</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="n">cac_channel</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">))</span>
+        <span class="n">cm_pre_cac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">cac_channel</span><span class="p">,</span>
+                                           <span class="n">master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_cac_complete</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="n">cm_post_cac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">cac_channel</span><span class="p">,</span>
+                                            <span class="n">master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">cm_pre_cac</span> <span class="o">&gt;</span> <span class="n">cm_post_cac</span><span class="p">,</span>
+            <span class="s2">&quot;ht master </span><span class="si">{}</span><span class="s2"> cms post cac for channels </span><span class="si">{}</span><span class="s2"> should be lower &quot;</span>
+            <span class="s2">&quot;than pre cac&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">,</span> <span class="n">cac_channel</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.verify_radar_penalty"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.verify_radar_penalty">[docs]</a>    <span class="k">def</span> <span class="nf">verify_radar_penalty</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that a channel which has a radar flag set is penalized</span>
+<span class="sd">        relative to not have the radar flag set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">short_nol_interval</span> <span class="o">=</span> <span class="mi">10</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_cac_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">cac_state</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="c1"># set the nol timer to something short, the channel will not be in the</span>
+        <span class="c1"># table until after a scan which occurs after the nol interval passes</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_nol_timeout</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">short_nol_interval</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_scan</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_started_scan_complete</span><span class="p">([</span><span class="n">master</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_cac_begin</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="n">nol_channel</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">))</span>
+        <span class="n">cm_pre_nol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">nol_channel</span><span class="p">,</span>
+                                           <span class="n">master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">master</span><span class="p">]</span><span class="o">.</span><span class="n">bangradar</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">short_nol_interval</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_scan</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_started_scan_complete</span><span class="p">([</span><span class="n">master</span><span class="p">])</span>
+        <span class="n">cm_post_nol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">nol_channel</span><span class="p">,</span>
+                                            <span class="n">master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">cm_pre_nol</span> <span class="o">&lt;</span> <span class="n">cm_post_nol</span><span class="p">,</span>
+            <span class="s2">&quot;ht master&#39;s </span><span class="si">{}</span><span class="s2"> cms post cac for channels </span><span class="si">{}</span><span class="s2"> should be lower than &quot;</span>
+            <span class="s2">&quot;pre cac&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">,</span> <span class="n">nol_channel</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.test_ap_report_data"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.test_ap_report_data">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;ht_masters&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_ap_report_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies the detection of 3rd party AP SSIDs in the 5GHz channel scan</span>
+<span class="sd">        and that the presence of 3rd party APs has a negative impact on the CM</span>
+<span class="sd">        of the channel of which it they are detected</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">ht_master</span><span class="p">]</span> <span class="o">=</span> <span class="n">Athconfig</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+
+        <span class="c1"># Pick two channels with a lot of distance between them</span>
+        <span class="n">channel_a</span> <span class="o">=</span> <span class="n">N_CHANNEL_MAPPING</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">channel_b</span> <span class="o">=</span> <span class="n">N_CHANNEL_MAPPING</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="c1"># Collect fullstatus with AP disabled</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config_and_scan_network</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">fs_pre_ap</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">()</span>
+
+        <span class="c1"># add DUT AP to first 5GHz test channel</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config_and_scan_network</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">channel_a</span><span class="o">.</span><span class="n">channel</span><span class="p">)</span>
+        <span class="n">fs_ap_channel_a</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">()</span>
+
+        <span class="c1"># move DUT AP to second 5GHz test channel</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config_and_scan_network</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">channel_b</span><span class="o">.</span><span class="n">channel</span><span class="p">)</span>
+        <span class="n">fs_ap_channel_b</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_primary</span><span class="p">()</span>
+
+        <span class="c1"># Remember 5GHZ MAC, then bring down the radio</span>
+        <span class="n">ap_5ghz_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">mac_address_5ghz</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+
+        <span class="c1"># Pre-parse fullstatus results</span>
+        <span class="n">channel_a_info_pre_ap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">fs_pre_ap</span><span class="p">)</span>
+        <span class="n">channel_a_info_ap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">fs_ap_channel_a</span><span class="p">)</span>
+        <span class="n">channel_a_info_after_ap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">fs_ap_channel_b</span><span class="p">)</span>
+        <span class="n">channel_b_info_pre_ap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">fs_ap_channel_a</span><span class="p">)</span>
+        <span class="n">channel_b_info_ap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">fs_ap_channel_b</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Move AP from None -&gt; </span><span class="si">{}</span><span class="s2"> -&gt; </span><span class="si">{}</span><span class="se">\n</span><span class="si">{}</span><span class="se">\n</span><span class="si">{}</span><span class="se">\n</span><span class="si">{}</span><span class="s2"> &quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span> <span class="n">channel_b</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span>
+            <span class="n">fs_pre_ap</span><span class="o">.</span><span class="n">acs</span><span class="p">,</span> <span class="n">fs_ap_channel_a</span><span class="o">.</span><span class="n">acs</span><span class="p">,</span> <span class="n">fs_ap_channel_b</span><span class="o">.</span><span class="n">acs</span><span class="p">))</span>
+
+        <span class="c1"># perform ACS channels table reporting info verifications</span>
+        <span class="c1"># given the AP penalty is only 1% or 100 of 9999 the random penalty 0-63</span>
+        <span class="c1"># may mask the channel metric change resulting from the moving on a</span>
+        <span class="c1"># single AP on or off a given channel. Simply verify the value is</span>
+        <span class="c1"># reasonable</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a_info_pre_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span> <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP count on affected channel is incremented&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a_info_pre_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_a_info_pre_ap</span><span class="o">.</span><span class="n">utilization</span><span class="p">,</span>
+            <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">utilization</span> <span class="o">+</span> <span class="n">RANDOM_CM_PENALTY</span><span class="p">,</span>
+            <span class="s2">&quot;Verify number of AP&#39;s on a given 5GHz channel affects metric&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b_info_pre_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span> <span class="n">channel_b_info_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP count on new channel is incremented&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b_info_pre_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_b_info_pre_ap</span><span class="o">.</span><span class="n">utilization</span><span class="p">,</span>
+            <span class="n">channel_b_info_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_b_info_ap</span><span class="o">.</span><span class="n">utilization</span> <span class="o">+</span> <span class="n">RANDOM_CM_PENALTY</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP moving channels updates metric for new channel&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a_info_after_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_a_info_after_ap</span><span class="o">.</span><span class="n">utilization</span><span class="p">,</span>
+            <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">cm</span> <span class="o">-</span> <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">utilization</span> <span class="o">+</span> <span class="n">RANDOM_CM_PENALTY</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP leaving channel reduces metric for its old channel&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a_info_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span> <span class="n">channel_a_info_after_ap</span><span class="o">.</span><span class="n">aps</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP count on old AP channel is decremented&quot;</span><span class="p">)</span>
+
+        <span class="c1"># perform ACS AP table reporting info verifications</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNoneOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_ap_info</span><span class="p">(</span><span class="n">fs_pre_ap</span><span class="p">,</span> <span class="n">ap_5ghz_mac</span><span class="p">),</span>
+            <span class="s2">&quot;Verify AP is not in ACS AP table initially&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_ap_info</span><span class="p">(</span><span class="n">fs_ap_channel_a</span><span class="p">,</span> <span class="n">ap_5ghz_mac</span><span class="p">)</span><span class="o">.</span><span class="n">primary_channel</span><span class="p">,</span>
+            <span class="s2">&quot;Verify AP is recorded in ACS AP table on correct channel&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="o">.</span><span class="n">frequency</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_ap_info</span><span class="p">(</span><span class="n">fs_ap_channel_b</span><span class="p">,</span> <span class="n">ap_5ghz_mac</span><span class="p">)</span><span class="o">.</span><span class="n">primary_channel</span><span class="p">,</span>
+            <span class="s2">&quot;Verify roaming AP is correctly recorded in ACS AP table&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.test_needs_cac_penalty"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.test_needs_cac_penalty">[docs]</a>    <span class="k">def</span> <span class="nf">test_needs_cac_penalty</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that a channel which has a needs CAC flag set is penalized</span>
+<span class="sd">        relative to not have the needs CAC flag set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># do all of this in parallel to reduce test time</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">master</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_needs_cac_penalty</span><span class="p">(</span><span class="n">master</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.test_radar_penalty"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.test_radar_penalty">[docs]</a>    <span class="k">def</span> <span class="nf">test_radar_penalty</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that a channel which has a radar flag set is penalized</span>
+<span class="sd">        relative to not have the radar flag set</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">set_nol_enable</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">]</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">master</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_radar_penalty</span><span class="p">(</span><span class="n">master</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsReportingWorkflowFixture.test_other_htmaster_affects_channel_metric"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_reporting.AcsReportingWorkflowFixture.test_other_htmaster_affects_channel_metric">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;ht_masters&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_other_htmaster_affects_channel_metric</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies the detection of SONOS primary capable SSIDs in the 5GHz</span>
+<span class="sd">        channel scan and that the presence of SONOS primaries has a negative</span>
+<span class="sd">        impact on the CM of the channel of which it they are detected,</span>
+
+<span class="sd">        make sure this is correct in the screenroom, could just be interferers</span>
+<span class="sd">        to show up in a scan the primary must be advertising</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">other_master</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span> <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span> <span class="k">if</span> <span class="n">master</span> <span class="o">!=</span> <span class="n">ht_master</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">ht_chans</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">ht_master</span><span class="p">]</span><span class="o">.</span><span class="n">getchannels</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)]</span>
+        <span class="n">channel_a</span><span class="p">,</span> <span class="n">channel_b</span> <span class="o">=</span> <span class="p">[</span><span class="n">ht_chans</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">ht_chans</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]]</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_primary_chans_and_get_scans</span><span class="p">(</span>
+            <span class="n">ht_master</span><span class="p">,</span> <span class="n">other_master</span><span class="p">,</span> <span class="p">[</span><span class="n">channel_b</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">])</span>
+        <span class="n">ht_master1_fs_2b</span><span class="p">,</span> <span class="n">ht_master1_fs_2a</span> <span class="o">=</span> <span class="n">res</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_primary_chans_and_get_scans</span><span class="p">(</span>
+            <span class="n">other_master</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">,</span> <span class="p">[</span><span class="n">channel_a</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">])</span>
+        <span class="n">ht_master2_fs_1a</span><span class="p">,</span> <span class="n">ht_master2_fs_1b</span> <span class="o">=</span> <span class="n">res</span>
+
+        <span class="n">ht_master1_chan_a_info_2b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_a</span><span class="p">,</span>
+                                                          <span class="n">ht_master1_fs_2b</span><span class="p">)</span>
+        <span class="n">ht_master1_chan_a_info_2a</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_a</span><span class="p">,</span>
+                                                          <span class="n">ht_master1_fs_2a</span><span class="p">)</span>
+        <span class="n">ht_master1_chan_b_info_2b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_b</span><span class="p">,</span>
+                                                          <span class="n">ht_master1_fs_2b</span><span class="p">)</span>
+        <span class="n">ht_master1_chan_b_info_2a</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_b</span><span class="p">,</span>
+                                                          <span class="n">ht_master1_fs_2a</span><span class="p">)</span>
+        <span class="n">ht_master2_chan_a_info_1a</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_a</span><span class="p">,</span>
+                                                          <span class="n">ht_master2_fs_1a</span><span class="p">)</span>
+        <span class="n">ht_master2_chan_a_info_1b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_a</span><span class="p">,</span>
+                                                          <span class="n">ht_master2_fs_1b</span><span class="p">)</span>
+        <span class="n">ht_master2_chan_b_info_1a</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_b</span><span class="p">,</span>
+                                                          <span class="n">ht_master2_fs_1a</span><span class="p">)</span>
+        <span class="n">ht_master2_chan_b_info_1b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_info</span><span class="p">(</span><span class="n">channel_b</span><span class="p">,</span>
+                                                          <span class="n">ht_master2_fs_1b</span><span class="p">)</span>
+
+        <span class="n">dut_model</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">modelNumber</span>
+        <span class="n">other_model</span> <span class="o">=</span> <span class="n">other_master</span><span class="o">.</span><span class="n">modelNumber</span>
+
+        <span class="c1"># perform channel metric difference verifications</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+            <span class="n">ht_master1_chan_a_info_2a</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span> <span class="n">ht_master1_chan_a_info_2b</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span>
+            <span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2">&#39;s channel metric of channel </span><span class="si">{}</span><span class="s2"> is higher when other &quot;</span>
+            <span class="s2">&quot;primary on channel&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">ht_master1_chan_b_info_2a</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span> <span class="n">ht_master1_chan_b_info_2b</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span>
+            <span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2">&#39;s channel metric of channel </span><span class="si">{}</span><span class="s2"> is lower when other &quot;</span>
+            <span class="s2">&quot;primary off channel&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+            <span class="n">ht_master2_chan_b_info_1b</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span> <span class="n">ht_master2_chan_b_info_1a</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span>
+            <span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2">&#39;s channel metric of channel </span><span class="si">{}</span><span class="s2"> is higher when other &quot;</span>
+            <span class="s2">&quot;primary on channel&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+            <span class="n">ht_master2_chan_a_info_1b</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span> <span class="n">ht_master2_chan_a_info_1a</span><span class="o">.</span><span class="n">cm</span><span class="p">,</span>
+            <span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2">&#39;s channel metric of channel </span><span class="si">{}</span><span class="s2"> is lower when other &quot;</span>
+            <span class="s2">&quot;primary off channel&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+
+        <span class="c1"># perform ACS AP table reporting info verifications for primaries</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master1_fs_2a</span><span class="p">,</span> <span class="n">other_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel &quot;</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master1_fs_2b</span><span class="p">,</span> <span class="n">other_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel &quot;</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master1_fs_2b</span><span class="p">,</span> <span class="n">other_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should not be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel&quot;</span>
+            <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master1_fs_2a</span><span class="p">,</span> <span class="n">other_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should not be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel&quot;</span>
+            <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">other_model</span><span class="p">,</span> <span class="n">dut_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master2_fs_1a</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel &quot;</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">other_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master2_fs_1b</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel &quot;</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">other_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_a</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master2_fs_1b</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should not be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel&quot;</span>
+            <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">other_model</span><span class="p">,</span> <span class="n">channel_a</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">channel_b</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">get_primary_channel</span><span class="p">(</span><span class="n">ht_master2_fs_1a</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">),</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should not be on scanning primary </span><span class="si">{}</span><span class="s2">&#39;s ACS AP table on channel&quot;</span>
+            <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_model</span><span class="p">,</span> <span class="n">other_model</span><span class="p">,</span> <span class="n">channel_b</span><span class="p">))</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">AcsReportingWorkflowFixture</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">AcsReportingWorkflowFixture</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+        <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

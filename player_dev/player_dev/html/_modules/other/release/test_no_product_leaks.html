@@ -1,0 +1,375 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>other.release.test_no_product_leaks &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for other.release.test_no_product_leaks</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">subprocess</span> <span class="k">import</span> <span class="n">Popen</span><span class="p">,</span> <span class="n">call</span><span class="p">,</span> <span class="n">PIPE</span>
+<span class="kn">from</span> <span class="nn">shutil</span> <span class="k">import</span> <span class="n">rmtree</span><span class="p">,</span> <span class="n">copytree</span>
+<span class="kn">from</span> <span class="nn">urllib</span> <span class="k">import</span> <span class="n">urlretrieve</span>
+<span class="kn">from</span> <span class="nn">tempfile</span> <span class="k">import</span> <span class="n">mkdtemp</span>
+<span class="kn">from</span> <span class="nn">zipfile</span> <span class="k">import</span> <span class="n">ZipFile</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+
+<span class="kn">import</span> <span class="nn">abc</span>
+<span class="kn">import</span> <span class="nn">os</span>
+
+<span class="c1"># Platforms to test</span>
+<span class="n">ACR</span> <span class="o">=</span> <span class="s2">&quot;acr&quot;</span>
+<span class="n">ICR</span> <span class="o">=</span> <span class="s2">&quot;icr&quot;</span>
+<span class="n">MDCR</span> <span class="o">=</span> <span class="s2">&quot;mdcr&quot;</span>
+<span class="n">WDCR</span> <span class="o">=</span> <span class="s2">&quot;wdcr&quot;</span>
+
+<span class="c1"># Product leak filename</span>
+<span class="n">ACR_RELEASE_ARTIFACT</span> <span class="o">=</span> <span class="s2">&quot;SonosACR-release.apk&quot;</span>
+<span class="n">ICR_RELEASE_ARTIFACT</span> <span class="o">=</span> <span class="s2">&quot;Sonos.ipa&quot;</span>
+<span class="n">MDCR_RELEASE_ARTIFACT</span> <span class="o">=</span> <span class="s2">&quot;Sonos.dmg&quot;</span>
+<span class="n">WDCR_RELEASE_ARTIFACT</span> <span class="o">=</span> <span class="s2">&quot;Sonos.exe&quot;</span>
+
+<span class="n">ARTIFACT_DICT</span> <span class="o">=</span> <span class="p">{</span><span class="n">ACR</span><span class="p">:</span> <span class="n">ACR_RELEASE_ARTIFACT</span><span class="p">,</span>
+                 <span class="n">ICR</span><span class="p">:</span> <span class="n">ICR_RELEASE_ARTIFACT</span><span class="p">,</span>
+                 <span class="n">MDCR</span><span class="p">:</span> <span class="n">MDCR_RELEASE_ARTIFACT</span><span class="p">,</span>
+                 <span class="n">WDCR</span><span class="p">:</span> <span class="n">WDCR_RELEASE_ARTIFACT</span><span class="p">}</span>
+
+<span class="n">LEAK_STRINGS_PATH</span> <span class="o">=</span> <span class="s1">&#39;data/leak_strings.txt&#39;</span>
+
+<span class="n">DEFAULT_WINE_DIR</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/.wine&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s1">&#39;~&#39;</span><span class="p">))</span>
+<span class="n">SONOS_WINE_DIR</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/drive_c/Program Files/Sonos&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DEFAULT_WINE_DIR</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="ProductLeakTestFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture">[docs]</a><span class="k">class</span> <span class="nc">ProductLeakTestFixture</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+
+    <span class="n">__metaclass__</span> <span class="o">=</span> <span class="n">abc</span><span class="o">.</span><span class="n">ABCMeta</span>
+
+<div class="viewcode-block" id="ProductLeakTestFixture.setUpFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">build_url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">download_url</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">build_version</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">build</span><span class="o">.</span><span class="n">version_number</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">expected_strings</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_leak_strings</span><span class="p">(</span><span class="n">LEAK_STRINGS_PATH</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ProductLeakTestFixture.setUpTest"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span> <span class="o">=</span> <span class="n">mkdtemp</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ProductLeakTestFixture.tearDownTest"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_clear_tmp_directory</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ProductLeakTestFixture.tearDownFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">SONOS_WINE_DIR</span><span class="p">):</span>
+            <span class="n">rmtree</span><span class="p">(</span><span class="n">SONOS_WINE_DIR</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ProductLeakTestFixture.test_product_leak"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ProductLeakTestFixture.test_product_leak">[docs]</a>    <span class="k">def</span> <span class="nf">test_product_leak</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Run the product leak tests. For each platform,</span>
+<span class="sd">        go to the build URL and find the artifact matching</span>
+<span class="sd">        the platform. Download and perform a set of steps</span>
+<span class="sd">        to unpack files used for product leak testing.</span>
+
+<span class="sd">        :param str platform: What platform are we testing?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span> <span class="o">=</span> <span class="n">ARTIFACT_DICT</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PLATFORM</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_retrieve_and_unpack_artifacts</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_remove_local_artifact</span><span class="p">()</span>
+        <span class="n">file_list</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_files_from_package</span><span class="p">()</span>
+
+        <span class="k">for</span> <span class="n">file_name</span> <span class="ow">in</span> <span class="n">file_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_test_product_leak</span><span class="p">(</span><span class="n">file_name</span><span class="p">)</span></div>
+
+    <span class="nd">@abc</span><span class="o">.</span><span class="n">abstractmethod</span>
+    <span class="k">def</span> <span class="nf">_retrieve_and_unpack_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Download and unpack the files related to the platform under</span>
+<span class="sd">        test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">,</span>
+                                                      <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">PLATFORM</span> <span class="o">==</span> <span class="n">ICR</span><span class="p">:</span>
+            <span class="n">artifact_url</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">../icr-build/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">build_url</span><span class="p">,</span>
+                                                      <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">artifact_url</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">../</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">build_url</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Checking for artifact at &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">artifact_url</span><span class="p">))</span>
+        <span class="n">res</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">urlretrieve</span><span class="p">(</span><span class="n">artifact_url</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">,</span> <span class="n">res</span><span class="p">,</span>
+            <span class="s2">&quot;Expect the file locations to match&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Unpacking files at </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_remove_local_artifact</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove the local artifact after we&#39;re done unpacking the files</span>
+<span class="sd">        from it.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Removing artifact file from temp directory&quot;</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_files_from_package</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Retrieve all the files in the package</span>
+
+<span class="sd">        :return: a list of files found for the package</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">file_list</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">for</span> <span class="n">path</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">files</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">file_name</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+                <span class="n">file_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">file_name</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">file_list</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">&quot;Expect to find at least 1 file. Found </span><span class="si">{}</span><span class="s2"> File(s)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">file_list</span><span class="p">)))</span>
+
+        <span class="k">return</span> <span class="n">file_list</span>
+
+    <span class="k">def</span> <span class="nf">_get_leak_strings</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get a list of tuples (&lt;search string&gt;, &lt;string that may include search</span>
+<span class="sd">        string&gt;) of search strings to grep through the files for product leaks.</span>
+
+<span class="sd">        :param str path: path to file with search strings</span>
+<span class="sd">        :return: a list of tuples of search strings</span>
+<span class="sd">        :rtype: :obj:`list` of :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strings</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="c1"># Populate strings_to_search</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="k">as</span> <span class="n">sts_fp</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">sts_fp</span><span class="p">:</span>
+                <span class="n">line</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">line</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">line</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;#&#39;</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Line: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">line</span><span class="p">))</span>
+                    <span class="n">exclude_list</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+                    <span class="n">include</span> <span class="o">=</span> <span class="n">exclude_list</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+                    <span class="n">strings</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">include</span><span class="o">.</span><span class="n">strip</span><span class="p">(),</span> <span class="p">[</span><span class="n">string</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="k">for</span> <span class="n">string</span> <span class="ow">in</span> <span class="n">exclude_list</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">strings</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect to find at least 1 &quot;</span>
+            <span class="s2">&quot;search string.&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">strings</span>
+
+    <span class="k">def</span> <span class="nf">_clear_tmp_directory</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove the tmp directory.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">):</span>
+            <span class="n">rmtree</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_test_product_leak</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Search a file for expected product leak strings. Exclude any</span>
+<span class="sd">        matching results if the result also matches the &quot;exclude&quot; strings</span>
+<span class="sd">        (String that contains the search string within it).</span>
+
+<span class="sd">        :param str file_name: name of file to check for product leak strings</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">include</span><span class="p">,</span> <span class="n">exclude_list</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">expected_strings</span><span class="p">:</span>
+            <span class="n">p_strings</span> <span class="o">=</span> <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;strings&#39;</span><span class="p">,</span> <span class="n">file_name</span><span class="p">],</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+            <span class="n">p_grep_include</span> <span class="o">=</span> <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;grep&#39;</span><span class="p">,</span> <span class="s1">&#39;-i&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">include</span><span class="p">)],</span>
+                                   <span class="n">stdin</span><span class="o">=</span><span class="n">p_strings</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">exclude_list</span><span class="p">:</span>
+                <span class="n">p_grep_exclude</span> <span class="o">=</span> <span class="n">p_grep_include</span>
+                <span class="k">for</span> <span class="n">exclude</span> <span class="ow">in</span> <span class="n">exclude_list</span><span class="p">:</span>
+                    <span class="n">p_grep_exclude</span> <span class="o">=</span> <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;grep&#39;</span><span class="p">,</span> <span class="s1">&#39;-v&#39;</span><span class="p">,</span> <span class="s1">&#39;-i&#39;</span><span class="p">,</span> <span class="n">exclude</span><span class="p">],</span>
+                                           <span class="n">stdin</span><span class="o">=</span><span class="n">p_grep_exclude</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span>
+                                           <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+                <span class="n">p_wc</span> <span class="o">=</span> <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;wc&#39;</span><span class="p">,</span> <span class="s1">&#39;-l&#39;</span><span class="p">],</span>
+                             <span class="n">stdin</span><span class="o">=</span><span class="n">p_grep_exclude</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">p_wc</span> <span class="o">=</span> <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;wc&#39;</span><span class="p">,</span> <span class="s1">&#39;-l&#39;</span><span class="p">],</span>
+                             <span class="n">stdin</span><span class="o">=</span><span class="n">p_grep_include</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+
+            <span class="n">output</span> <span class="o">=</span> <span class="n">p_wc</span><span class="o">.</span><span class="n">communicate</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">output</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
+
+            <span class="k">if</span> <span class="n">exclude_list</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span>
+                    <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1"> (excluding </span><span class="si">{1}</span><span class="s1">) found in </span><span class="si">{2}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">include</span><span class="p">,</span> <span class="n">exclude_list</span><span class="p">,</span> <span class="n">file_name</span><span class="o">.</span><span class="n">lstrip</span><span class="p">()))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span>
+                    <span class="s1">&#39;</span><span class="si">{0}</span><span class="s1"> found in </span><span class="si">{1}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">include</span><span class="p">,</span> <span class="n">file_name</span><span class="o">.</span><span class="n">lstrip</span><span class="p">()))</span></div>
+
+<div class="viewcode-block" id="ACRProductLeakTestFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ACRProductLeakTestFixture">[docs]</a><span class="k">class</span> <span class="nc">ACRProductLeakTestFixture</span><span class="p">(</span><span class="n">ProductLeakTestFixture</span><span class="p">):</span>
+
+    <span class="n">PLATFORM</span> <span class="o">=</span> <span class="n">ACR</span>
+
+    <span class="k">def</span> <span class="nf">_retrieve_and_unpack_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Use ZipFile to unpack the ACR .apk artifact.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ACRProductLeakTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_retrieve_and_unpack_artifacts</span><span class="p">()</span>
+        <span class="n">zf</span> <span class="o">=</span> <span class="n">ZipFile</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span><span class="p">))</span>
+        <span class="n">zf</span><span class="o">.</span><span class="n">extractall</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ICRProductLeakTestFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.ICRProductLeakTestFixture">[docs]</a><span class="k">class</span> <span class="nc">ICRProductLeakTestFixture</span><span class="p">(</span><span class="n">ProductLeakTestFixture</span><span class="p">):</span>
+
+    <span class="n">PLATFORM</span> <span class="o">=</span> <span class="n">ICR</span>
+
+    <span class="k">def</span> <span class="nf">_retrieve_and_unpack_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Use ZipFile to unpack the ICR .ipa artifact.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ICRProductLeakTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_retrieve_and_unpack_artifacts</span><span class="p">()</span>
+        <span class="n">zf</span> <span class="o">=</span> <span class="n">ZipFile</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">artifact_name</span><span class="p">))</span>
+        <span class="n">zf</span><span class="o">.</span><span class="n">extractall</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MDCRProductLeakTestFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.MDCRProductLeakTestFixture">[docs]</a><span class="k">class</span> <span class="nc">MDCRProductLeakTestFixture</span><span class="p">(</span><span class="n">ProductLeakTestFixture</span><span class="p">):</span>
+
+    <span class="n">PLATFORM</span> <span class="o">=</span> <span class="n">MDCR</span>
+
+    <span class="k">def</span> <span class="nf">_retrieve_and_unpack_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Use 7zip to unpack the .dmg and .hfs artifacts.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MDCRProductLeakTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_retrieve_and_unpack_artifacts</span><span class="p">()</span>
+        <span class="c1"># Unpack the .dmg file with 7zip</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;7z&#39;</span><span class="p">,</span> <span class="s1">&#39;e&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">,</span> <span class="s1">&#39;-o</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">),</span> <span class="s1">&#39;-y&#39;</span><span class="p">]</span>
+        <span class="n">call</span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span>
+        <span class="c1"># Unpack the contents of the 4.hfs file with 7zip</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;7z&#39;</span><span class="p">,</span> <span class="s1">&#39;e&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/4.hfs&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">),</span> <span class="s1">&#39;-o</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">),</span> <span class="s1">&#39;-y&#39;</span><span class="p">]</span>
+        <span class="n">call</span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WDCRProductLeakTestFixture"><a class="viewcode-back" href="../../../other.release.html#other.release.test_no_product_leaks.WDCRProductLeakTestFixture">[docs]</a><span class="k">class</span> <span class="nc">WDCRProductLeakTestFixture</span><span class="p">(</span><span class="n">ProductLeakTestFixture</span><span class="p">):</span>
+
+    <span class="n">PLATFORM</span> <span class="o">=</span> <span class="n">WDCR</span>
+
+    <span class="k">def</span> <span class="nf">_retrieve_and_unpack_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Use Wine to install the .exe on Linux. The CR will not work on Linux but</span>
+<span class="sd">        this will unpack the .dll files so that we can search through them.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WDCRProductLeakTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_retrieve_and_unpack_artifacts</span><span class="p">()</span>
+        <span class="c1"># Using Wine, install the Sonos CR so the</span>
+        <span class="c1"># .dll files are extracted.</span>
+        <span class="n">Popen</span><span class="p">([</span><span class="s1">&#39;wine&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">local_artifact_location</span><span class="p">,</span> <span class="s1">&#39;/s&#39;</span><span class="p">,</span> <span class="s1">&#39;/v/qn&#39;</span><span class="p">],</span> <span class="n">stdin</span><span class="o">=</span><span class="n">PIPE</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">)</span>
+        <span class="c1"># Wait 10 seconds for the CR to be installed</span>
+        <span class="c1"># before copying the files to our temp directory.</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+        <span class="n">copytree</span><span class="p">(</span><span class="n">SONOS_WINE_DIR</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/Sonos&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dir</span><span class="p">))</span></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;ProductLeakTestFixture&quot;</span><span class="p">,</span> <span class="n">setup_subnet</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ACRProductLeakTestFixture</span><span class="p">(),</span>
+               <span class="n">ICRProductLeakTestFixture</span><span class="p">(),</span>
+               <span class="n">MDCRProductLeakTestFixture</span><span class="p">(),</span>
+               <span class="n">WDCRProductLeakTestFixture</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

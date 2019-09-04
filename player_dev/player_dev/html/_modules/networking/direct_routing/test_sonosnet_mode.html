@@ -1,0 +1,1083 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.direct_routing.test_sonosnet_mode &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.direct_routing.test_sonosnet_mode</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">tempfile</span> <span class="k">import</span> <span class="n">NamedTemporaryFile</span>
+
+<span class="kn">import</span> <span class="nn">pyshark</span>
+
+<span class="kn">from</span> <span class="nn">custom_tuples</span> <span class="k">import</span> <span class="n">namedtyple</span>
+<span class="kn">from</span> <span class="nn">networking.direct_routing.base</span> <span class="k">import</span> <span class="n">DirectRoutingWorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.brctl</span> <span class="k">import</span> <span class="n">Brctl</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">BR200</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">SimpleUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+
+
+<span class="n">EthInfo</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;EthInfo&#39;</span><span class="p">,</span> <span class="s1">&#39;zp, enable_wire, dr_state&#39;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DirectRoutingSN"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN">[docs]</a><span class="k">class</span> <span class="nc">DirectRoutingSN</span><span class="p">(</span><span class="n">DirectRoutingWorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Description: Verification of direct routing in sonosnet mode.</span>
+
+<span class="sd">    ..note ::</span>
+
+<span class="sd">        To be run on automation test bed with combination</span>
+<span class="sd">        of shipping and legacy devices with wireless sniffer,</span>
+<span class="sd">        and managed ethernet switch. So, WIRELESS_NIGHTLY (cb-mcs9-1)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="DirectRoutingSN.setUpFixture"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove other module types that share the same architecture.</span>
+<span class="sd">        Only need to test Fenway(S3), LL(S9), SH4(ZP80), PPC(S5),</span>
+<span class="sd">        encore for GC-GM pairs.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSN</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bridge</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="n">BR200</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">brctls</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">]</span> <span class="o">=</span> <span class="n">Brctl</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_wireless_sonosnet_mode</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">,</span>
+            <span class="n">first_wire</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the send_list, no_send_list,</span>
+<span class="sd">        and via_ap_no_send_list when direct routing is enabled.</span>
+
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj: `list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: dictionary of lists</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="n">send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;send_list&#39;</span><span class="p">:</span> <span class="n">send_list</span><span class="p">,</span>
+                <span class="s1">&#39;no_send_list&#39;</span><span class="p">:</span> <span class="p">[]}</span>
+
+    <span class="k">def</span> <span class="nf">_get_dr_disable_lists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the send_list, no_send_list,</span>
+<span class="sd">        via_ap_no_send_list, via_ap_send_list, and zb_send_list</span>
+<span class="sd">        when direct routing is disabled.</span>
+
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj: `list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gc: group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zp_wire_list: zp group members</span>
+<span class="sd">        :type zp_wire_list: :obj: `list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: dictionary of lists</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">zb_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="n">no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">gm</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">zp_wire_list</span><span class="p">:</span>
+                <span class="n">zb_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span> <span class="ow">in</span> <span class="n">zp_wire_list</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">bridge</span> <span class="ow">in</span> <span class="n">zp_wire_list</span><span class="p">:</span>
+            <span class="n">no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;send_list&#39;</span><span class="p">:</span> <span class="p">[],</span>
+                <span class="s1">&#39;no_send_list&#39;</span><span class="p">:</span> <span class="n">no_send_list</span><span class="p">,</span>
+                <span class="s1">&#39;zb_send_list&#39;</span><span class="p">:</span> <span class="n">zb_send_list</span><span class="p">}</span>
+
+    <span class="k">def</span> <span class="nf">_count_qos_data_sent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">capture</span><span class="p">,</span> <span class="n">source_mac</span><span class="p">,</span> <span class="n">dest_mac</span><span class="p">,</span>
+                             <span class="n">min_packet_size</span><span class="o">=</span><span class="mi">1000</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to count the number of qos data packets</span>
+<span class="sd">        found in the capture that matches the source &amp; destination mac</span>
+<span class="sd">        supplied and meets the min_packet_size.</span>
+
+<span class="sd">        :param capture: pyshark FileCapture class with only_summaries == True</span>
+<span class="sd">        :type capture: :class: `pyshark.capture.file_capture.FileCapture`</span>
+<span class="sd">        :param source_mac: source mac address</span>
+<span class="sd">        :type source_mac: :obj:`str`</span>
+<span class="sd">        :param dest_mac: destination mac address</span>
+<span class="sd">        :type dest_mac: :obj:`str`</span>
+<span class="sd">        :param min_packet_size: minimum packet size for packet to be</span>
+<span class="sd">            counted. For group audio, packet size is about 1168.</span>
+<span class="sd">        :type min_packet_size: :obj:`int` or 1000</span>
+<span class="sd">        :return: number of packets found sent to dest_mac and is</span>
+<span class="sd">            at least min_packet_size in byte length</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">packet</span> <span class="ow">in</span> <span class="n">capture</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">destination</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">dest_mac</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span>
+                    <span class="n">packet</span><span class="o">.</span><span class="n">source</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">source_mac</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span>
+                    <span class="nb">int</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">length</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">min_packet_size</span> <span class="ow">and</span>
+                    <span class="s1">&#39;QoS Data&#39;</span> <span class="ow">in</span> <span class="n">packet</span><span class="o">.</span><span class="n">info</span><span class="p">):</span>
+                <span class="n">count</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Found </span><span class="si">{}</span><span class="s1"> qos data packets with size greater than &#39;</span>
+            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> bytes sent to </span><span class="si">{}</span><span class="s1"> from </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">count</span><span class="p">,</span>
+                <span class="n">min_packet_size</span><span class="p">,</span>
+                <span class="n">dest_mac</span><span class="p">,</span>
+                <span class="n">source_mac</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">count</span>
+
+    <span class="c1"># noinspection PyUnusedLocal</span>
+    <span class="k">def</span> <span class="nf">_run_sniffer_analysis</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+              <span class="n">zb_send_list</span><span class="p">,</span> <span class="n">sniff_start_delay</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to run analysis of generic multicast or</span>
+<span class="sd">        unicast group playback test with wireless sniffer verification points.</span>
+<span class="sd">        Start sniffer capture, filtering on packets sent only by the GC,</span>
+<span class="sd">        or both the GC and wired bridge ZP.</span>
+<span class="sd">        Then verify that GC is sending audio packets wirelessly to the</span>
+<span class="sd">        send_list of destination mac ZPs, and not sending audio packets</span>
+<span class="sd">        wirelessly to the no_send_list of destination mac ZPs.</span>
+<span class="sd">        Verfiy that the zone bridge is sending audio packets wirelessly to</span>
+<span class="sd">        the zb_send_list of destination mac ZPs.</span>
+
+<span class="sd">        :param name: name of test. also used for name of capture file.</span>
+<span class="sd">        :type name: :obj:`str`</span>
+<span class="sd">        :param gc_mac: group coordinator mac address</span>
+<span class="sd">        :type gc_mac: :obj:`str`</span>
+<span class="sd">        :param send_list: list of mac addresses sent by GC</span>
+<span class="sd">        :type send_list: :obj:`list`</span>
+<span class="sd">        :param no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">        :type no_send_list: :obj:`list`</span>
+<span class="sd">        :param zb_send_list: list of mac addresses sent by wired zone bridge</span>
+<span class="sd">        :type zb_send_list: :obj:`list`</span>
+<span class="sd">        :param sniff_start_delay: additional delay in seconds to start</span>
+<span class="sd">            sniffing after playback has started</span>
+<span class="sd">        :type sniff_start_delay: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># set capture filter to grab data packets sent by GC, or both GC &amp; ZB</span>
+        <span class="n">zb_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">)</span>
+        <span class="n">gc_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">zb_send_list</span><span class="p">:</span>
+            <span class="n">cap_filter</span> <span class="o">=</span> <span class="s1">&#39;type data and wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_mac</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">cap_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;type data and &#39;</span>
+                          <span class="s1">&#39;(wlan addr2 </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                          <span class="s1">&#39;or wlan addr2 </span><span class="si">{}</span><span class="s1">)&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_mac</span><span class="p">,</span> <span class="n">zb_mac</span><span class="p">)</span>
+        <span class="n">cap_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">sniff_start_delay</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">)</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">cap_file</span><span class="p">,</span>
+                                      <span class="n">display_filter</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">GROUP_AUDIO_FILTER</span><span class="p">,</span>
+                                      <span class="n">only_summaries</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Filtered capture file </span><span class="si">{}</span><span class="s1"> with filter set to &#39;</span>
+                         <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cap_file</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">))</span>
+        <span class="c1"># verify that GC is not sending audio to the zp macs listed in</span>
+        <span class="c1"># the no_send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">no_send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">NON_PLAYBACK_PCK_THRESHOLD</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_count_qos_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span>
+                        <span class="n">zp_mac</span><span class="p">),</span>
+                    <span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is NOT sending wirelessly to ZP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">))</span>
+        <span class="c1"># verify that GC is sending audio to the zp macs listed in</span>
+        <span class="c1"># the send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PLAYBACK_PCKT_THRESHOLD</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_count_qos_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span>
+                            <span class="n">zp_mac</span><span class="p">),</span>
+                    <span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is sending wirelessly to ZP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">))</span>
+        <span class="c1"># verify that wired bridge is sending audio to the zp macs listed in</span>
+        <span class="c1"># the send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">zb_send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PLAYBACK_PCKT_THRESHOLD</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_count_qos_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">zb_mac</span><span class="p">,</span>
+                        <span class="n">zp_mac</span><span class="p">),</span>
+                    <span class="s1">&#39;Verify wired zone bridge </span><span class="si">{}</span><span class="s1"> is sending wirelessly to &#39;</span>
+                    <span class="s1">&#39;ZP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zb_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">))</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_config_eth_ports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">enable_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure the managed switch ethernet ports for the testbed.</span>
+<span class="sd">        If ZP is in the enable_list, then enable the eth switch port</span>
+<span class="sd">        for that ZP, else disable it.</span>
+
+<span class="sd">        :param enable_list: list of ZPs to enable its managed switch eth port</span>
+<span class="sd">        :type enable_list: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Configuring testbed managed ethernet switch ports.&#39;</span>
+                          <span class="s1">&#39;  Enable only: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">enable_list</span><span class="p">))</span>
+        <span class="n">zones_touched</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">enable_list</span><span class="p">:</span>
+                <span class="n">needs_wire_toggled</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_enabled</span>
+                <span class="n">perform_wire_operation</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">disable</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">needs_wire_toggled</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_disabled</span>
+                <span class="n">perform_wire_operation</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">enable</span>
+            <span class="k">if</span> <span class="n">needs_wire_toggled</span><span class="p">():</span>
+                <span class="n">zones_touched</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                <span class="n">perform_wire_operation</span><span class="p">()</span>
+
+        <span class="k">def</span> <span class="nf">_ensure_valid</span><span class="p">(</span><span class="n">zone</span><span class="p">):</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_for_status_page</span><span class="p">(</span><span class="n">wait_timeout</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="n">_ensure_valid</span><span class="p">,</span> <span class="n">zones_touched</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_wait_for_all_stp_stable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp_brctl</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">brctls</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">zp_brctl</span><span class="o">.</span><span class="n">wait_for_stp_stable</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_force_zc_with_lowest_path_cost</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        From the GC&#39;s perspective, the GM RSSIs will be 25, and the</span>
+<span class="sd">        ZC will have a true RSSI (normally in the 60-70 range).</span>
+<span class="sd">        This will ensure that the GC will have lower path cost to the</span>
+<span class="sd">        wired bridge than the wired GMs. We want the DUT GC to prefer</span>
+<span class="sd">        to forward STP-routed traffic to wired bridge vs. wired GM. This is</span>
+<span class="sd">        done so that we can differentiate when the DUT GC is forwarding via</span>
+<span class="sd">        STP path vs. direct routing to a GM.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">LOW_RSSI</span> <span class="o">=</span> <span class="mi">25</span>
+        <span class="n">STP_CONVERGE_SEC</span> <span class="o">=</span> <span class="mi">60</span>
+
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">gm</span><span class="p">]</span><span class="o">.</span><span class="n">settestpoint</span><span class="p">(</span><span class="s1">&#39;ath0&#39;</span><span class="p">,</span> <span class="s1">&#39;fixedrssi&#39;</span><span class="p">,</span> <span class="n">LOW_RSSI</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">brctls</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span><span class="o">.</span><span class="n">wait_for_stp_stable</span><span class="p">(</span><span class="n">start_delay</span><span class="o">=</span><span class="n">STP_CONVERGE_SEC</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_wait_for_devices_ready</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Once STP stablizes, ensure that we can hit all diag pages&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wait for devices: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zps</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_all_stp_stable</span><span class="p">()</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSN</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span>
+            <span class="n">no_send_list</span><span class="p">,</span> <span class="n">zb_send_list</span><span class="o">=</span><span class="p">[],</span> <span class="n">dynamic_dr_list</span><span class="o">=</span><span class="p">[],</span>
+            <span class="n">dynamic_eth_list</span><span class="o">=</span><span class="p">[],</span> <span class="n">sniff_start_delay</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">via_ap_send_list</span><span class="o">=</span><span class="p">[],</span>
+            <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="p">[],</span> <span class="n">force_stp_path</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Run basic group playback test.</span>
+
+<span class="sd">        :param gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param gms: zp group members</span>
+<span class="sd">        :type gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param test_name: name of test. also used for name of capture file.</span>
+<span class="sd">        :type test_name: :obj:`str`</span>
+<span class="sd">        :param zp_wire_list: list of ZPs whose ethernet wire will be</span>
+<span class="sd">            enabled. All other ZPs in the testbeds/HH will have disabled</span>
+<span class="sd">            ethernet.</span>
+<span class="sd">        :type zp_wire_list: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param send_list: list of mac addresses sent by GC</span>
+<span class="sd">        :type send_list: :obj:`list`</span>
+<span class="sd">        :param no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">        :type no_send_list: :obj:`list`</span>
+<span class="sd">        :param zb_send_list: list of mac addresses sent by wired zone bridge</span>
+<span class="sd">        :type zb_send_list: :obj:`list`</span>
+<span class="sd">        :param dynamic_dr_list: list of :data:`DRInfo`</span>
+<span class="sd">            :class:`collections.namedtuple` this is used to specify changing</span>
+<span class="sd">            the direct routing state of the group after playback has started.</span>
+<span class="sd">        :type dynamic_dr_list: :obj:`list` or []</span>
+<span class="sd">        :param dynamic_eth_list: list of</span>
+<span class="sd">            :data:`EthInfo` :class:`collections.namedtuple`</span>
+<span class="sd">            this is used to specify changing the ethernet state of the group</span>
+<span class="sd">            after playback has started.</span>
+<span class="sd">        :type dynamic_eth_list: :obj:`list` or []</span>
+<span class="sd">        :param sniff_start_delay: additional delay in seconds to start</span>
+<span class="sd">            sniffing after playback has started</span>
+<span class="sd">        :type sniff_start_delay: :obj:`int` or 0</span>
+<span class="sd">        :param force_stp_path: Force STP path using software attenuation</span>
+<span class="sd">        :type force_stp_path: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_test_group</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="n">gms</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_config_eth_ports</span><span class="p">(</span><span class="n">zp_wire_list</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">force_stp_path</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_force_zc_with_lowest_path_cost</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">eth_set</span> <span class="ow">in</span> <span class="n">dynamic_eth_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">([],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">eth_set</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">eth_set</span><span class="o">.</span><span class="n">dr_state</span><span class="p">,</span>
+                <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">begin_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">dr_set</span> <span class="ow">in</span> <span class="n">dynamic_dr_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">dr_set</span><span class="o">.</span><span class="n">settestpoint_cmds</span><span class="p">,</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span>
+                            <span class="n">dr_set</span><span class="o">.</span><span class="n">peer</span><span class="p">,</span>
+                            <span class="n">dr_set</span><span class="o">.</span><span class="n">is_dr_enabled</span><span class="p">,</span>
+                            <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">eth_set</span> <span class="ow">in</span> <span class="n">dynamic_eth_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">eth_set</span><span class="o">.</span><span class="n">enable_wire</span><span class="p">:</span>
+                <span class="n">eth_set</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">enable</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">eth_set</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">disable</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">clear_and_wait_for_devices</span><span class="p">([</span><span class="n">eth_set</span><span class="o">.</span><span class="n">zp</span><span class="p">],</span>
+                                                   <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">([],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">eth_set</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">eth_set</span><span class="o">.</span><span class="n">dr_state</span><span class="p">,</span>
+                            <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="n">gc_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_sniffer_analysis</span><span class="p">(</span><span class="n">test_name</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span>
+                                   <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                   <span class="n">zb_send_list</span><span class="p">,</span> <span class="n">sniff_start_delay</span><span class="p">,</span>
+                                   <span class="n">via_ap_send_list</span><span class="o">=</span><span class="n">via_ap_send_list</span><span class="p">,</span>
+                                   <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="n">via_ap_no_send_list</span><span class="p">,</span>
+                                   <span class="n">gc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_run_playback_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+            <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[]):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSN</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_run_playback_dr_disabled</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span>
+            <span class="n">test_name</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_disable_lists</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">))</span>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_dr_enabled_pair"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_dr_enabled_pair">[docs]</a>    <span class="k">def</span> <span class="nf">test_dr_enabled_pair</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is enabled between the pairs when RSSI is 26.</span>
+<span class="sd">        Direct routing is enabled between devices when RSSI &gt; 25.</span>
+<span class="sd">        MCS-696</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_dr_state_check</span><span class="p">(</span><span class="mi">26</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_dr_disabled_pair"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_dr_disabled_pair">[docs]</a>    <span class="k">def</span> <span class="nf">test_dr_disabled_pair</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is disabled between the pairs when RSSI is 18.</span>
+<span class="sd">        Direct routing is disabled between devices when RSSI is less than 19.</span>
+<span class="sd">        MCS-698</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_dr_state_check</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_25_descend_to_18"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_25_descend_to_18">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_25_descend_to_18</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is enabled between the pairs when RSSI descends</span>
+<span class="sd">        from 25 to 19. At RSSI 18, direct routing is disabled.</span>
+<span class="sd">        MCS-697</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_descend_rssi_test</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_18_ascend_to_25"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_18_ascend_to_25">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_18_ascend_to_25</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is disabled between the pairs when RSSI ascends</span>
+<span class="sd">        from 18 to 24 inclusive. At RSSI 25, direct enabled.</span>
+<span class="sd">        MCS-701</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_ascend_rssi_test</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wireless_gc_wired_gms"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wireless_gc_wired_gms">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_wireless_gc_wired_gms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wired GMs for playback will use STP and</span>
+<span class="sd">        not direct routing.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GMs: </span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                 <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                 <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="n">gm_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span> <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">)]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="n">gm_list</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span>
+            <span class="n">no_send_list</span><span class="p">,</span> <span class="n">force_stp_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wired_gc_wired_gms"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wired_gc_wired_gms">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_wired_gc_wired_gms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        2 wired GMs for playback will use STP and</span>
+<span class="sd">        not direct routing.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GMs: </span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_wGC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                  <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                  <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wired_gc_wired_gm_wireless_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wired_gc_wired_gm_wireless_gm">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s2">&quot;This test is intermittent. See SWPBL-79845&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_mc_wired_gc_wired_gm_wireless_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        1 wired and 1 wirelss GMs for playback will use STP and</span>
+<span class="sd">        not direct routing.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1"> and wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_wGC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                 <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                 <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="n">zb_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                 <span class="n">zb_send_list</span><span class="p">,</span> <span class="n">force_stp_path</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wireless_gc_wired_gm_wireless_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wireless_gc_wired_gm_wireless_gm">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_wireless_gc_wired_gm_wireless_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        1 wired and 1 wireless GMs for playback will use direct routing.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1"> and Wireless GM:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+                     <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">zb_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                 <span class="n">zb_send_list</span><span class="o">=</span><span class="n">zb_send_list</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wireless_gc_wireless_gms_rssi_18"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wireless_gc_wireless_gms_rssi_18">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_wireless_gc_wireless_gms_rssi_18</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs where RSSI is less than 19 on one GM for playback</span>
+<span class="sd">        will use STP to GM with less than 19 RSSI and direct route to</span>
+<span class="sd">        other GM with higher/normal RSSI (SWPBL-121431)</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group memebers</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs:</span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_18&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                       <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                       <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        gms[0] RSSI == 18, and gms[1] will have RSSI where DR is enabled.</span>
+<span class="sd">        this is done in the below call to _run_playback_dr_disabled.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSN</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_run_playback_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span>
+                                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span>
+                                                               <span class="n">test_name</span><span class="p">)</span>
+        <span class="n">gm_stp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">gm_dr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">zp_test_group</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_config_eth_ports</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">begin_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">)</span>
+        <span class="n">gc_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_sniffer_analysis</span><span class="p">(</span><span class="n">test_name</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span>
+                                   <span class="n">send_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm_dr</span><span class="p">)],</span>
+                                   <span class="n">no_send_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm_stp</span><span class="p">)],</span>
+                                   <span class="n">zb_send_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm_stp</span><span class="p">)],</span>
+                                   <span class="n">sniff_start_delay</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                   <span class="n">via_ap_send_list</span><span class="o">=</span><span class="p">[],</span>
+                                   <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="p">[],</span>
+                                   <span class="n">gc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_wired_gc_wireless_gms_rssi_18"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_wired_gc_wireless_gms_rssi_18">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s1">&#39;Disabled due to SWPBL-121431 &#39;</span>
+          <span class="s1">&#39;We no longer have this behavior as we will allow 1 &quot;bad&quot;&#39;</span>
+          <span class="s1">&#39; GM before turning off DR for whole group. &#39;</span>
+          <span class="s1">&#39;test_mc_wireless_gc_wireless_gms_rssi_18 has been updated&#39;</span>
+          <span class="s1">&#39; with new logic. Decided to skip updating this tc as it is&#39;</span>
+          <span class="s1">&#39; pretty similar to that one.&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_mc_wired_gc_wireless_gms_rssi_18</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs where RSSI is less than 19 on one GM for playback</span>
+<span class="sd">        will use STP and not direct route.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group memebers</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs:</span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_wGC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_18&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                        <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                        <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_playback_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                       <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span>
+                                                     <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_dr_wireless_gc_wireless_gms"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_dr_wireless_gc_wireless_gms">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_dr_wireless_gc_wireless_gms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback will use direct</span>
+<span class="sd">        routing.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group memebers</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">],</span>
+                                 <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_dr_wired_gc_wireless_gms"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_dr_wired_gc_wireless_gms">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_dr_wired_gc_wireless_gms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback will use direct</span>
+<span class="sd">        routing.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group memebers</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1"> and </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_wGC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">],</span>
+                                 <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_wireless_capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">,</span> <span class="n">display_filter</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A self-contained function to create a capture object.</span>
+
+<span class="sd">        :param string cap_filter Capture filter to use on the capture.</span>
+<span class="sd">        :param string display_filter Display filter to use on the packets.</span>
+<span class="sd">        :param number timeout Number of seconds to capture frames.</span>
+<span class="sd">        :return: The resulting capture</span>
+<span class="sd">        :rtype: pyshark capture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">NamedTemporaryFile</span><span class="p">()</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">sniffer</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">LiveCapture</span><span class="p">(</span><span class="n">interface</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                          <span class="n">bpf_filter</span><span class="o">=</span><span class="n">cap_filter</span><span class="p">,</span>
+                                          <span class="n">output_file</span><span class="o">=</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+            <span class="n">sniffer</span><span class="o">.</span><span class="n">sniff</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+            <span class="n">sniffer</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+            <span class="c1"># sniffer post-processing when sniffer is done capturing</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture completed. Starting capture file &#39;</span>
+                             <span class="s1">&#39;analysis.&#39;</span><span class="p">)</span>
+            <span class="c1"># check that sniffer captured the expected data by via the</span>
+            <span class="c1"># file size.  don&#39;t bother running rest of test if it&#39;s not</span>
+            <span class="c1"># the expected size.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_capture_file</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">)</span>
+
+            <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">display_filter</span><span class="p">)</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">load_packets</span><span class="p">()</span>
+            <span class="k">return</span> <span class="n">capture</span>
+
+    <span class="k">def</span> <span class="nf">_test_probes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wired_devs</span><span class="p">,</span> <span class="n">tests</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test probes received using a given set of wired devices using</span>
+<span class="sd">        a given callback.</span>
+
+<span class="sd">        :param list wired_devs: list of Sonos devices to have wires attached</span>
+<span class="sd">        :param function tests: a function callback that will be run on a probe</span>
+<span class="sd">            from each unique ZP.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_config_eth_ports</span><span class="p">(</span><span class="n">wired_devs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span>
+
+        <span class="n">all_zp_ath0s</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">])</span>
+        <span class="n">ath0_bridge_mac_map</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">([(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+           <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">())</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">])</span>
+        <span class="n">cap_filter</span> <span class="o">=</span> <span class="s2">&quot; or &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">([</span><span class="s2">&quot;wlan addr2 </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">all_zp_ath0s</span><span class="p">])</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_wireless_capture</span><span class="p">(</span><span class="n">cap_filter</span><span class="p">,</span>
+            <span class="s2">&quot;wlan.fc.type_subtype == 0x4&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">zps_seen</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">pkt</span> <span class="ow">in</span> <span class="n">capture</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span> <span class="ow">in</span> <span class="n">zps_seen</span><span class="p">:</span>
+                    <span class="k">continue</span>
+                <span class="n">tests</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span> <span class="n">ath0_bridge_mac_map</span><span class="p">)</span>
+                <span class="n">zps_seen</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+                <span class="k">pass</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">all_zp_ath0s</span><span class="p">,</span> <span class="n">zps_seen</span><span class="p">,</span>
+           <span class="s2">&quot;Expect to verify probes from all ZPs in household&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_probes_for_direct_routing_ies_when_wireless"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_probes_for_direct_routing_ies_when_wireless">[docs]</a>    <span class="k">def</span> <span class="nf">test_probes_for_direct_routing_ies_when_wireless</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless ZP has the expected direct-routing related</span>
+<span class="sd">        IEs in its probe requests. Covers Qmetry P-9282 and P-9321.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">def</span> <span class="nf">_tests</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span> <span class="n">ath0_map</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan_mgt</span><span class="o">.</span><span class="n">sonos_ie_routing_flags</span><span class="p">),</span>
+                    <span class="s2">&quot;Expect probe request sonos IE routing flag is non-zero &quot;</span>
+                    <span class="s2">&quot;for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                <span class="n">pkt</span><span class="o">.</span><span class="n">wlan_mgt</span><span class="o">.</span><span class="n">sonos_ie_bridge_addr</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                <span class="n">ath0_map</span><span class="p">[</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span><span class="p">],</span>
+                <span class="p">(</span><span class="s2">&quot;Expect probe request bridge MAC address matches for &quot;</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_probes</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">],</span> <span class="n">_tests</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_probes_for_direct_routing_ies_when_wired"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_probes_for_direct_routing_ies_when_wired">[docs]</a>    <span class="k">def</span> <span class="nf">test_probes_for_direct_routing_ies_when_wired</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired ZP has the expected direct-routing related</span>
+<span class="sd">        IEs in its probe requests. Covers Qmetry P-9282 and P-9321.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bridge</span>
+
+        <span class="c1"># noinspection PyUnusedLocal</span>
+        <span class="k">def</span> <span class="nf">_tests</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span> <span class="n">ath0_map</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan_mgt</span><span class="p">,</span>
+                                      <span class="s1">&#39;sonos_ie_routing_flags&#39;</span><span class="p">),</span>
+                                      <span class="s2">&quot;Expect probe request sonos IE routing &quot;</span>
+                                      <span class="s2">&quot;flag not present for </span><span class="si">{}</span><span class="s2"> when &quot;</span>
+                                      <span class="s2">&quot;wired&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ta</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_probes</span><span class="p">([</span><span class="n">zb</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">,</span> <span class="n">_tests</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_uc_wireless_gc_wireless_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_uc_wireless_gc_wireless_gm">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_wireless_gc_wireless_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        a wireless GM for playback will use direct routing.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;uc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                          <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">],</span>
+                                 <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_uc_wired_gc_wireless_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_uc_wired_gc_wireless_gm">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_wired_gc_wireless_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        a wireless GM for playback will use direct routing.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group memeber</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;uc_wGC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                           <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">],</span>
+                                 <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_uc_wireless_gc_wired_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_uc_wireless_gc_wired_gm">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_wireless_gc_wired_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        a wired GM for playback will use direct routing.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;uc_GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                           <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_uc_wired_gc_wired_gm"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_uc_wired_gc_wired_gm">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_wired_gc_wired_gm</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wired DUT GC when grouped with</span>
+<span class="sd">        a wired GM for playback will not direct route through wireless.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;uc_wGC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                 <span class="n">sniff_start_delay</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_mc_forwarding_db"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_mc_forwarding_db">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_forwarding_db</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback will have the expected multicast</span>
+<span class="sd">        forwarding database entries.</span>
+
+<span class="sd">        Covers Qmetry P-9323</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">zp_test_group</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_config_eth_ports</span><span class="p">(</span><span class="n">zp_wire_list</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">begin_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">)</span>
+
+        <span class="n">brctl</span> <span class="o">=</span> <span class="n">Brctl</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="n">entries</span> <span class="o">=</span> <span class="n">brctl</span><span class="o">.</span><span class="n">showmacs</span><span class="p">()</span><span class="o">.</span><span class="n">mc_db</span>
+
+        <span class="n">detected_gm_macs</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">entry</span><span class="o">.</span><span class="n">member</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">])</span>
+        <span class="n">expected_gm_macs</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">gm</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+                                <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">detected_gm_macs</span><span class="p">,</span> <span class="n">expected_gm_macs</span><span class="p">,</span>
+                <span class="s2">&quot;Expect that group member MACs will be in the multicast &quot;</span>
+                <span class="s2">&quot;forwarding table&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">leave_group_and_wait</span><span class="p">()</span>
+
+        <span class="n">sleep_time</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MULTICAST_AGEING_TIME_SECS</span> <span class="o">+</span>
+                      <span class="bp">self</span><span class="o">.</span><span class="n">MULTICAST_BUFFER_TIME_SECS</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;sleeping for </span><span class="si">{}</span><span class="s2">s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sleep_time</span><span class="p">))</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">sleep_time</span><span class="p">)</span>
+
+        <span class="n">entries</span> <span class="o">=</span> <span class="n">brctl</span><span class="o">.</span><span class="n">showmacs</span><span class="p">()</span><span class="o">.</span><span class="n">mc_db</span>
+        <span class="n">detected_gm_macs</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">entry</span><span class="o">.</span><span class="n">member</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrStop</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="s1">&#39;br0&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                <span class="n">detected_gm_macs</span><span class="p">,</span>
+                <span class="s2">&quot;Expect that the member that left the group will not be &quot;</span>
+                <span class="s2">&quot;in the multicast forwarding table after the multicast &quot;</span>
+                <span class="s2">&quot;ageing timeout interval&quot;</span><span class="p">)</span>
+
+        <span class="n">gc_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="n">cap_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_mac</span><span class="p">)</span>
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> &amp;&amp; wlan.ra == </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">GROUP_AUDIO_FILTER</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+
+        <span class="n">capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_wireless_capture</span><span class="p">(</span><span class="n">cap_filter</span><span class="p">,</span>
+                                             <span class="n">display_filter</span><span class="p">,</span>
+                                             <span class="bp">self</span><span class="o">.</span><span class="n">GROUP_AUDIO_SAMPLE_TIME</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">capture</span><span class="p">)),</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;Expect that group coordinator is still transmitting to &quot;</span>
+            <span class="s2">&quot;the remaining group member&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_uc_dynamic_enable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_uc_dynamic_enable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_uc_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with a wired</span>
+<span class="sd">        GM for playback where the RSSI is initially less than 19</span>
+<span class="sd">        (direct routing disabled) will enable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GM increases</span>
+<span class="sd">        to over 25.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_rssi_uc_dynamic&#39;</span>
+                     <span class="s1">&#39;_enable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                       <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span>
+                                         <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]])</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_uc_dynamic_disable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_uc_dynamic_disable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_uc_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with a wired</span>
+<span class="sd">        GM for playback where the RSSI is initially greater than 25</span>
+<span class="sd">        (direct routing enabled) will disable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GM decreases to</span>
+<span class="sd">        less than 19.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_rssi_uc_dynamic_&#39;</span>
+            <span class="s1">&#39;disable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]])</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_mc_dynamic_enable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_mc_dynamic_enable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_mc_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wireless</span>
+<span class="sd">        GMs for playback where the RSSI is initially less than 19</span>
+<span class="sd">        (direct routing disabled) will enable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GMs increase</span>
+<span class="sd">        to over 25.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_mc_&#39;</span>
+            <span class="s1">&#39;dynamic_enable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+             <span class="n">zp_wire_list</span><span class="o">=</span><span class="n">zp_wire_list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_rssi_mc_dynamic_disable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_rssi_mc_dynamic_disable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_mc_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wireless</span>
+<span class="sd">        GMs for playback where the RSSI is initially greater than 25</span>
+<span class="sd">        (direct routing enabled) will disable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GMs decreases</span>
+<span class="sd">        to less than 19.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_mc_&#39;</span>
+                     <span class="s1">&#39;dynamic_disable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+              <span class="n">zp_wire_list</span><span class="o">=</span><span class="n">zp_wire_list</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_eth_fwd_mc_dynamic_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">enable_wire</span><span class="p">,</span>
+            <span class="n">dr_state</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span> <span class="n">zb_send_list</span><span class="o">=</span><span class="p">[]):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to run the ethernet forwarding multicast</span>
+<span class="sd">        direct routing dynamic enable or disable test cases.</span>
+
+<span class="sd">        :param self.gc: dut group coordinator</span>
+<span class="sd">        :type self.gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param self.gms: zp group members</span>
+<span class="sd">        :type self.gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param test_name: name of test. also used for name of capture file.</span>
+<span class="sd">        :type test_name: :obj:`str`</span>
+<span class="sd">        :param enable_wire: enable wire on self.gms?</span>
+<span class="sd">        :type enable_wire: :obj:`bool`</span>
+<span class="sd">        :param dr_state: direct routing state</span>
+<span class="sd">        :type dr_state: :obj:`bool`</span>
+<span class="sd">        :param zp_wire_list: list of ZPs whose ethernet wire will be</span>
+<span class="sd">            enabled. All other ZPs in the testbeds/HH will have disabled</span>
+<span class="sd">            ethernet.</span>
+<span class="sd">        :type zp_wire_list: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param send_list: list of mac addresses sent by GC</span>
+<span class="sd">        :type send_list: :obj:`list`</span>
+<span class="sd">        :param no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">        :type no_send_list: :obj:`list`</span>
+<span class="sd">        :param zb_send_list: list of mac addresses sent by wired zone bridge</span>
+<span class="sd">        :type zb_send_list: :obj:`list` or []</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">eth_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">EthInfo</span><span class="p">(</span><span class="n">gm</span><span class="p">,</span> <span class="n">enable_wire</span><span class="p">,</span> <span class="n">dr_state</span><span class="p">)</span> <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">]</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        We need to wait for the gm to age out of multicast table</span>
+<span class="sd">        before starting sniffer.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sleep_time</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MULTICAST_AGEING_TIME_SECS</span> <span class="o">+</span>
+                      <span class="bp">self</span><span class="o">.</span><span class="n">MULTICAST_BUFFER_TIME_SECS</span><span class="p">)</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start group playback and change ethernet state on self.gms which</span>
+<span class="sd">        should dynamically enable or disable multicast direct routing</span>
+<span class="sd">        from self.gc to self.gms.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+                                 <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                 <span class="n">dynamic_eth_list</span><span class="o">=</span><span class="n">eth_list</span><span class="p">,</span>
+                                 <span class="n">zb_send_list</span><span class="o">=</span><span class="n">zb_send_list</span><span class="p">,</span>
+                                 <span class="n">sniff_start_delay</span><span class="o">=</span><span class="n">sleep_time</span><span class="p">,</span>
+                                 <span class="n">force_stp_path</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_eth_fwd_mc_dynamic_disable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_eth_fwd_mc_dynamic_disable">[docs]</a>    <span class="k">def</span> <span class="nf">test_eth_fwd_mc_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wireless</span>
+<span class="sd">        GMs for playback where multicast direct routing is initially</span>
+<span class="sd">        enabled (dr value is 3) will dynamically disable multicast</span>
+<span class="sd">        direct routing (dr value is 1) as the ethernet ports are</span>
+<span class="sd">        enabled on the GMs.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">, </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Bridge: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_eth_fwd_mc_&#39;</span>
+                     <span class="s1">&#39;dynamic_disable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">)]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_eth_fwd_mc_dynamic_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span>
+            <span class="kc">True</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSN.test_eth_fwd_mc_dynamic_enable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_sonosnet_mode.DirectRoutingSN.test_eth_fwd_mc_dynamic_enable">[docs]</a>    <span class="k">def</span> <span class="nf">test_eth_fwd_mc_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wired</span>
+<span class="sd">        GMs for playback where direct routing is initially</span>
+<span class="sd">        enabled only for unicast (dr value is 1) will dynamically</span>
+<span class="sd">        enable multicast direct routing (dr value is 3)</span>
+<span class="sd">        as the ethernet ports are unplugged on the GMs.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wired GM: </span><span class="si">{}</span><span class="s1"> and GM </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;GC</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_wGM</span><span class="si">{}</span><span class="s1">_eth_fwd_mc_&#39;</span>
+            <span class="s1">&#39;dynamic_enable&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">zp_wire_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">bridge</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+             <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_eth_fwd_mc_dynamic_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="kc">True</span><span class="p">,</span> <span class="n">zp_wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">DirectRoutingSN</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">DirectRoutingSN</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">SimpleUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,400 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.settings.test_persistent_udp_log &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.settings.test_persistent_udp_log</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">twisted.internet.protocol</span> <span class="k">import</span> <span class="n">DatagramProtocol</span>
+<span class="kn">from</span> <span class="nn">twisted.internet</span> <span class="k">import</span> <span class="n">reactor</span>
+<span class="kn">from</span> <span class="nn">twisted.internet.error</span> <span class="k">import</span> <span class="n">CannotListenError</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.network</span> <span class="k">import</span> <span class="n">Network</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">import</span> <span class="nn">sonos.exception</span>
+<span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="n">LOCAL_SETTINGS_FILE</span> <span class="o">=</span> <span class="s2">&quot;/jffs/localsettings.txt&quot;</span>
+<span class="n">TEMP_SETTINGS_FILE</span> <span class="o">=</span> <span class="s2">&quot;/tmp/nologtoexternal.txt&quot;</span>
+<span class="n">ANACAPA_FILE</span> <span class="o">=</span> <span class="s2">&quot;/opt/log/anacapa.trace&quot;</span>
+<span class="n">SET_LOCAL_SETTINGS_SERIAL</span> <span class="o">=</span> <span class="s1">&#39;grep -v &quot;LogToExternal&quot; </span><span class="si">{0}</span><span class="s1"> &gt; </span><span class="si">{1}</span><span class="s1"> ; echo &quot;LogToExternal: [serial:0]&quot; &gt;&gt; </span><span class="si">{1}</span><span class="s1"> &amp;&amp; mv </span><span class="si">{1}</span><span class="s1"> </span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+    <span class="n">LOCAL_SETTINGS_FILE</span><span class="p">,</span> <span class="n">TEMP_SETTINGS_FILE</span><span class="p">)</span>
+<span class="n">GET_ANACAPA_TRACE</span> <span class="o">=</span> <span class="s2">&quot;cat </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ANACAPA_FILE</span><span class="p">)</span>
+<span class="n">SET_LOCAL_SETTINGS_UDP</span> <span class="o">=</span> <span class="s1">&#39;grep -v &quot;LogToExternal&quot; </span><span class="si">{0}</span><span class="s1"> &gt; </span><span class="si">{1}</span><span class="s1"> ; echo &quot;LogToExternal: [udp:</span><span class="si">{2}</span><span class="s1">:</span><span class="si">{3}</span><span class="s1">]&quot; &gt;&gt; </span><span class="si">{1}</span><span class="s1"> &amp;&amp; mv </span><span class="si">{1}</span><span class="s1"> </span><span class="si">{0}</span><span class="s1">&#39;</span>
+<span class="n">REMOVE_LOG_TO_EXTERNAL</span> <span class="o">=</span> <span class="s1">&#39;grep -v &quot;LogToExternal&quot; </span><span class="si">{0}</span><span class="s1"> &gt; </span><span class="si">{1}</span><span class="s1"> ; mv </span><span class="si">{1}</span><span class="s1"> </span><span class="si">{0}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+    <span class="n">LOCAL_SETTINGS_FILE</span><span class="p">,</span> <span class="n">TEMP_SETTINGS_FILE</span><span class="p">)</span>
+<span class="n">LOG_TO_EXTERNAL_KEYWORD</span> <span class="o">=</span> <span class="s1">&#39;LogToExternal&#39;</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">VAR could be empty or contain &quot;LogToExternal: [&lt;value&gt;]&quot;</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">RESTORE_LOG_TO_EXTERNAL</span> <span class="o">=</span> <span class="s1">&#39;VAR=</span><span class="se">\&quot;</span><span class="si">{}</span><span class="se">\&quot;</span><span class="s1">;export VAR;[ -z $VAR ] || echo &quot;$VAR&quot; &gt;&gt; </span><span class="si">{}</span><span class="s1">&#39;</span>
+
+
+<div class="viewcode-block" id="WaitOnUDPLogging"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.WaitOnUDPLogging">[docs]</a><span class="k">class</span> <span class="nc">WaitOnUDPLogging</span><span class="p">(</span><span class="n">DatagramProtocol</span><span class="p">,</span> <span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A helper class that keeps a dictionary (key being the IP address)</span>
+<span class="sd">    of the device that sent the log message using UDP.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Expected signature on datagram message from player.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">DIAG_LOG_COOKIE</span> <span class="o">=</span> <span class="mh">0xbeeeeeef</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Default UDP port the player will send messages to.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">DEFAULT_UDP_PORT</span> <span class="o">=</span> <span class="mi">8915</span>
+    <span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;SONOS.WaitOnUDPLogging&#39;</span><span class="p">)</span>
+    <span class="n">is_running</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">DEFAULT_UDP_PORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initializes dictionary of IP addresses.</span>
+<span class="sd">        :param int port: UDP port to listen.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">port</span> <span class="o">=</span> <span class="n">port</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WaitOnUDPLogging</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">log_msg_recv</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_running</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+<div class="viewcode-block" id="WaitOnUDPLogging.datagramReceived"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.WaitOnUDPLogging.datagramReceived">[docs]</a>    <span class="k">def</span> <span class="nf">datagramReceived</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">)):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback on received datagram.</span>
+<span class="sd">        Sanity check on received log message from device.</span>
+<span class="sd">        Marks as received the dictionary key on success.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">log_statement</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">log_cookie</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack_from</span><span class="p">(</span><span class="s2">&quot;!L&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="mi">0</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">log_version</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack_from</span><span class="p">(</span><span class="s2">&quot;!H&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="mi">4</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">log_sequence</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">unpack_from</span><span class="p">(</span><span class="s2">&quot;!H&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="mi">6</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="p">((</span><span class="n">log_cookie</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">DIAG_LOG_COOKIE</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">log_version</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)):</span>
+            <span class="n">log_statement</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="mi">8</span><span class="p">:]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">host</span><span class="p">,</span> <span class="n">log_sequence</span><span class="p">,</span> <span class="n">log_statement</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">log_msg_recv</span><span class="p">[</span><span class="n">host</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;invalid log msg recv&#39;d: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="WaitOnUDPLogging.log_msg_seen"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.WaitOnUDPLogging.log_msg_seen">[docs]</a>    <span class="k">def</span> <span class="nf">log_msg_seen</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks if a message has been received from the specified IP address</span>
+<span class="sd">        waiting a maximum of timeout seconds before giving up.</span>
+<span class="sd">        Returns True if a message has been received else False.</span>
+
+<span class="sd">        :param str host: String IP address of device</span>
+<span class="sd">        :param int timeout: Maximum seconds to wait before giving up</span>
+<span class="sd">        on the device to send log messages.</span>
+<span class="sd">        :return: Boolean</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">host</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">log_msg_recv</span><span class="p">,</span>
+                <span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">timeout</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">sonos</span><span class="o">.</span><span class="n">exception</span><span class="o">.</span><span class="n">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;No messages from </span><span class="si">{}</span><span class="s2"> in </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">host</span><span class="p">,</span>
+                    <span class="n">timeout</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="WaitOnUDPLogging.start"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.WaitOnUDPLogging.start">[docs]</a>    <span class="k">def</span> <span class="nf">start</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Posts a listener on the UDP port.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">is_running</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_running</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Posting listen on port </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">port</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span> <span class="o">=</span> <span class="n">reactor</span><span class="o">.</span><span class="n">listenUDP</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">port</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span>
+                <span class="n">is_running</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">except</span> <span class="n">CannotListenError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                    <span class="s2">&quot;caught twisted.internet.error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;WaitOnUDPLogging already started!&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">is_running</span></div>
+
+<div class="viewcode-block" id="WaitOnUDPLogging.stop"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.WaitOnUDPLogging.stop">[docs]</a>    <span class="k">def</span> <span class="nf">stop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes listen handler.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">reactor</span><span class="o">.</span><span class="n">callLater</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span><span class="o">.</span><span class="n">stopListening</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_running</span> <span class="o">=</span> <span class="kc">False</span></div></div>
+
+
+<div class="viewcode-block" id="TestPersistentUDPLog"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.TestPersistentUDPLog">[docs]</a><span class="k">class</span> <span class="nc">TestPersistentUDPLog</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies persistent UDP logging on player devices based on</span>
+<span class="sd">    the &quot;LogToExternal&quot; keyword in the localsettings.txt file.</span>
+<span class="sd">    For now the two options on that keyword are:</span>
+<span class="sd">    [serial:0]</span>
+<span class="sd">    [udp:&lt;IP address&gt;:&lt;UDP port&gt;]</span>
+<span class="sd">    Confirm serial console logging (when available on device).</span>
+<span class="sd">    Confirm UDP logging.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_UDP_PORT</span> <span class="o">=</span> <span class="mi">2014</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;SETTINGS&quot;</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">_start_udp</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">reactor</span><span class="o">.</span><span class="n">running</span><span class="p">,</span>
+                              <span class="s2">&quot;Twisted reactor should be running&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span> <span class="o">=</span> <span class="n">WaitOnUDPLogging</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">TEST_UDP_PORT</span><span class="p">)</span>
+
+<div class="viewcode-block" id="TestPersistentUDPLog.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.TestPersistentUDPLog.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Acquires the local interface IP address so that the test device</span>
+<span class="sd">        will direct the UDP log messages to that address.</span>
+<span class="sd">        NOTE: What we actually need is the IP address of the interface</span>
+<span class="sd">        where the devices are discovered. The first non-virtual interface</span>
+<span class="sd">        IP address may not necessarily be that.</span>
+<span class="sd">        Activates the UDP monitor.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ip</span> <span class="o">=</span> <span class="n">Network</span><span class="p">()</span><span class="o">.</span><span class="n">get_external_non_virtual_ips</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_udp</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_setup_zp_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes the LogToExternal keyword from the localsettings.txt file</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">REMOVE_LOG_TO_EXTERNAL</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_teardown_zp_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Bring the device to a known state.</span>
+
+<span class="sd">        Restores the contents of the localsettings file to the original</span>
+<span class="sd">        and bounces anacapa. Failure to do that will cause the device</span>
+<span class="sd">        to either send to the serial console or the UDP destination</span>
+<span class="sd">        while the localsettings.txt does not reflect that.</span>
+<span class="sd">        :param zp: Device object</span>
+<span class="sd">        :type other_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str value: String capturing the value (if any) of the</span>
+<span class="sd">        LogToExternal key word prior the commencing test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_zp_test</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">value</span><span class="p">:</span>
+            <span class="n">var</span> <span class="o">=</span> <span class="s1">&#39;LogToExternal: [</span><span class="si">{}</span><span class="s1">]&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;Restoring localsettings with value=&#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">var</span><span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">RESTORE_LOG_TO_EXTERNAL</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">var</span><span class="p">,</span>
+                    <span class="n">LOCAL_SETTINGS_FILE</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+<div class="viewcode-block" id="TestPersistentUDPLog.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.TestPersistentUDPLog.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestPersistentUDPLog.dont_test_serial_now"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.TestPersistentUDPLog.dont_test_serial_now">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">dont_test_serial_now</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        NOTE!!! This test applicable to devices that have a serial</span>
+<span class="sd">        console attached. In the event that all test bed devices</span>
+<span class="sd">        have a serial console, this test can be enabled to run on</span>
+<span class="sd">        that test bed.</span>
+
+<span class="sd">        Removes existing (if any) LogToExternal keyword from file and</span>
+<span class="sd">        saves the LogToExternal key word value from the localsettings.txt</span>
+<span class="sd">        dictionary.</span>
+
+<span class="sd">        Appends LogToExternal: [serial:0] to the localsettings.txt file.</span>
+<span class="sd">        Bounces and waits for anacapa, retrieves the anacapa trace file</span>
+<span class="sd">        and isolates the contents of that file from the last reboot.</span>
+<span class="sd">        Searches for the diagnostic to determine if the</span>
+<span class="sd">        persistent log outputs to the serial console.</span>
+
+<span class="sd">        Before completing the test, the saved LogToExternal key word (if any)</span>
+<span class="sd">        is restored to the original value prior to test.</span>
+<span class="sd">        :param zp: Device object</span>
+<span class="sd">        :type other_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_localsettings_dict</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span>
+        <span class="n">log_to_external_value</span> <span class="o">=</span> <span class="n">zp_localsettings_dict</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="n">LOG_TO_EXTERNAL_KEYWORD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp_localsettings_dict</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_zp_test</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;test_serial: </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">LOG_TO_EXTERNAL_KEYWORD</span><span class="p">,</span>
+                <span class="n">log_to_external_value</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">SET_LOCAL_SETTINGS_SERIAL</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="n">anacapa_trace</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">GET_ANACAPA_TRACE</span><span class="p">)</span>
+        <span class="n">last_anacapa_trace</span> <span class="o">=</span> <span class="n">anacapa_trace</span><span class="p">[</span><span class="n">anacapa_trace</span><span class="o">.</span><span class="n">rfind</span><span class="p">(</span><span class="s1">&#39;Version:&#39;</span><span class="p">):]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_anacapa_trace</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="s1">&#39;Using serial console logger&#39;</span> <span class="ow">in</span> <span class="n">last_anacapa_trace</span><span class="p">,</span>
+            <span class="s2">&quot;Expect logger on serial console&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_teardown_zp_test</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">log_to_external_value</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestPersistentUDPLog.test_udp"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_persistent_udp_log.TestPersistentUDPLog.test_udp">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_udp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes existing (if any) LogToExternal keyword from file and</span>
+<span class="sd">        saves the LogToExternal key word value from the localsettings.txt</span>
+<span class="sd">        dictionary.</span>
+
+<span class="sd">        Appends LogToExternal: [udp:&lt;ip&gt;:&lt;port&gt;] to the localsettings.txt</span>
+<span class="sd">        file where the &lt;ip&gt; and &lt;port&gt; is the remote host address and</span>
+<span class="sd">        destination port the device will forward the log messages as</span>
+<span class="sd">        UDP datagrams.</span>
+
+<span class="sd">        Bounces and waits for anacapa, retrieves the anacapa trace file</span>
+<span class="sd">        and isolates the contents of that file from the last reboot.</span>
+<span class="sd">        Searches for the diagnostic to determine if the device is</span>
+<span class="sd">        forwarding the logging message to the specified value.</span>
+
+<span class="sd">        Confirms via the WaitOnUDPLogging class the arrival of any logging</span>
+<span class="sd">        messages from the test device.</span>
+
+<span class="sd">        Before completing the test, the saved LogToExternal key word (if any)</span>
+<span class="sd">        is restored to the original value prior to test.</span>
+
+<span class="sd">        Applicable to zone player devices (not available on WD100 and bridges)</span>
+
+<span class="sd">        :param zp: Device object</span>
+<span class="sd">        :type other_zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_localsettings_dict</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span>
+        <span class="n">log_to_external_value</span> <span class="o">=</span> <span class="n">zp_localsettings_dict</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
+            <span class="n">LOG_TO_EXTERNAL_KEYWORD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_zp_test</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;test_udp: </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">LOG_TO_EXTERNAL_KEYWORD</span><span class="p">,</span>
+                <span class="n">log_to_external_value</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">SET_LOCAL_SETTINGS_UDP</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                       <span class="n">LOCAL_SETTINGS_FILE</span><span class="p">,</span>
+                       <span class="n">TEMP_SETTINGS_FILE</span><span class="p">,</span>
+                       <span class="bp">self</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+                       <span class="bp">self</span><span class="o">.</span><span class="n">TEST_UDP_PORT</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">udp_handle</span><span class="o">.</span><span class="n">log_msg_seen</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">),</span>
+            <span class="s2">&quot;Expect to receive messages from device&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_teardown_zp_test</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">log_to_external_value</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;TestPersistentUDPLog&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">TestPersistentUDPLog</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

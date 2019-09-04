@@ -1,0 +1,509 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>other.networking.tx_power &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for other.networking.tx_power</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Description:</span>
+<span class="sd">Verifies the correct tx power for any given Sonos device on any region, 802.11</span>
+<span class="sd">wireless mode, and frequency.</span>
+<span class="sd">Supported regions: USA, EUROPE and CHINA.</span>
+<span class="sd">Supported wireless modes:  802.11b/g/n</span>
+<span class="sd">Supported frequencies:  Applicable 2.4GHz for 802.11b/g/n and 5GHz for 802.11n</span>
+<span class="sd">for supported regions</span>
+
+<span class="sd">JSON config:</span>
+<span class="sd">tx_power_config.json</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">namedtuple</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.mdputil</span> <span class="k">import</span> <span class="n">MdpRegion</span>
+
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+<span class="kn">from</span> <span class="nn">sonos.client.athconfiglib</span> <span class="k">import</span> <span class="n">Athconfig</span>
+<span class="kn">from</span> <span class="nn">sonos.environment</span> <span class="k">import</span> <span class="n">WorkflowExecutionConfigurationFactory</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">text_parsing.type_conversion</span> <span class="k">import</span> <span class="n">safe_convert_value</span>
+<span class="kn">from</span> <span class="nn">wifi.channels</span> <span class="k">import</span> <span class="n">is_5ghz_channel</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.tools.reg</span> <span class="k">import</span> <span class="n">Reg</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="p">(</span><span class="n">RADIO_5212</span><span class="p">,</span> <span class="n">RADIO_5416</span><span class="p">,</span> <span class="n">RADIO_TYPE_9xxx</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">,</span>
+                                      <span class="n">INTERFACE_5GHZ</span><span class="p">,</span>
+                                      <span class="n">MDP_REGION_USA</span><span class="p">,</span>
+                                      <span class="n">MDP_REGION_EU</span><span class="p">,</span>
+                                      <span class="n">MDP_REGION_CN</span><span class="p">)</span>
+
+
+<span class="c1"># 802.11 modes</span>
+<span class="n">WIFI_80211_B</span> <span class="o">=</span> <span class="s1">&#39;11b&#39;</span>
+<span class="n">WIFI_80211_G</span> <span class="o">=</span> <span class="s1">&#39;11g&#39;</span>
+<span class="n">WIFI_80211_N</span> <span class="o">=</span> <span class="s1">&#39;11n&#39;</span>
+<span class="n">WIFI_MODES</span> <span class="o">=</span> <span class="p">[</span><span class="n">WIFI_80211_B</span><span class="p">,</span> <span class="n">WIFI_80211_G</span><span class="p">,</span> <span class="n">WIFI_80211_N</span><span class="p">]</span>
+
+<span class="c1"># 802.11 wireless mode registers</span>
+<span class="n">RADIO_9xxx_80211_B_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa3c8&#39;</span>
+<span class="n">RADIO_9xxx_80211_G_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa3c0&#39;</span>
+<span class="n">RADIO_9xxx_80211_N_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa3d0&#39;</span>
+
+<span class="n">RADIO_5416_80211_B_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa234&#39;</span>
+<span class="n">RADIO_5416_80211_G_REG</span> <span class="o">=</span> <span class="s1">&#39;0x9934&#39;</span>
+<span class="n">RADIO_5416_80211_N_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa38c&#39;</span>
+
+<span class="n">RADIO_5212_80211_B_REG</span> <span class="o">=</span> <span class="s1">&#39;0xa234&#39;</span>
+<span class="n">RADIO_5212_80211_G_REG</span> <span class="o">=</span> <span class="s1">&#39;0x9934&#39;</span>
+
+<span class="c1"># MDP Regions</span>
+<span class="n">Region</span> <span class="o">=</span> <span class="n">namedtuple</span><span class="p">(</span><span class="s1">&#39;Region&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;code&#39;</span><span class="p">,</span> <span class="s1">&#39;name&#39;</span><span class="p">])</span>
+<span class="n">US</span> <span class="o">=</span> <span class="n">Region</span><span class="p">(</span><span class="n">MDP_REGION_USA</span><span class="p">,</span> <span class="s1">&#39;usa&#39;</span><span class="p">)</span>
+<span class="n">EU</span> <span class="o">=</span> <span class="n">Region</span><span class="p">(</span><span class="n">MDP_REGION_EU</span><span class="p">,</span> <span class="s1">&#39;europe&#39;</span><span class="p">)</span>
+<span class="n">CN</span> <span class="o">=</span> <span class="n">Region</span><span class="p">(</span><span class="n">MDP_REGION_CN</span><span class="p">,</span> <span class="s1">&#39;china&#39;</span><span class="p">)</span>
+<span class="n">REGIONS</span> <span class="o">=</span> <span class="p">[</span><span class="n">US</span><span class="p">,</span> <span class="n">EU</span><span class="p">,</span> <span class="n">CN</span><span class="p">]</span>
+<span class="n">ORIENTATIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;left&#39;</span><span class="p">,</span> <span class="s1">&#39;right&#39;</span><span class="p">,</span> <span class="s1">&#39;horizontal&#39;</span><span class="p">]</span>
+
+<span class="n">TEST_CONFIG_FILE</span> <span class="o">=</span> <span class="s1">&#39;tx_power_config.json&#39;</span>
+
+
+<div class="viewcode-block" id="TxPower"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower">[docs]</a><span class="k">class</span> <span class="nc">TxPower</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+
+<div class="viewcode-block" id="TxPower.setUpFixture"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># 80211g only devices do not support tx power overides</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="ow">not</span>
+            <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_dock</span><span class="p">()</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_controller</span><span class="p">()</span> <span class="ow">or</span> 
+             <span class="n">zp</span><span class="o">.</span><span class="n">is_elrey</span><span class="p">())]</span>
+        <span class="c1"># ensure we have play:3 with whaYu and Amphenol antennas</span>
+        <span class="n">p3_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_s3</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">p3_list</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span>
+                                      <span class="s2">&quot;requires at least 2x Play:3s&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">([</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">p3_list</span>
+                                           <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play3_amphenol</span><span class="p">()]),</span> <span class="mi">1</span><span class="p">,</span>
+                                      <span class="s2">&quot;requires at least 1x Amphenol Play:3&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">([</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">p3_list</span>
+                                           <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play3_amphenol</span><span class="p">()]),</span> <span class="mi">1</span><span class="p">,</span>
+                                      <span class="s2">&quot;requires at least 1x whaYu Play:3&quot;</span><span class="p">)</span>
+        <span class="c1"># ensure we have Play:1 with AN and IAC radios</span>
+        <span class="n">p1_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span> <span class="k">if</span>
+                   <span class="n">zp</span><span class="o">.</span><span class="n">is_s1</span><span class="p">()</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_s12</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">p1_list</span><span class="p">),</span>
+            <span class="mi">3</span><span class="p">,</span>
+            <span class="s2">&quot;requires at least 3x Play:1s (2 S1 and 1 S12)&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">([</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">p1_list</span>
+                                           <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play1_iac</span><span class="p">()]),</span> <span class="mi">1</span><span class="p">,</span>
+                                      <span class="s2">&quot;requires at least 1x IAC Play:1&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">([</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">p1_list</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play1_iac</span><span class="p">()]),</span>
+            <span class="mi">2</span><span class="p">,</span>
+            <span class="s2">&quot;requires at least 2x non IAC Play:1 (1 S1 and 1 S12)&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TxPower.tearDownFixture"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># returning all devices back to USA (default) region</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">change_home_region</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">athconfig_cmd</span><span class="p">(</span><span class="s1">&#39;nolenable ath1 1&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_br200</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">athconfig_cmd</span><span class="p">(</span><span class="s1">&#39;settxpower ath0 1&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_antenna_diversity_supported</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_device_orientation</span><span class="p">(</span><span class="s1">&#39;detect&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Teardown complete, all devices back on USA region&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_tx_power_register</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Retrieves the TX Power register for given WiFi radio and wireless mode</span>
+
+<span class="sd">        :param zp: desired zp to get tx power register</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param wireless_mode: 802.11 WiFi mode (B/G/N)</span>
+<span class="sd">        :type wireless_mode: :obj:&#39;str&#39;</span>
+<span class="sd">        :param netif: wireless interface ath0 or ath1</span>
+<span class="sd">        :type netif: :obj:&#39;str&#39;</span>
+<span class="sd">        :returns: TX Power register for given radio and 802.11 wireless mode</span>
+<span class="sd">        :rtype: :obj:&#39;str&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">radio</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">get_radio_type</span><span class="p">(</span><span class="n">netif</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">radio</span> <span class="ow">in</span> <span class="n">RADIO_TYPE_9xxx</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has a 95xx or 93xx radio&quot;</span><span class="o">.</span>
+                             <span class="nb">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_B</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_9xxx_80211_B_REG</span>
+            <span class="k">elif</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_G</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_9xxx_80211_G_REG</span>
+            <span class="k">elif</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_N</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_9xxx_80211_N_REG</span>
+        <span class="k">elif</span> <span class="n">radio</span> <span class="ow">is</span> <span class="n">RADIO_5416</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has a 5416 radio&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_B</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_5416_80211_B_REG</span>
+            <span class="k">elif</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_G</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_5416_80211_G_REG</span>
+            <span class="k">elif</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_N</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_5416_80211_N_REG</span>
+        <span class="k">elif</span> <span class="n">radio</span> <span class="ow">is</span> <span class="n">RADIO_5212</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> has a 5212 radio&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_B</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_5212_80211_B_REG</span>
+            <span class="k">elif</span> <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_G</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">RADIO_5212_80211_G_REG</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> - </span><span class="si">{}</span><span class="s2"> tx power register not available&quot;</span><span class="o">.</span>
+                              <span class="nb">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_get_freq_table</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the frequency table for given ZP, region and 802.11 mode</span>
+
+<span class="sd">        :param zp: desired zp to get the frequency table</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param region: region code to change (codes -- 1:US, 2:EU, 3:CN, 4:JP)</span>
+<span class="sd">        :type region: :class:`~sonos.client.cli.mdputil.MdpRegion`</span>
+<span class="sd">        :param wireless_mode: 802.11 WiFi mode (B/G/N)</span>
+<span class="sd">        :type wireless_mode: :obj:&#39;str&#39;</span>
+<span class="sd">        :returns: frequency table for given ZP, region and 802.11 mode</span>
+<span class="sd">        :rtype: :class: &#39;sonos.environment.WorkflowExecutionConfigurationList&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">freqs</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">freqs_2ghz</span><span class="p">,</span>
+            <span class="n">region</span><span class="o">.</span><span class="n">name</span><span class="p">)[:]</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_5ghz_supported</span><span class="p">()</span> <span class="ow">and</span> <span class="n">wireless_mode</span> <span class="ow">is</span> <span class="n">WIFI_80211_N</span><span class="p">:</span>
+            <span class="n">freqs</span> <span class="o">+=</span> <span class="nb">getattr</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">freqs_5ghz</span><span class="p">,</span>
+                <span class="n">region</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">freqs</span>
+
+<div class="viewcode-block" id="TxPower.change_home_region"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.change_home_region">[docs]</a>    <span class="k">def</span> <span class="nf">change_home_region</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the home region</span>
+
+<span class="sd">        :param zp: desired zp to change the home region</span>
+<span class="sd">        :type zp: :class:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param region: region to test</span>
+<span class="sd">        :type region: :class:`~sonos.client.cli.mdputil.MdpRegion`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;ZP: </span><span class="si">{}</span><span class="s2"> - Setting home mdp region to: </span><span class="si">{!r}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">))</span>
+        <span class="k">if</span> <span class="p">((</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span> <span class="o">==</span> <span class="n">region</span><span class="p">)</span> <span class="ow">or</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">set_region</span><span class="p">(</span><span class="n">region</span><span class="p">)):</span>
+            <span class="k">pass</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Failed to change region code to </span><span class="si">{!r}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">region</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TxPower.set_channel"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.set_channel">[docs]</a>    <span class="k">def</span> <span class="nf">set_channel</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region_ch_freq</span><span class="p">,</span> <span class="n">netif</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the channel frequency</span>
+
+<span class="sd">        :param zp: desired zp to set the channel</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param region_ch_freq: The freq of the desired region</span>
+<span class="sd">        :type region_ch_freq: :obj:&#39;int&#39;</span>
+<span class="sd">        :param netif: wireless interface ath0 or ath1</span>
+<span class="sd">        :type netif: :obj:&#39;str&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">region</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;ZP: </span><span class="si">{}</span><span class="s2"> - Setting wifi channel to: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+            <span class="n">region_ch_freq</span><span class="p">))</span>
+        <span class="c1"># allow up to 100 ms for channel change, for ht_masters in 5GHz give a</span>
+        <span class="c1"># bit more time to stop intermittent ioctl failures</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">()</span> <span class="ow">and</span> <span class="n">is_5ghz_channel</span><span class="p">(</span><span class="n">region_ch_freq</span><span class="p">):</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mf">0.4</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># this may be dirty but it prevents ath1 calls on ath0 only zps</span>
+            <span class="n">netif</span> <span class="o">=</span> <span class="s1">&#39;ath0&#39;</span>
+        <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">change_wireless_channel</span><span class="p">(</span><span class="n">netif</span><span class="p">,</span> <span class="n">region_ch_freq</span><span class="p">):</span>
+                <span class="k">break</span>
+            <span class="k">elif</span> <span class="n">attempt</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s1">&#39;Failed </span><span class="si">{}</span><span class="s1"> times to set; </span><span class="si">{}</span><span class="s1"> channel: </span><span class="si">{}</span><span class="s1">, region:&#39;</span>
+                          <span class="s1">&#39; </span><span class="si">{}</span><span class="s1">, netif: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attempt</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region_ch_freq</span><span class="p">,</span>
+                                                  <span class="n">region</span><span class="p">,</span> <span class="n">netif</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TxPower.get_power_setting"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.get_power_setting">[docs]</a>    <span class="k">def</span> <span class="nf">get_power_setting</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">,</span> <span class="n">freq</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Gets the tx power setting for the given zp, frequency, and wireless</span>
+<span class="sd">        mode</span>
+
+<span class="sd">        :param zp: desired zp to verify the channel change</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param region: region code to change (codes -- 1:US, 2:EU, 3:CN, 4:JP)</span>
+<span class="sd">        :type region: :class:`~sonos.client.cli.mdputil.MdpRegion`</span>
+<span class="sd">        :param wireless_mode: 802.11 WiFi mode (B/G/N)</span>
+<span class="sd">        :type wireless_mode: :obj:&#39;str&#39;</span>
+<span class="sd">        :param freq: frequency to be verified</span>
+<span class="sd">        :type freq: :obj:&#39;int&#39;</span>
+<span class="sd">        :param netif: wireless interface ath0 or ath1</span>
+<span class="sd">        :type netif: :obj:&#39;str&#39;</span>
+<span class="sd">        :returns: The current power setting</span>
+<span class="sd">        :rtype: :obj:&#39;int&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># getting register and values from ZP</span>
+        <span class="n">reg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_tx_power_register</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying tx power on </span><span class="si">{}</span><span class="s2"> - region: </span><span class="si">{!r}</span><span class="s2">, freq: </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                         <span class="s2">&quot;wireless_mode: </span><span class="si">{}</span><span class="s2">, register: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span>
+                                 <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">reg</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+            <span class="n">Athconfig</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span><span class="o">.</span><span class="n">psenable</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">reg_utility</span> <span class="o">=</span> <span class="n">Reg</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">dbm</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
+            <span class="n">dbm</span> <span class="o">=</span> <span class="n">reg_utility</span><span class="o">.</span><span class="n">get_reg_at_offset</span><span class="p">(</span><span class="n">netif</span><span class="p">,</span>
+                                                <span class="n">safe_convert_value</span><span class="p">(</span><span class="n">reg</span><span class="p">),</span>
+                                                <span class="n">as_int</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="n">dbm</span> <span class="o">=</span> <span class="p">(</span><span class="n">dbm</span> <span class="o">&gt;&gt;</span> <span class="mi">24</span><span class="p">)</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+            <span class="c1"># Dock register values are offset by 5</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_dock</span><span class="p">():</span>
+                <span class="n">dbm</span> <span class="o">=</span> <span class="o">-</span><span class="mi">5</span>
+            <span class="k">if</span> <span class="n">dbm</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">dbm</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> returned power value </span><span class="si">{}</span><span class="s1"> for freq: </span><span class="si">{}</span><span class="s1">, &#39;</span>
+                <span class="s1">&#39;region: </span><span class="si">{!r}</span><span class="s1">, mode: </span><span class="si">{}</span><span class="s1">, netif: </span><span class="si">{}</span><span class="s1">, retrying&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">dbm</span><span class="p">,</span>
+                    <span class="n">freq</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">))</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_expected_tx_power</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">orientation</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wifi_mode</span><span class="p">,</span>
+            <span class="n">frequency</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">tx_power</span><span class="o">.</span><span class="n">dict_tree_copy</span><span class="p">(</span>
+            <span class="p">)[</span><span class="n">model</span><span class="p">][</span><span class="n">orientation</span><span class="p">][</span><span class="n">region</span><span class="o">.</span><span class="n">name</span><span class="p">][</span><span class="n">wifi_mode</span><span class="p">][</span><span class="nb">str</span><span class="p">(</span><span class="n">frequency</span><span class="p">)]</span>
+
+    <span class="k">def</span> <span class="nf">_verify_tx_power</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">orientation</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span>
+                         <span class="n">netif</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the tx power in the ZP for given freq and 802.11 wireless mode</span>
+<span class="sd">        against defined dbm values in the config file</span>
+
+<span class="sd">        :param zp: desired zp to verify the channel change</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param region: region code to change (codes -- 1:US, 2:EU, 3:CN, 4:JP)</span>
+<span class="sd">        :type region: :class:`~sonos.client.cli.mdputil.MdpRegion`</span>
+<span class="sd">        :param wireless_mode: 802.11 WiFi mode (B/G/N)</span>
+<span class="sd">        :type wireless_mode: :obj:&#39;str&#39;</span>
+<span class="sd">        :param orientation: device orientation to verify tx power of</span>
+<span class="sd">        :type orientation: :obj:&#39;str&#39;</span>
+<span class="sd">        :param freq: frequency to be verified</span>
+<span class="sd">        :type freq: :obj:&#39;int&#39;</span>
+<span class="sd">        :param netif: wireless interface ath0 or ath1</span>
+<span class="sd">        :type netif: :obj:&#39;str&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># getting defined dbm values from config file</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play3_amphenol</span><span class="p">():</span>
+            <span class="n">model</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">+</span> <span class="s1">&#39;_amphenol&#39;</span>
+        <span class="k">elif</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_play1_iac</span><span class="p">():</span>
+            <span class="n">model</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">+</span> <span class="s1">&#39;_iac&#39;</span>
+        <span class="k">elif</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_connectx_connect</span><span class="p">():</span>
+	    <span class="n">model</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">+</span> <span class="s1">&#39;_connectx&#39;</span>
+	<span class="k">else</span><span class="p">:</span>
+            <span class="n">model</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="n">expected</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_expected_tx_power</span><span class="p">(</span><span class="n">model</span><span class="p">,</span>
+            <span class="n">orientation</span><span class="p">,</span>
+            <span class="n">region</span><span class="p">,</span>
+            <span class="n">wireless_mode</span><span class="p">,</span>
+            <span class="n">freq</span><span class="p">)</span>
+        <span class="c1"># int 0 means we have no tx power data</span>
+        <span class="k">if</span> <span class="n">expected</span> <span class="ow">is</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;DO NOT HAVE TX POWER DATA FOR </span><span class="si">{}</span><span class="s2"> - </span><span class="si">{}</span><span class="s2">, </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">))</span>
+        <span class="k">elif</span> <span class="n">expected</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_ppc</span><span class="p">()</span> <span class="ow">or</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_sh4</span><span class="p">())</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">([</span><span class="nb">int</span><span class="p">(</span><span class="n">freq</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2442</span><span class="p">,</span>
+                    <span class="n">wireless_mode</span> <span class="o">==</span> <span class="n">WIFI_80211_B</span><span class="p">,</span> <span class="n">region</span> <span class="o">==</span> <span class="n">EU</span><span class="p">]):</span>
+                <span class="n">dbm</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_power_setting</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">,</span>
+                                             <span class="n">freq</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mf">13.0</span><span class="p">,</span> <span class="n">dbm</span><span class="p">,</span>
+                    <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">: </span><span class="si">{}</span><span class="s1">: </span><span class="si">{}</span><span class="s1">: </span><span class="si">{}</span><span class="s1">: legacy ppc and sh4: tx power for &#39;</span>
+                    <span class="s1">&#39;region 2, 11b, ch7 is 13&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span>
+                                                      <span class="n">orientation</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">dbm</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_power_setting</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">netif</span><span class="p">,</span>
+                                             <span class="n">freq</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span> <span class="n">dbm</span><span class="p">,</span>
+                    <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">: tx power should match values in &quot;</span>
+                    <span class="s2">&quot;tx power data&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">freq</span><span class="p">,</span> <span class="n">orientation</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Failed to load expected data for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">modelName</span><span class="p">,</span> <span class="n">wireless_mode</span><span class="p">,</span> <span class="n">freq</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_perform_tx_power_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform the tx power test</span>
+
+<span class="sd">        :param zp: desired zp to verify the channel change</span>
+<span class="sd">        :type zp: :class:&#39;sonos.client.internal.SonosZoneComponent&#39;</span>
+<span class="sd">        :param region: region code to change (codes -- 1:US, 2:EU, 3:CN, 4:JP)</span>
+<span class="sd">        :type region: :class: &#39;__main__.Region&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># make sure we can set to DFS channels for ht_masters</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">athconfig_cmd</span><span class="p">(</span><span class="s1">&#39;nolenable ath1 0&#39;</span><span class="p">)</span>
+        <span class="c1"># make sure that we get default power from br200 as valiadate test bed</span>
+        <span class="c1"># now reduces it for brick test beds</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_br200</span><span class="p">():</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">athconfig_cmd</span><span class="p">(</span><span class="s1">&#39;settxpower ath0 0&#39;</span><span class="p">)</span>
+        <span class="n">zp_orientations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span>\
+            <span class="n">tx_power</span><span class="o">.</span><span class="n">as_dict</span><span class="p">()[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()]</span><span class="o">.</span><span class="n">as_dict</span><span class="p">()</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">orientation</span> <span class="ow">in</span> <span class="n">zp_orientations</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">orientation</span> <span class="o">!=</span> <span class="s1">&#39;default&#39;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;setting zone </span><span class="si">{}</span><span class="s1"> orientation to </span><span class="si">{}</span><span class="s1"> for &#39;</span>
+                                 <span class="s1">&#39;</span><span class="si">{!r}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">orientation</span><span class="p">,</span> <span class="n">region</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_device_orientation</span><span class="p">(</span><span class="n">orientation</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">mode</span> <span class="ow">in</span> <span class="n">WIFI_MODES</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Initiating </span><span class="si">{}</span><span class="s2"> tx power test&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">mode</span><span class="p">))</span>
+                <span class="n">freq_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_freq_table</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">mode</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="n">freq_table</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">freq</span> <span class="ow">in</span> <span class="n">freq_table</span><span class="p">:</span>
+                    <span class="c1"># handle playbar, solbase differently as they have 2</span>
+                    <span class="c1"># wireless interfaces</span>
+                    <span class="k">if</span> <span class="n">is_5ghz_channel</span><span class="p">(</span><span class="n">freq</span><span class="p">)</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+                        <span class="n">wifi_interface</span> <span class="o">=</span> <span class="n">INTERFACE_5GHZ</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">wifi_interface</span> <span class="o">=</span> <span class="n">INTERFACE_2GHZ</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">set_channel</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">safe_convert_value</span><span class="p">(</span><span class="n">freq</span><span class="p">),</span>
+                                     <span class="n">wifi_interface</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_verify_tx_power</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="n">orientation</span><span class="p">,</span>
+                                          <span class="n">safe_convert_value</span><span class="p">(</span><span class="n">freq</span><span class="p">),</span>
+                                          <span class="n">wifi_interface</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Completed 802.</span><span class="si">{}</span><span class="s2"> for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">mode</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+<div class="viewcode-block" id="TxPower.test_tx_power"><a class="viewcode-back" href="../../../other.networking.html#other.networking.tx_power.TxPower.test_tx_power">[docs]</a>    <span class="k">def</span> <span class="nf">test_tx_power</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">region</span> <span class="ow">in</span> <span class="n">MdpRegion</span><span class="p">:</span>
+	    <span class="k">if</span> <span class="n">region</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+		<span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Don&#39;t test Japan until it is supported, SWPBL-73000&quot;</span><span class="p">)</span>
+	    <span class="k">else</span><span class="p">:</span>
+            	<span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">change_home_region</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">),</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span><span class="p">)</span>
+            	<span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">reboot_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span><span class="p">)</span>
+            	<span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_perform_tx_power_test</span><span class="p">(</span>
+					 <span class="n">zp</span><span class="p">,</span> <span class="n">region</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">supported_devices</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">TxPower</span><span class="p">])</span>
+    <span class="n">test_data_config</span> <span class="o">=</span> <span class="n">WorkflowExecutionConfigurationFactory</span><span class="o">.</span><span class="n">create_from_file</span><span class="p">(</span>
+        <span class="n">TEST_CONFIG_FILE</span><span class="p">,</span> <span class="n">use_automation_server_config</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">TxPower</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">execution_environment</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">test_data_config</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+        <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

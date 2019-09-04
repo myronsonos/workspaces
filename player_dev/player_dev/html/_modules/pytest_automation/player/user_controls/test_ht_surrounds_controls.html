@@ -1,0 +1,392 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.user_controls.test_ht_surrounds_controls &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.user_controls.test_ht_surrounds_controls</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This module is intended to test the various surround controls that are</span>
+<span class="sd">available to users in the controller by toggling the controls via</span>
+<span class="sd">RenderingControl&#39;s UPnP interface and assessing the output audio quality</span>
+<span class="sd">from the DSP. The tests measure if the surround levels are changed</span>
+<span class="sd">accordingly for TV and Music when each is playing and also test the negative</span>
+<span class="sd">cases (TV volume does not change when music volume is adjusted). This test</span>
+<span class="sd">also tests the surrounds enable/disable feature by inspecting the DSP output.</span>
+
+<span class="sd">This test also verifies the ambient vs. full mode of the satellites during</span>
+<span class="sd">music playback by checking the values in the getDSP config page.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">audio_util</span> <span class="k">import</span> <span class="n">rms_helper</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">conftest</span> <span class="k">import</span> <span class="n">LOCAL_TEST_FILE_PATH</span><span class="p">,</span> <span class="n">TEST_FILE_METADATA</span><span class="p">,</span> \
+    <span class="n">ITERATION_DELAY_SEC</span><span class="p">,</span> <span class="n">prime_playback</span><span class="p">,</span> <span class="n">dump_settings</span><span class="p">,</span> <span class="n">save_get_dsp</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">import</span> <span class="nn">os</span>
+
+<span class="c1"># The baseline level is the controller setting level at which the test</span>
+<span class="c1"># measurements are taken.</span>
+<span class="n">BASELINE_CONTROLLER_LEVEL</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">NUMBER_OF_ITERATIONS</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">REMOVE_AUDIOTAP_FILES</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="c1"># NOTE: because we&#39;re taking an audiotap as our main form of verification,</span>
+<span class="c1"># we don&#39;t have any variables that are exposed for which we can call</span>
+<span class="c1"># wait_until_true() to wait before performing a verification. As such,</span>
+<span class="c1"># we use a propagation delay here (heuristic) to allow ample time for the</span>
+<span class="c1"># surround EQ levels to be adjusted after hitting a RenderingControl point.</span>
+<span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span> <span class="o">=</span> <span class="mi">3</span>
+
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s1">&#39;disable_audio_output&#39;</span><span class="p">)</span>
+<span class="p">]</span>
+
+
+<div class="viewcode-block" id="surround_mode_is_full"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_ht_surrounds_controls.surround_mode_is_full">[docs]</a><span class="k">def</span> <span class="nf">surround_mode_is_full</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Check the values in getDSP to view the current surround mode setting</span>
+<span class="sd">    :param zp: the HT Master Sonos Zone Component</span>
+<span class="sd">    :return: boolean - True if &#39;full&#39; - False if &#39;ambient&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">block</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_dsp_block</span><span class="p">(</span><span class="s1">&#39;Upmixer&#39;</span><span class="p">)</span>
+    <span class="n">are_full</span> <span class="o">=</span> <span class="p">[</span><span class="n">b</span><span class="o">.</span><span class="n">value</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">block</span><span class="o">.</span><span class="n">parameter</span><span class="o">.</span><span class="n">param</span> <span class="k">if</span> <span class="n">b</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span>
+                <span class="s2">&quot;fullRangeSurrounds&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Surround Mode is Full - </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">are_full</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">are_full</span> <span class="o">==</span> <span class="s2">&quot;Yes&quot;</span></div>
+
+
+<div class="viewcode-block" id="test_surround_music_playback_mode"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_ht_surrounds_controls.test_surround_music_playback_mode">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">mode_test</span>
+<span class="k">def</span> <span class="nf">test_surround_music_playback_mode</span><span class="p">(</span><span class="n">ht_master_capable_device</span><span class="p">,</span>
+                                      <span class="n">track_uri</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test to verify that getDSP is set when playing music content</span>
+<span class="sd">    and toggling the ambient/full surround mode switches</span>
+<span class="sd">    :param ht_master_capable_device: an HT Master capable ZP</span>
+<span class="sd">    :param track_uri: URI to test track</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">ht_master_capable_device</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI</span><span class="p">(</span><span class="n">track_uri</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">NUMBER_OF_ITERATIONS</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_surround_mode</span><span class="p">(</span><span class="s1">&#39;full&#39;</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Set Surround Mode to Full&quot;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="n">predicate</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">surround_mode_is_full</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for surround mode to switch to full&quot;</span>
+        <span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_surround_mode</span><span class="p">(</span><span class="s1">&#39;ambient&#39;</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Set Surround Mode to Ambient&quot;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="n">predicate</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">surround_mode_is_full</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for surround mode to switch to ambient&quot;</span>
+        <span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Pause_and_wait</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="set_levels_and_wait_until_set"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_ht_surrounds_controls.set_levels_and_wait_until_set">[docs]</a><span class="k">def</span> <span class="nf">set_levels_and_wait_until_set</span><span class="p">(</span><span class="n">surround_mode</span><span class="p">,</span> <span class="n">tv_level</span><span class="p">,</span> <span class="n">music_level</span><span class="p">,</span>
+                                  <span class="n">surrounds_enabled</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to set the TV and music surround levels, the</span>
+<span class="sd">    surround enable/disable setting, and the surround mode (ambient/full)</span>
+<span class="sd">    :param str surround_mode: either &#39;ambient&#39; or &#39;full&#39;</span>
+<span class="sd">    :param int tv_level: an int between -15 and 15</span>
+<span class="sd">    :param int music_level: an int between -15 and 15</span>
+<span class="sd">    :param bool surrounds_enabled: True - surrounds on , False - surrounds off</span>
+<span class="sd">    :param zp: Sonos Zone Component to apply settings to</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_surround_mode</span><span class="p">(</span><span class="n">surround_mode</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">wait_for_assert</span><span class="p">(</span>
+        <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">get_surround_mode</span><span class="p">()</span> <span class="o">==</span> <span class="n">surround_mode</span><span class="p">,</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span><span class="p">,</span>
+        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;Waiting for surround mode to change to </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">surround_mode</span><span class="p">,</span> <span class="n">zp</span>
+        <span class="p">))</span>
+
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_toslink_surround_level</span><span class="p">(</span><span class="n">tv_level</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">wait_for_assert</span><span class="p">(</span>
+        <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">get_toslink_surround_level</span><span class="p">()</span> <span class="o">==</span> <span class="n">tv_level</span><span class="p">,</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span><span class="p">,</span>
+        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;Waiting for tv surround level to change to </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">tv_level</span><span class="p">,</span> <span class="n">zp</span>
+        <span class="p">))</span>
+
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_surround_level</span><span class="p">(</span><span class="n">music_level</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">wait_for_assert</span><span class="p">(</span>
+        <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">get_surround_level</span><span class="p">()</span> <span class="o">==</span> <span class="n">music_level</span><span class="p">,</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span><span class="p">,</span>
+        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;Waiting for music surround level to change to </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">music_level</span><span class="p">,</span> <span class="n">zp</span>
+        <span class="p">))</span>
+
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_surround_enable</span><span class="p">(</span><span class="n">surrounds_enabled</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">wait_for_assert</span><span class="p">(</span>
+        <span class="k">lambda</span><span class="p">:</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">are_surrounds_enabled</span><span class="p">()</span> <span class="o">==</span> <span class="n">surrounds_enabled</span><span class="p">,</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span><span class="p">,</span>
+        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">msg</span><span class="o">=</span><span class="s2">&quot;Waiting for surrounds enabled to change to </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">surrounds_enabled</span><span class="p">,</span> <span class="n">zp</span>
+        <span class="p">))</span>
+
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">N_SECONDS_EQ_CHANGE_PROPAGATION_DELAY</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_surround_levels_and_enable_disable"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_ht_surrounds_controls.test_surround_levels_and_enable_disable">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">audiotap</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s1">&#39;toslink_source&#39;</span><span class="p">,</span>
+                         <span class="p">[(</span><span class="n">LOCAL_TEST_FILE_PATH</span><span class="p">,</span>
+                           <span class="n">TEST_FILE_METADATA</span><span class="p">[</span><span class="s1">&#39;mplayer_codec&#39;</span><span class="p">])],</span>
+                         <span class="n">indirect</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;toslink_source&#39;</span><span class="p">])</span>
+<span class="k">def</span> <span class="nf">test_surround_levels_and_enable_disable</span><span class="p">(</span>
+        <span class="n">user_controls_test_configured_ht_50_system</span><span class="p">,</span>
+        <span class="n">toslink_source</span><span class="p">,</span>
+        <span class="n">track_uri</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Given a 5.0 HT configuration of players, ensure that the surround level</span>
+<span class="sd">    controls and enable-disable controls directly affect the RMS level of</span>
+<span class="sd">    the audiotap captured during both music and TV playback in an expected way.</span>
+<span class="sd">    :param user_controls_test_configured_ht_50_system:</span>
+<span class="sd">    :param toslink_source: source of optical content</span>
+<span class="sd">    :param track_uri: URI to test track</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">user_controls_test_configured_ht_50_system</span><span class="p">)</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">user_controls_test_configured_ht_50_system</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">lsat</span> <span class="o">=</span> <span class="n">user_controls_test_configured_ht_50_system</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">rsat</span> <span class="o">=</span> <span class="n">user_controls_test_configured_ht_50_system</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+    <span class="n">sats</span> <span class="o">=</span> <span class="p">[</span><span class="n">lsat</span><span class="p">,</span> <span class="n">rsat</span><span class="p">]</span>
+    <span class="n">zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span><span class="p">,</span> <span class="n">lsat</span><span class="p">,</span> <span class="n">rsat</span><span class="p">]</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">70</span><span class="p">)</span>
+
+    <span class="c1"># set TV level</span>
+    <span class="n">set_levels_and_wait_until_set</span><span class="p">(</span><span class="n">surround_mode</span><span class="o">=</span><span class="s1">&#39;full&#39;</span><span class="p">,</span>
+                                  <span class="n">tv_level</span><span class="o">=</span><span class="n">BASELINE_CONTROLLER_LEVEL</span><span class="p">,</span>
+                                  <span class="n">music_level</span><span class="o">=</span><span class="n">BASELINE_CONTROLLER_LEVEL</span><span class="p">,</span>
+                                  <span class="n">surrounds_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">prime_playback</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">track_uri</span><span class="p">)</span>
+
+    <span class="c1"># obtain baselines</span>
+    <span class="n">tv_baseline</span><span class="p">,</span> <span class="n">tv_audiotap_names</span> <span class="o">=</span> \
+        <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_toslink_playback</span><span class="p">(</span>
+            <span class="n">ht_master</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">toslink_source</span><span class="o">=</span><span class="n">toslink_source</span><span class="p">,</span>
+            <span class="n">notes</span><span class="o">=</span><span class="s2">&quot;tv_baseline&quot;</span><span class="p">,</span> <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+            <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">ITERATION_DELAY_SEC</span><span class="p">)</span>
+    <span class="n">music_baseline</span><span class="p">,</span> <span class="n">music_audiotap_names</span> <span class="o">=</span> \
+        <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_music_playback</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">uri</span><span class="o">=</span><span class="n">track_uri</span><span class="p">,</span> <span class="n">notes</span><span class="o">=</span><span class="s2">&quot;music_baseline&quot;</span><span class="p">,</span>
+            <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># establish test parameters</span>
+    <span class="n">sources</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;tv&quot;</span><span class="p">,</span> <span class="s2">&quot;music&quot;</span><span class="p">]</span>
+    <span class="n">tv_levels</span> <span class="o">=</span> <span class="p">[</span><span class="o">-</span><span class="mi">15</span><span class="p">,</span> <span class="n">BASELINE_CONTROLLER_LEVEL</span><span class="p">]</span>
+    <span class="n">music_levels</span> <span class="o">=</span> <span class="p">[</span><span class="o">-</span><span class="mi">15</span><span class="p">,</span> <span class="n">BASELINE_CONTROLLER_LEVEL</span><span class="p">]</span>
+    <span class="n">surrounds_settings</span> <span class="o">=</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">]</span>
+
+    <span class="c1"># iterate over all permutations</span>
+    <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">sources</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">tv_level</span> <span class="ow">in</span> <span class="n">tv_levels</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">music_level</span> <span class="ow">in</span> <span class="n">music_levels</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">surrounds_on</span> <span class="ow">in</span> <span class="n">surrounds_settings</span><span class="p">:</span>
+
+                    <span class="n">dump_settings</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+                    <span class="n">notes</span> <span class="o">=</span> <span class="s2">&quot;ML=</span><span class="si">{}</span><span class="s2">_TL=</span><span class="si">{}</span><span class="s2">_S=</span><span class="si">{}</span><span class="s2">_SE=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">music_level</span><span class="p">,</span> <span class="n">tv_level</span><span class="p">,</span> <span class="n">source</span><span class="p">,</span> <span class="n">surrounds_on</span>
+                    <span class="p">)</span>
+
+                    <span class="c1"># note test case</span>
+                    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                        <span class="s2">&quot;Testing Source: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2">&quot;</span>
+                        <span class="s2">&quot;Surrounds TV Level: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2">&quot;</span>
+                        <span class="s2">&quot;Surrounds Music Level: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2">&quot;</span>
+                        <span class="s2">&quot;Surrounds Enabled: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="n">source</span><span class="p">,</span> <span class="n">tv_level</span><span class="p">,</span> <span class="n">music_level</span><span class="p">,</span> <span class="n">surrounds_on</span><span class="p">))</span>
+                    <span class="c1"># setup as necessary</span>
+                    <span class="n">set_levels_and_wait_until_set</span><span class="p">(</span>
+                        <span class="n">surround_mode</span><span class="o">=</span><span class="s1">&#39;full&#39;</span><span class="p">,</span>
+                        <span class="n">tv_level</span><span class="o">=</span><span class="n">tv_level</span><span class="p">,</span>
+                        <span class="n">music_level</span><span class="o">=</span><span class="n">music_level</span><span class="p">,</span>
+                        <span class="n">surrounds_enabled</span><span class="o">=</span><span class="n">surrounds_on</span><span class="p">,</span>
+                        <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">)</span>
+                    <span class="n">prime_playback</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">track_uri</span><span class="p">)</span>
+                    <span class="n">save_get_dsp</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_getDSP.xml&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">notes</span><span class="p">))</span>
+                    <span class="c1"># if surrounds are not on, we expect an exception to be</span>
+                    <span class="c1"># raised when trying to capture an audiotap.</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="n">surrounds_on</span><span class="p">:</span>
+                        <span class="k">with</span> <span class="n">pytest</span><span class="o">.</span><span class="n">raises</span><span class="p">(</span><span class="ne">TimeoutError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                            <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;music&quot;</span><span class="p">:</span>
+                                <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_music_playback</span><span class="p">(</span>
+                                        <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">uri</span><span class="o">=</span><span class="n">track_uri</span><span class="p">,</span>
+                                        <span class="n">notes</span><span class="o">=</span><span class="n">notes</span><span class="p">,</span>
+                                        <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+                                        <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                            <span class="k">else</span><span class="p">:</span>
+                                <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_toslink_playback</span><span class="p">(</span>
+                                        <span class="n">ht_master</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span>
+                                        <span class="n">toslink_source</span><span class="o">=</span><span class="n">toslink_source</span><span class="p">,</span>
+                                        <span class="n">notes</span><span class="o">=</span><span class="n">notes</span><span class="p">,</span>
+                                        <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+                                        <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">ITERATION_DELAY_SEC</span><span class="p">)</span>
+                        <span class="k">continue</span>
+
+                    <span class="k">if</span> <span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;music&quot;</span><span class="p">:</span>
+                        <span class="n">rms_levels</span><span class="p">,</span> <span class="n">audiotap_names</span> <span class="o">=</span> \
+                            <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_music_playback</span><span class="p">(</span>
+                                <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">uri</span><span class="o">=</span><span class="n">track_uri</span><span class="p">,</span> <span class="n">notes</span><span class="o">=</span><span class="n">notes</span><span class="p">,</span>
+                                <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+                                <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">rms_levels</span><span class="p">,</span> <span class="n">audiotap_names</span> <span class="o">=</span> \
+                            <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_toslink_playback</span><span class="p">(</span>
+                                <span class="n">ht_master</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span>
+                                <span class="n">toslink_source</span><span class="o">=</span><span class="n">toslink_source</span><span class="p">,</span> <span class="n">notes</span><span class="o">=</span><span class="n">notes</span><span class="p">,</span>
+                                <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+                                <span class="n">return_audiotap_names</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+                    <span class="n">comparison_audiotap_names</span> <span class="o">=</span> <span class="n">music_audiotap_names</span> <span class="k">if</span> \
+                        <span class="n">source</span> <span class="o">==</span> <span class="s2">&quot;music&quot;</span> <span class="k">else</span> <span class="n">tv_audiotap_names</span>
+                    <span class="n">all_audiotap_names</span> <span class="o">=</span> <span class="n">audiotap_names</span> <span class="o">+</span> \
+                                         <span class="n">comparison_audiotap_names</span>
+
+                    <span class="n">rms_helper</span><span class="o">.</span><span class="n">verify_rms_levels</span><span class="p">(</span>
+                      <span class="n">ht_master</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span>
+                      <span class="n">sats</span><span class="o">=</span><span class="n">sats</span><span class="p">,</span>
+                      <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span>
+                      <span class="n">music_level</span><span class="o">=</span><span class="n">music_level</span><span class="p">,</span>
+                      <span class="n">toslink_level</span><span class="o">=</span><span class="n">tv_level</span><span class="p">,</span>
+                      <span class="n">surrounds_enabled</span><span class="o">=</span><span class="n">surrounds_on</span><span class="p">,</span>
+                      <span class="n">rms_levels</span><span class="o">=</span><span class="n">rms_levels</span><span class="p">,</span>
+                      <span class="n">baseline_music_levels</span><span class="o">=</span><span class="n">music_baseline</span><span class="p">,</span>
+                      <span class="n">baseline_tv_levels</span><span class="o">=</span><span class="n">tv_baseline</span><span class="p">,</span>
+                      <span class="n">baseline_level</span><span class="o">=</span><span class="n">BASELINE_CONTROLLER_LEVEL</span><span class="p">,</span>
+                      <span class="n">audiotap_names</span><span class="o">=</span><span class="n">all_audiotap_names</span><span class="p">)</span>
+
+                    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">ITERATION_DELAY_SEC</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,1185 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.helpers.mock_player_cloud_services_control &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.helpers.mock_player_cloud_services_control</h1><div class="highlight"><pre>
+<span></span><span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">Created on Jun 5, 2016</span>
+
+<span class="sd">@author: alec</span>
+<span class="sd">&#39;&#39;&#39;</span>
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="n">L7_OVERRIDE_NAME</span>
+<span class="kn">from</span> <span class="nn">sonos.network</span> <span class="k">import</span> <span class="n">Network</span>
+<span class="kn">from</span> <span class="nn">sonos_crypto.certgen</span> <span class="k">import</span> <span class="n">CertGen</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">sonos.client.rest.status_scraper</span> <span class="k">import</span> <span class="n">get_status_page</span><span class="p">,</span> <span class="n">StatusRoutes</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span><span class="p">,</span> <span class="n">time</span>
+<span class="kn">import</span> <span class="nn">atexit</span>
+<span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">urllib2</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">socket</span>
+<span class="kn">import</span> <span class="nn">pprint</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">urlparse</span> <span class="k">import</span> <span class="n">urljoin</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">OpenSSL</span> <span class="k">import</span> <span class="n">crypto</span>
+<span class="kn">from</span> <span class="nn">base64</span> <span class="k">import</span> <span class="n">b64decode</span>
+<span class="kn">from</span> <span class="nn">xml.etree</span> <span class="k">import</span> <span class="n">ElementTree</span> <span class="k">as</span> <span class="n">ET</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">X_SONOS_API_KEY</span><span class="p">,</span> <span class="n">MITC_ENVIRONMENT</span>
+
+<span class="n">_logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="s1">&#39;MockPlayerCloudServicesControl&#39;</span><span class="p">]))</span>
+<span class="n">_network</span> <span class="o">=</span> <span class="n">Network</span><span class="p">()</span>
+<span class="n">DEFAULT_MPCSC_SCRIPT</span> <span class="o">=</span> <span class="s1">&#39;mockPlayerServices.js&#39;</span>
+<span class="n">FEATURE_CONFIG_PATH</span> <span class="o">=</span> <span class="s1">&#39;/config?swVersion=</span><span class="si">{}</span><span class="s1">&amp;hwVersion=</span><span class="si">{}</span><span class="s1">&#39;</span>
+
+<span class="n">TEST_ENV</span> <span class="o">=</span> <span class="s1">&#39;test&#39;</span>
+<span class="n">TEST_FQDN</span> <span class="o">=</span> <span class="s1">&#39;dev.ws.sonos.com&#39;</span>
+<span class="n">ENVIRONMENT_OVERRIDE</span> <span class="o">=</span> <span class="s1">&#39;O_SONOS_CLOUD_API_TEST_ENV&#39;</span>
+<span class="n">SERVICE_OVERRIDE</span> <span class="o">=</span> <span class="s1">&#39;O_AUTOMATION_CLOUD_DOMAIN&#39;</span>
+<span class="n">O_CLOUD_OAUTH_OVERRIDE</span> <span class="o">=</span> <span class="s1">&#39;O_CLOUD_OAUTH_CREDENTIALS&#39;</span>
+<span class="n">SERVICE_OVERRIDE_MUTUAL_SSL</span> <span class="o">=</span> <span class="s1">&#39;O_AUTOMATION_CLOUD_DOMAIN_MUTUAL_SSL&#39;</span>
+<span class="n">ETC_HOSTS</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;127.0.0.1       localhost.localdomain   localhost</span><span class="se">\n</span><span class="s1">&#39;</span>
+             <span class="s1">&#39;255.255.255.255 all-ones                all-ones</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="get_open_ports"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.get_open_ports">[docs]</a><span class="k">def</span> <span class="nf">get_open_ports</span><span class="p">(</span><span class="n">num</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper method to get a number of open ports. Note that there is no</span>
+<span class="sd">    guarantee the ports will still be open by the time the function returns.</span>
+
+<span class="sd">    :param int num: Number of open ports to get</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">sockets</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">ports</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">xrange</span><span class="p">(</span><span class="n">num</span><span class="p">):</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">bind</span><span class="p">((</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+        <span class="n">sockets</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+        <span class="n">ports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="o">.</span><span class="n">getsockname</span><span class="p">()[</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">sockets</span><span class="p">:</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">ports</span></div>
+
+
+<div class="viewcode-block" id="MPCSCException"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MPCSCException">[docs]</a><span class="k">class</span> <span class="nc">MPCSCException</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="FeatureConfig"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.FeatureConfig">[docs]</a><span class="k">class</span> <span class="nc">FeatureConfig</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper methods for feature config.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="FeatureConfig.get_enable_music_account_replication"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.FeatureConfig.get_enable_music_account_replication">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">get_enable_music_account_replication</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the enable music account replication setting via rest commands.</span>
+
+<span class="sd">        :param zp:</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return bool: enable_music_account_replication</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_cloudconfig</span> <span class="o">=</span> <span class="n">get_status_page</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">StatusRoutes</span><span class="o">.</span><span class="n">JFFS_SETTINGS_CLOUDCONFIG</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">zp_cloudconfig</span><span class="o">.</span><span class="n">content</span><span class="p">[</span><span class="s1">&#39;enableMusicAccountReplication&#39;</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="FeatureConfig.verify_feature_config"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.FeatureConfig.verify_feature_config">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">verify_feature_config</span><span class="p">(</span><span class="n">fixture</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="o">**</span><span class="n">config_settings</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the player has a feature config file and it is the expected auth type</span>
+
+<span class="sd">        :param fixture: test fixture</span>
+<span class="sd">        :param zp: ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param dict config_settings: Expected configuration values</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">fixture</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_feature_config</span><span class="p">(),</span>
+            <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; has feature config?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">config_settings</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;enableMusicAccountReplication&#39;</span><span class="p">:</span>
+                <span class="n">fixture</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                    <span class="n">value</span><span class="p">,</span>
+                    <span class="n">FeatureConfig</span><span class="o">.</span><span class="n">get_enable_music_account_replication</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+                    <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; feature config file has expected enable music account replication?&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="FeatureConfig.verify_feature_config_no_fixture"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.FeatureConfig.verify_feature_config_no_fixture">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">verify_feature_config_no_fixture</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="o">**</span><span class="n">config_settings</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the player has a feature config file and it is the expected type</span>
+
+<span class="sd">        :param zp: ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param dict config_settings: Expected configuration values</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">assert</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_feature_config</span><span class="p">(),</span> <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; has feature config?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">config_settings</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;enableMusicAccountReplication&#39;</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">value</span> <span class="o">==</span> <span class="n">FeatureConfig</span><span class="o">.</span><span class="n">get_enable_music_account_replication</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span> \
+                    <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; feature config file has expected enable music account replication?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl">[docs]</a><span class="k">class</span> <span class="nc">MockPlayerCloudServicesControl</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Module for controlling the mock player cloud services.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">script</span><span class="o">=</span><span class="n">DEFAULT_MPCSC_SCRIPT</span><span class="p">,</span>
+                 <span class="n">gateway</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">regto</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">protocols</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">pfx</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">pfx_passphrase</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">crl</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">http_port</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ssl_port</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mutual_ssl_port</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ocsp_code</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">api_key</span> <span class="o">=</span> <span class="n">X_SONOS_API_KEY</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start the node.js mock player cloud services server that lives in /test/javascript/mock-player-cloud-services.</span>
+<span class="sd">        Default output and error paths pipe to /dev/null but can be overridden by passing in those</span>
+<span class="sd">        params through your test.</span>
+
+<span class="sd">        :param stdout: the standard output for the mock player cloud services server</span>
+<span class="sd">        :param stderr: the standard error for the mock player cloud services server</span>
+<span class="sd">        :param str script: Name of the mock player cloud services script. This is configurable</span>
+<span class="sd">            to allow for custom variations that implement logic unique to a given</span>
+<span class="sd">            test. In general, this should be the name of the file including</span>
+<span class="sd">            the path relative to the mock-player-cloud-services directory.</span>
+<span class="sd">        :param str gateway: API gateway to forward requests to</span>
+<span class="sd">        :param int regto: Number of seconds for &#39;registration timeout&#39; - time</span>
+<span class="sd">        to evict a client if it does not send registration after connection.</span>
+<span class="sd">        :param bool verbose: Enable verbose logging?</span>
+<span class="sd">        :param list protocols: (optional) List of protocols for the service to use.</span>
+<span class="sd">            ex. [&#39;lechmere.4&#39;, &#39;lechmere.3&#39;]. If not specified, the default protocols</span>
+<span class="sd">            will be used (2,3,4,6).</span>
+<span class="sd">        :param str pfx: (SSL) pfx file for the node server if serving HTTPs.</span>
+<span class="sd">        :param str pfx_passphrase: (SSL) passphrase for the pfx file.</span>
+<span class="sd">        :param str crl: (SSL) CRL (pem-formatted string)</span>
+<span class="sd">        :param int ocsp_code: (SSL) OCSP response code for all endpoints</span>
+<span class="sd">        :param int http_port: Port that the mock server listens on (default 3000)</span>
+<span class="sd">        :param int ssl_port: (SSL) port for standard SSL</span>
+<span class="sd">        :param int mutual_ssl_port: (SSL) port for mutual SSL</span>
+
+<span class="sd">        :return: object; a running mock player cloud services server</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">network</span> <span class="o">=</span> <span class="n">_network</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">network</span><span class="o">.</span><span class="n">get_external_non_virtual_ips</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">external_ips</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">workspace</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">&quot;WORKSPACE&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">workspace</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">MPCSCException</span><span class="p">(</span><span class="s2">&quot;Unable to start mock-lm server </span><span class="se">\</span>
+<span class="s2">                because the environment variable $WORKSPACE is not set&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Normalize the path to remove any &quot;..&quot;.  node.js will not serve up files that contain</span>
+        <span class="c1"># &quot;..&quot; in the path because it is a little paranoid about security.</span>
+        <span class="n">workspace</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">normpath</span><span class="p">(</span><span class="n">workspace</span><span class="p">)</span>
+        <span class="n">lm_path</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/test/javascript/mock-player-cloud-services&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">workspace</span><span class="p">)</span>
+
+        <span class="n">FNULL</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">devnull</span><span class="p">,</span> <span class="s1">&#39;w&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">stdout</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">stderr</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">,</span> <span class="n">err</span> <span class="o">=</span> <span class="n">stdout</span><span class="p">,</span> <span class="n">stderr</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">,</span> <span class="n">err</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span> <span class="n">sys</span><span class="o">.</span><span class="n">stderr</span>
+
+        <span class="n">ports</span> <span class="o">=</span> <span class="n">get_open_ports</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">http_port</span> <span class="o">=</span> <span class="n">http_port</span> <span class="ow">or</span> <span class="n">ports</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span> <span class="o">=</span> <span class="n">ssl_port</span> <span class="ow">or</span> <span class="n">ports</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mutual_ssl_port</span> <span class="o">=</span> <span class="n">mutual_ssl_port</span> <span class="ow">or</span> <span class="n">ports</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="c1"># We need this to trust lower environments</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">putenv</span><span class="p">(</span><span class="s1">&#39;NODE_TLS_REJECT_UNAUTHORIZED&#39;</span><span class="p">,</span> <span class="s1">&#39;0&#39;</span><span class="p">)</span>
+        <span class="c1"># Convert arguments into command-line arguments for mock player cloud services server.</span>
+        <span class="n">lm_args</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">lm_path</span><span class="p">,</span> <span class="n">script</span><span class="p">),</span>
+            <span class="s1">&#39;-p&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_port</span><span class="p">),</span>
+            <span class="s1">&#39;-t&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">regto</span><span class="p">),</span>
+            <span class="s1">&#39;-s&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">),</span>
+            <span class="s1">&#39;-m&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mutual_ssl_port</span><span class="p">)]</span>
+
+        <span class="k">if</span> <span class="n">pfx</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-x&#39;</span><span class="p">,</span> <span class="n">pfx</span><span class="p">,</span> <span class="n">pfx_passphrase</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="n">crl</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c&#39;</span><span class="p">,</span> <span class="n">crl</span><span class="p">])</span>
+
+        <span class="k">if</span> <span class="n">gateway</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-g&#39;</span><span class="p">,</span> <span class="n">gateway</span><span class="p">])</span>
+        <span class="c1"># Enable verbose logging flag if True</span>
+        <span class="k">if</span> <span class="n">verbose</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;-v&#39;</span><span class="p">)</span>
+        <span class="c1"># Use protocols if specified.</span>
+        <span class="k">if</span> <span class="n">protocols</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-P&#39;</span><span class="p">,</span> <span class="s1">&#39;,&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">protocols</span><span class="p">)])</span>
+
+        <span class="k">if</span> <span class="n">ocsp_code</span><span class="p">:</span>
+            <span class="n">lm_args</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-o&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">ocsp_code</span><span class="p">)])</span>
+
+        <span class="n">_logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting mock player cloud services with args: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">lm_args</span><span class="p">))</span>
+
+        <span class="c1"># Start subprocess</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lm</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span><span class="n">lm_args</span><span class="p">,</span> <span class="n">cwd</span><span class="o">=</span><span class="n">lm_path</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">out</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">err</span><span class="p">,</span> <span class="n">close_fds</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Set URIs for endpoints</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">http_port</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/websockets/api/v0&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="c1"># Websocket specific config options</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/config&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CHECKALIVE</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/{{}}/checkAlive&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">)</span><span class="o">.</span><span class="n">format</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_REGISTRATIONS</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/all&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_EP</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/{{}}&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">)</span><span class="o">.</span><span class="n">format</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_PROPERTIES</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/auth/oauth/v2/set-auth-properties&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_CREATE_USER_TOKEN</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/auth/oauth/v2/create-user-token&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_CONFIG_PROPERTIES</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/features/v1/set-config-properties&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_MODIFY</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/auth/oauth/v2/modify&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_AVS_EP</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/amazon/auth/o2/token&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SEND_COMMAND</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/{{}}/{{}}&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">)</span><span class="o">.</span><span class="n">format</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/music-account/v0/accounts&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_SYNC_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/music-account/v0/sync&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_CONFIG_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/music-account/v0/config&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_METRICS_CONFIG_PROPERTIES</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/zpMetricsConfig/config&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/product/v2/products&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_RESET_URI</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/product/internal/v0/products&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SSL_URI</span> <span class="o">=</span> <span class="s1">&#39;https://</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SSL_FQDN_URI</span> <span class="o">=</span> <span class="s1">&#39;https://</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">getfqdn</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">)</span>
+
+        <span class="c1"># Endpoints for mock auth services</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_V3_CLIENT_URI</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/auth/oauth/v3/clients&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_FLUSH_CLIENTKEY</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/auth/oauth/v3/clients/flush&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_CREATE_CLIENTKEY</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/clientKey&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_V3_CLIENT_URI</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span>
+
+
+        <span class="c1"># Register shutdown function to make sure MLC is stopped</span>
+        <span class="c1"># on exit. We define shutdown here rather than as an instance</span>
+        <span class="c1"># method because registering an instance method with atexit</span>
+        <span class="c1"># makes every class instance persist until the interpreter exists.</span>
+        <span class="n">atexit</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shutdown</span><span class="p">)</span>
+
+        <span class="c1"># Log that the server was successfully started</span>
+        <span class="n">_logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Mock player cloud services server started on ports &quot;</span>
+                     <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">, </span><span class="si">{}</span><span class="s2"> (ssl), </span><span class="si">{}</span><span class="s2"> (mutual ssl)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">http_port</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mutual_ssl_port</span><span class="p">))</span>
+
+        <span class="c1"># Wait for server to finish starting by polling one of the endpoints</span>
+        <span class="n">retry_decorator</span> <span class="o">=</span> <span class="n">retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="n">retry_func</span> <span class="o">=</span> <span class="n">retry_decorator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_log</span><span class="p">)</span>
+        <span class="n">retry_func</span><span class="p">()</span>
+
+        <span class="c1"># Add the api key to the mock&#39;s local cache</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_sonos_api_key_to_cache</span><span class="p">(</span><span class="n">api_key</span><span class="p">)</span>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.shutdown"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.shutdown">[docs]</a>    <span class="k">def</span> <span class="nf">shutdown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;lm&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">kill</span><span class="p">()</span>
+                <span class="c1"># Don&#39;t try to read the error codes in</span>
+                <span class="c1"># cases where the CQ is piping output to /dev/null</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span> <span class="o">!=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">stdout</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">stderr</span><span class="p">):</span>
+                    <span class="n">_logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Mock LM server failed [</span><span class="si">{}</span><span class="s2">]: </span><span class="si">{}</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">returncode</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">stderr</span><span class="o">.</span><span class="n">readlines</span><span class="p">(),</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">lm</span><span class="o">.</span><span class="n">stdout</span><span class="o">.</span><span class="n">readlines</span><span class="p">()))</span>
+            <span class="c1"># Do nothing on fail</span>
+            <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+                <span class="k">pass</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">SERVICE_OVERRIDE_URL</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEST_FQDN</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">SERVICE_OVERRIDE_URL_MUTUAL_SSL</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEST_FQDN</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mutual_ssl_port</span><span class="p">)</span>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.remove_mutual_ssl_overrides"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.remove_mutual_ssl_overrides">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;echo &#39;</span><span class="si">{}</span><span class="s2">&#39; &gt; /etc/hosts&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ETC_HOSTS</span><span class="p">))</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;SystemProperties&#39;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">SERVICE_OVERRIDE</span><span class="p">)</span> <span class="ow">and</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">SERVICE_OVERRIDE_MUTUAL_SSL</span><span class="p">)</span> <span class="ow">and</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">O_CLOUD_OAUTH_OVERRIDE</span><span class="p">))</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_player_connect_override_mutual_ssl"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_player_connect_override_mutual_ssl">[docs]</a>    <span class="k">def</span> <span class="nf">set_player_connect_override_mutual_ssl</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                               <span class="n">zp</span><span class="p">,</span>
+                                               <span class="n">execution_config</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                               <span class="n">report</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                               <span class="n">generate_cert</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                               <span class="n">bounce_anacapa</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Point a ZonePlayer at the mock websockets server by setting the</span>
+<span class="sd">        appropriate override.</span>
+
+<span class="sd">        :param zp: ZP to set overrides on.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param execution_config: execution_configuration from the fixture</span>
+<span class="sd">        :param bool report: Enable UMTracking?</span>
+<span class="sd">        :param bool bounce: Bounce anacapa after setting overrides?</span>
+
+<span class="sd">        :return bool: String overrides set and anacapa bounced?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># For local testing, overwrite /etc/hosts</span>
+        <span class="n">ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">network</span><span class="o">.</span><span class="n">get_external_non_virtual_ips</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">environment</span> <span class="o">=</span> <span class="n">TEST_ENV</span>
+
+        <span class="n">hosts</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">domain</span> <span class="ow">in</span> <span class="p">(</span><span class="s1">&#39;feature-config&#39;</span><span class="p">,</span> <span class="s1">&#39;lechmere-v1&#39;</span><span class="p">,</span> <span class="s1">&#39;music-accounts&#39;</span><span class="p">,</span> <span class="s1">&#39;oauth&#39;</span><span class="p">,</span> <span class="s1">&#39;registration&#39;</span><span class="p">,</span> <span class="s1">&#39;sca-login&#39;</span><span class="p">,</span> <span class="s1">&#39;clientdata&#39;</span><span class="p">):</span>
+            <span class="n">hosts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">.</span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">.</span><span class="si">{}</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ip</span><span class="p">,</span>
+                                                   <span class="n">domain</span><span class="p">,</span> <span class="n">TEST_FQDN</span><span class="p">,</span>
+                                                   <span class="n">domain</span><span class="p">,</span> <span class="n">TEST_FQDN</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;echo &#39;</span><span class="si">{}</span><span class="s2">&#39; &gt; /etc/hosts&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ETC_HOSTS</span> <span class="o">+</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">hosts</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">LM_SSL_FQDN_URI</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;https://</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span><span class="p">))</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="s1">&#39;O_CLOUD_API_BASE_URL&#39;</span><span class="p">)</span>  <span class="c1"># just in case this was left behind by another test</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="n">SERVICE_OVERRIDE</span><span class="p">,</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="n">SERVICE_OVERRIDE_MUTUAL_SSL</span><span class="p">,</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL_MUTUAL_SSL</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="n">ENVIRONMENT_OVERRIDE</span><span class="p">,</span>
+                                                    <span class="n">environment</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">report</span><span class="p">:</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="s2">&quot;UMTracking&quot;</span><span class="p">,</span> <span class="s2">&quot;Report&quot;</span><span class="p">)</span>
+
+        <span class="n">x509</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">generate_cert</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="c1"># Try to retrieve the player cert</span>
+                <span class="n">x509</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_player_cert</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="k">except</span><span class="p">:</span>
+                <span class="c1"># If that fails, try to generate a cert with the test device root</span>
+                <span class="n">_logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;Failed to load player cert, attempting to create one...&quot;</span><span class="p">)</span>
+
+                <span class="n">cb_auto_cg</span> <span class="o">=</span> <span class="n">CertGen</span><span class="p">(</span><span class="n">execution_config</span><span class="p">)</span>
+                <span class="n">reg_cert</span> <span class="o">=</span> <span class="n">cb_auto_cg</span><span class="o">.</span><span class="n">generate_player_cert</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">dumpPrivateKey</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+                <span class="c1"># Generate a CRL that contains the regcert (for testing revoked path)</span>
+                <span class="n">x509</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">cb_auto_cg</span><span class="o">.</span><span class="n">local_certificate_store</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span>
+                <span class="c1"># Write the cert to player</span>
+                <span class="n">cb_auto_cg</span><span class="o">.</span><span class="n">write_securereg_cert</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">reg_cert</span><span class="p">,</span> <span class="n">environment</span><span class="o">=</span><span class="n">environment</span><span class="p">)</span>
+
+                <span class="n">_logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Writing cert: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_reg_cert_xml</span><span class="p">(</span><span class="n">environment</span><span class="p">)))</span>
+
+        <span class="k">if</span> <span class="n">bounce_anacapa</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">x509</span> <span class="k">if</span> <span class="n">res</span> <span class="k">else</span> <span class="kc">None</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_player_cert</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get cert in pem format from zp</span>
+
+<span class="sd">        :param zp: ZP</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">/status/regcert&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">host</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">port</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">crypto</span><span class="o">.</span><span class="n">load_certificate</span><span class="p">(</span><span class="n">crypto</span><span class="o">.</span><span class="n">FILETYPE_ASN1</span><span class="p">,</span>
+            <span class="n">b64decode</span><span class="p">(</span><span class="n">ET</span><span class="o">.</span><span class="n">fromstring</span><span class="p">(</span><span class="n">req</span><span class="o">.</span><span class="n">text</span><span class="p">)</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="s2">&quot;DeviceCertInfo&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="s2">&quot;Cert&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">text</span><span class="p">))</span>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.clear_player_connect_overrides"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.clear_player_connect_overrides">[docs]</a>    <span class="k">def</span> <span class="nf">clear_player_connect_overrides</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">report</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">bounce</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear the overrides that point the player to the mock websockets server</span>
+<span class="sd">        by removing them and bouncing anacapa if specified.</span>
+
+<span class="sd">        :param zp: ZP to set overrides on.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param bool report: Disable UMTracking?</span>
+<span class="sd">        :param bool bounce: Bounce anacapa after setting overrides?</span>
+
+<span class="sd">        :return bool: String overrides set and anacapa bounced?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="n">L7_OVERRIDE_NAME</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">report</span> <span class="ow">and</span> <span class="n">res</span><span class="p">:</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="s2">&quot;UMTracking&quot;</span><span class="p">)</span>
+
+        <span class="c1"># If Remove succeeds, bounce anacapa if specified</span>
+        <span class="k">if</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">bounce</span><span class="p">:</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+        <span class="k">return</span> <span class="n">res</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_expected_feature_config_path"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_expected_feature_config_path">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">get_expected_feature_config_path</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Construct the expected feature config path for a given ZP.</span>
+
+<span class="sd">        :param zp: ZP to set overrides on.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: Feature config path</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">FEATURE_CONFIG_PATH</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">version</span><span class="o">.</span><span class="n">version_string</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">hardware_version</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_int_request</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Internal method for making requests to the mock player cloud services server.</span>
+<span class="sd">        Performs logging and other shared functionality for other methods.</span>
+
+<span class="sd">        :param req: Request object to make to the server</span>
+<span class="sd">        :type req: :class:`~requests.models.Request`</span>
+<span class="sd">        :param bool response_json: Return response as json object?</span>
+
+<span class="sd">        :return: Json of request if specified, else body of request, else</span>
+<span class="sd">            None if request failed.</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sess</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
+
+        <span class="n">res</span> <span class="o">=</span> <span class="n">sess</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">req</span><span class="o">.</span><span class="n">prepare</span><span class="p">())</span>
+
+        <span class="k">if</span> <span class="n">res</span><span class="o">.</span><span class="n">status_code</span> <span class="o">!=</span> <span class="n">requests</span><span class="o">.</span><span class="n">codes</span><span class="o">.</span><span class="n">OK</span><span class="p">:</span> <span class="c1"># @UndefinedVariable</span>
+            <span class="n">_logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Request &lt;</span><span class="si">{}</span><span class="s1">&gt; failed, response: &lt;</span><span class="si">{}</span><span class="s1">&gt;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">request</span><span class="o">.</span><span class="n">method</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">request</span><span class="o">.</span><span class="n">url</span><span class="p">),</span>
+                <span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">status_code</span><span class="p">,</span> <span class="n">res</span><span class="o">.</span><span class="n">response</span><span class="o">.</span><span class="n">text</span><span class="p">)</span> <span class="k">if</span>
+                 <span class="nb">hasattr</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="s1">&#39;response&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="n">res</span><span class="o">.</span><span class="n">response</span> <span class="k">else</span> <span class="kc">None</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">None</span>
+
+        <span class="k">return</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">content</span><span class="p">)</span> <span class="k">if</span> <span class="n">response_json</span> <span class="k">else</span> <span class="n">res</span><span class="o">.</span><span class="n">content</span>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_all_registrations"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_all_registrations">[docs]</a>    <span class="k">def</span> <span class="nf">get_all_registrations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get all registered clients.</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_REGISTRATIONS</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.disconnect_all"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.disconnect_all">[docs]</a>    <span class="k">def</span> <span class="nf">disconnect_all</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Close all registered client connections.</span>
+
+<span class="sd">        :param delay: Optional delay in seconds to send to mock player cloud services to force player to wait</span>
+<span class="sd">            before reconnecting.</span>
+<span class="sd">        :type delay: :obj:`int`</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">delay</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">delay</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;delay&#39;</span><span class="p">:</span> <span class="n">delay</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;DELETE&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_REGISTRATIONS</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">delay</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_zp_registered"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_zp_registered">[docs]</a>    <span class="k">def</span> <span class="nf">get_zp_registered</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the registration message that the ZP connected with (if connected).</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to check</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: Json array containing Json object [{...}] on success, otherwise empty Json array</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_EP</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_zp_connected_protocol"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_zp_connected_protocol">[docs]</a>    <span class="k">def</span> <span class="nf">get_zp_connected_protocol</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the protocol that the ZP is connected with</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to check</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: Protocol in string format or None if player not connected</span>
+<span class="sd">        :rtype: :obj:`str` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/protocol&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_EP</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">())))</span>
+
+        <span class="c1"># Endpoint will return &#39;&#39; if player not connected, which evaluates to False</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="ow">or</span> <span class="kc">None</span></div>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Configure mock account service behavior</span>
+
+<span class="sd">    :param int  push_response_code response code for push requests</span>
+<span class="sd">    :param int  pull_response_code response code for pull requests</span>
+<span class="sd">    :param bool enable_pull_notifications: enable/disable pull notifications delivered via Lechmere</span>
+<span class="sd">    :param str  target_player_serial: serial number of player that should receive pull notifications</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.configure_account_service"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.configure_account_service">[docs]</a>    <span class="k">def</span> <span class="nf">configure_account_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                  <span class="n">push_response_code</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                  <span class="n">pull_response_code</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                  <span class="n">enable_pull_notifications</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                  <span class="n">target_player_serial</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">push_response_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;pushResponseCode&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">push_response_code</span>
+        <span class="k">if</span> <span class="n">pull_response_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;pullResponseCode&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pull_response_code</span>
+        <span class="k">if</span> <span class="n">enable_pull_notifications</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;enablePullNotifications&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">enable_pull_notifications</span>
+        <span class="k">if</span> <span class="n">target_player_serial</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;targetPlayerSerial&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">target_player_serial</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_CONFIG_URI</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_service_accounts"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_service_accounts">[docs]</a>    <span class="k">def</span> <span class="nf">get_service_accounts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_household_id</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the service accounts that have been pushed.</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to check</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: Accounts object</span>
+<span class="sd">        :rtype: :obj:`json`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_URI</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;x-sonos-musehouseholdid&#39;</span><span class="p">:</span> <span class="n">muse_household_id</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.delete_service_accounts"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.delete_service_accounts">[docs]</a>    <span class="k">def</span> <span class="nf">delete_service_accounts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_household_id</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Delete service accounts that have been pushed.</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to check</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;DELETE&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_URI</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;x-sonos-musehouseholdid&#39;</span><span class="p">:</span> <span class="n">muse_household_id</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_send_registration_response"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_send_registration_response">[docs]</a>    <span class="k">def</span> <span class="nf">set_send_registration_response</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">send_reg_response</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggle sending registration responses with museHouseholdId</span>
+<span class="sd">        on/off.</span>
+
+<span class="sd">        :param bool send_reg_response:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span><span class="p">,</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;regresponse&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">send_reg_response</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_send_ack"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_send_ack">[docs]</a>    <span class="k">def</span> <span class="nf">set_send_ack</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">send_ack</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggle lechmere connection ack</span>
+
+<span class="sd">        :param bool send_ack:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span><span class="p">,</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;sendAck&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">send_ack</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_upgrade_response"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_upgrade_response">[docs]</a>    <span class="k">def</span> <span class="nf">set_upgrade_response</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                             <span class="n">upgrade_response_code</span><span class="p">,</span>
+                             <span class="n">retry_after_seconds</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                             <span class="n">redirect_location</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set Lechmere websocket upgrade response code</span>
+
+<span class="sd">        :param int upgrade_response_code: response code for upgrade request</span>
+<span class="sd">        :param int retry_after_seconds: retry-after seconds for 503 responses</span>
+<span class="sd">        :param str redirect_location: location for redirect responses (e.g., 303)</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;upgradeResponseCode&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">upgrade_response_code</span><span class="p">)}</span>
+        <span class="k">if</span> <span class="n">retry_after_seconds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;retryAfterSeconds&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">retry_after_seconds</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">redirect_location</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;redirectLocation&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">redirect_location</span><span class="p">)</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.reset_upgrade_response"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.reset_upgrade_response">[docs]</a>    <span class="k">def</span> <span class="nf">reset_upgrade_response</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Reset Lechmere websocket upgrade response code</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span><span class="p">,</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;upgradeResponseCode&#39;</span><span class="p">:</span> <span class="s1">&#39;&#39;</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_sync_muse_hhids"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_sync_muse_hhids">[docs]</a>    <span class="k">def</span> <span class="nf">set_sync_muse_hhids</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sync_muse_hhids</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggle updating museHouseholdIds based on uptime of other connected</span>
+<span class="sd">        players.</span>
+
+<span class="sd">        :param bool sync_muse_hhids:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CONFIG</span><span class="p">,</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;syncmusehhids&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">sync_muse_hhids</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()})</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.check_alive"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.check_alive">[docs]</a>    <span class="k">def</span> <span class="nf">check_alive</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">hhlocationid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the last checkAlive response that the player sent the mock.</span>
+
+<span class="sd">        :param zp:</span>
+<span class="sd">        :param str musehhid: Value to send for museHouseholdId</span>
+<span class="sd">        :param str hhlocationid: Value to send for householdLocationId</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CHECKALIVE</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()),</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;musehhid&#39;</span><span class="p">:</span> <span class="n">musehhid</span><span class="p">,</span> <span class="s1">&#39;hhlocationid&#39;</span><span class="p">:</span> <span class="n">hhlocationid</span><span class="p">})</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_config"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_config">[docs]</a>    <span class="k">def</span> <span class="nf">set_config</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">musehhid</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Send a set config with a given muse household Id</span>
+
+<span class="sd">        :param zp:</span>
+<span class="sd">        :param str musehhid: Muse household ID to send</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SEND_COMMAND</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span> <span class="s1">&#39;setConfig&#39;</span><span class="p">),</span>
+                               <span class="n">data</span><span class="o">=</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span><span class="s2">&quot;museHouseholdId&quot;</span><span class="p">:</span> <span class="n">musehhid</span><span class="p">}),</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/json&#39;</span><span class="p">})</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_last_check_alive"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_last_check_alive">[docs]</a>    <span class="k">def</span> <span class="nf">get_last_check_alive</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the last checkAlive response that the player sent the mock.</span>
+
+<span class="sd">        :param zp:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CHECKALIVE</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.clear_last_check_alive"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.clear_last_check_alive">[docs]</a>    <span class="k">def</span> <span class="nf">clear_last_check_alive</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear the last checkAlive response that the player sent the mock.</span>
+
+<span class="sd">        :param zp:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;DELETE&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_CHECKALIVE</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.disconnect_zp"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.disconnect_zp">[docs]</a>    <span class="k">def</span> <span class="nf">disconnect_zp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Close a registered ZP client connection.</span>
+
+<span class="sd">        :param zp: SonosZoneComponent to check</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param delay: Optional delay in seconds to send to mock player cloud services to force player to wait</span>
+<span class="sd">            before reconnecting.</span>
+<span class="sd">        :param code: Websocket close code</span>
+<span class="sd">        :type delay: :obj:`int`</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;delay&#39;</span><span class="p">:</span> <span class="n">delay</span><span class="p">,</span> <span class="s1">&#39;code&#39;</span><span class="p">:</span> <span class="n">code</span><span class="p">}</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;DELETE&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_EP</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="o">.</span><span class="n">lower</span><span class="p">()),</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.is_mac_registered"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.is_mac_registered">[docs]</a>    <span class="k">def</span> <span class="nf">is_mac_registered</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mac</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Close a registered mac client connection.</span>
+
+<span class="sd">        :param str mac: Mac address to check</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_EP</span><span class="p">(</span><span class="n">mac</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_config_properties"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_config_properties">[docs]</a>    <span class="k">def</span> <span class="nf">set_config_properties</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config_settings</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure the feature config to return a specified authtype.</span>
+
+<span class="sd">        :param kwargs config_settings: Configuration settings</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">config_settings</span><span class="p">)</span>
+        <span class="n">body</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span><span class="s1">&#39;config&#39;</span><span class="p">:</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">config</span><span class="p">)})</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">LM_CONFIG_PROPERTIES</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/json&#39;</span><span class="p">},</span>
+                               <span class="n">data</span><span class="o">=</span><span class="n">body</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.offset_token_time_since_created"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.offset_token_time_since_created">[docs]</a>    <span class="k">def</span> <span class="nf">offset_token_time_since_created</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">token</span><span class="p">,</span> <span class="n">offset</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Modify creation time of a token to +&lt;offset&gt; seconds in the past</span>
+
+<span class="sd">        :param str token: Token to modify</span>
+<span class="sd">        :param int offset: Number of seconds to send into the past</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_MODIFY</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/json&#39;</span><span class="p">},</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;access_token&#39;</span><span class="p">:</span> <span class="n">token</span><span class="p">,</span> <span class="s1">&#39;createdOffset&#39;</span><span class="p">:</span> <span class="n">offset</span><span class="p">})</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_token_TTL"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_token_TTL">[docs]</a>    <span class="k">def</span> <span class="nf">set_token_TTL</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ttl</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Change the token TTL for the mock auth services.</span>
+
+<span class="sd">        :param int ttl: TTL in seconds</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_auth_properties</span><span class="p">(</span><span class="n">ttl</span><span class="o">=</span><span class="n">ttl</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_token_request_response_code"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_token_request_response_code">[docs]</a>    <span class="k">def</span> <span class="nf">set_token_request_response_code</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">code</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Change the token response code for the mock auth services.</span>
+
+<span class="sd">        :param int code: HTTP response code</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_auth_properties</span><span class="p">(</span><span class="n">response_code</span><span class="o">=</span><span class="n">code</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_token_delay"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_token_delay">[docs]</a>    <span class="k">def</span> <span class="nf">set_token_delay</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure the number of seconds the server will wait before returning</span>
+<span class="sd">        an oauth token.</span>
+
+<span class="sd">        :param int delay: Delay in seconds</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_auth_properties</span><span class="p">(</span><span class="n">token_delay</span><span class="o">=</span><span class="n">delay</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_refresh_token_delay"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_refresh_token_delay">[docs]</a>    <span class="k">def</span> <span class="nf">set_refresh_token_delay</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">delay</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure the number of seconds the server will wait before returning</span>
+<span class="sd">        a refresh token.</span>
+
+<span class="sd">        :param int delay_ms: Delay in milliseconds.</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_auth_properties</span><span class="p">(</span><span class="n">refresh_token_delay</span><span class="o">=</span><span class="n">delay</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_auth_properties"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_auth_properties">[docs]</a>    <span class="k">def</span> <span class="nf">set_auth_properties</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ttl</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">response_code</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+        <span class="n">refresh_token_delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">token_delay</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">retry_after</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set any combination of supported auth properties.</span>
+
+<span class="sd">        :param int ttl: Token ttl in seconds</span>
+<span class="sd">        :param int response_code: HTTP response code for token request</span>
+<span class="sd">        :param int refresh_token_delay: Delay for server to send refresh token in ms</span>
+<span class="sd">        :param int token_delay: Delay for server to send oauth token in ms</span>
+<span class="sd">        :param int retry_after: Value to send for Retry-After header in seconds.</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise None</span>
+<span class="sd">        :rtype: :obj:`dict` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Add params to dictionary</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;expires&#39;</span><span class="p">:</span> <span class="n">ttl</span><span class="p">,</span> <span class="s1">&#39;code&#39;</span><span class="p">:</span> <span class="n">response_code</span><span class="p">,</span>
+            <span class="s1">&#39;refreshDelay&#39;</span><span class="p">:</span> <span class="n">refresh_token_delay</span><span class="p">,</span> <span class="s1">&#39;newDelay&#39;</span><span class="p">:</span> <span class="n">token_delay</span><span class="p">,</span>
+            <span class="s1">&#39;retryAfter&#39;</span><span class="p">:</span> <span class="n">retry_after</span><span class="p">}</span>
+
+        <span class="c1"># Remove keys with None values</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">v</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_PROPERTIES</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.create_user_token"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.create_user_token">[docs]</a>    <span class="k">def</span> <span class="nf">create_user_token</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">scopes</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tell the mock server to generate a user token with given scopes.</span>
+
+<span class="sd">        :param str user: UserID for token.</span>
+<span class="sd">        :param str scopes: Scopes for token.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_CREATE_USER_TOKEN</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">},</span>
+                               <span class="n">data</span><span class="o">=</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span><span class="s1">&#39;user&#39;</span><span class="p">:</span> <span class="n">user</span><span class="p">,</span> <span class="s1">&#39;scopes&#39;</span><span class="p">:</span> <span class="n">scopes</span><span class="p">}))</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span><span class="p">[</span><span class="s1">&#39;access_token&#39;</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_log"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_log">[docs]</a>    <span class="k">def</span> <span class="nf">get_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span> <span class="n">clear</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">request_only</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the logs from the server endpoint</span>
+
+<span class="sd">        :param str type: which logging endpoint to query</span>
+<span class="sd">        :param bool clear: should we clear the logs before attempting to get them again</span>
+<span class="sd">        :param bool request_only: the &#39;request&#39; endpoint captures both request and response logs. Should we only</span>
+<span class="sd">        return the requests from the player</span>
+
+<span class="sd">        :return: Json object of response on success, otherwise empty list</span>
+<span class="sd">        :rtype: :obj: &#39;dict&#39; or &#39;[]&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">requestlog</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/request/</span><span class="si">{}</span><span class="s2">/logs&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">,</span> <span class="nb">type</span><span class="p">)</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="n">requestlog</span><span class="p">)</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="n">payload</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">clear</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">clear_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="nb">type</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">request_only</span><span class="p">:</span>
+            <span class="n">payload</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">entry</span><span class="p">:</span> <span class="s1">&#39;path&#39;</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> <span class="n">payload</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">payload</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.clear_log"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.clear_log">[docs]</a>    <span class="k">def</span> <span class="nf">clear_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">):</span>
+        <span class="n">log</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/request/</span><span class="si">{}</span><span class="s2">/logs/clear&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_URI</span><span class="p">,</span> <span class="nb">type</span><span class="p">)</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="n">log</span><span class="p">)</span>
+        <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">req</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.wait_for_filtered_log"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.wait_for_filtered_log">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_filtered_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">,</span> <span class="n">clear</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span> <span class="n">expected</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                              <span class="n">history</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">request_only</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns entries from the mock player cloud services server logs based on a variety of inputs</span>
+<span class="sd">        :param type: Which log endpoint to use on the server</span>
+<span class="sd">        :param clear: clears the server&#39;s logs before the parsing begins</span>
+<span class="sd">        :param fn: filter function that pulls out entries from the server log</span>
+<span class="sd">        :param timeout: how long the parser should run for</span>
+<span class="sd">        :param expected: how many entries the filter should return from the server log</span>
+<span class="sd">        :param history: return either just the filtered items or the entire server log up to the point of the filter</span>
+<span class="sd">                        match</span>
+<span class="sd">        :param iteration_delay: how long to delay between each filter attempt</span>
+<span class="sd">        :return full_logs or final_logs: list of the parsed logs depending on whether the full history was requested</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">clear</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">clear_log</span><span class="p">(</span><span class="nb">type</span><span class="p">)</span>
+        <span class="n">full_logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="nb">type</span><span class="p">,</span> <span class="n">request_only</span><span class="o">=</span><span class="n">request_only</span><span class="p">)</span>
+        <span class="n">final_logs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">full_logs</span><span class="p">)</span>
+        <span class="n">elapsed_secs</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">expected</span> <span class="ow">and</span> <span class="n">elapsed_secs</span> <span class="o">&lt;</span> <span class="n">timeout</span><span class="p">:</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="n">iteration_delay</span><span class="p">)</span>
+
+            <span class="n">full_logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="nb">type</span><span class="p">,</span> <span class="n">request_only</span><span class="o">=</span><span class="n">request_only</span><span class="p">)</span>
+            <span class="n">filtered_logs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">full_logs</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">filtered_logs</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">val</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">final_logs</span><span class="p">:</span>
+                    <span class="n">final_logs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">val</span><span class="p">)</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="p">()</span>
+            <span class="n">elapsed_secs</span> <span class="o">=</span> <span class="n">end</span> <span class="o">-</span> <span class="n">start</span>
+
+        <span class="k">if</span> <span class="n">expected</span> <span class="o">&gt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">):</span>
+            <span class="n">_logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> entries in </span><span class="si">{}</span><span class="s2"> logs after waiting </span><span class="si">{}</span><span class="s2"> seconds, got </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span>
+                                                                                                      <span class="nb">type</span><span class="p">,</span>
+                                                                                                      <span class="n">elapsed_secs</span><span class="p">,</span>
+                                                                                                      <span class="nb">len</span><span class="p">(</span><span class="n">final_logs</span><span class="p">)))</span>
+
+        <span class="k">if</span> <span class="n">history</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">full_logs</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">final_logs</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">val</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">full_logs</span><span class="p">:</span>
+                    <span class="n">_logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;drop </span><span class="si">{}</span><span class="s2"> log:</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">,</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">val</span><span class="p">)))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">_logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;keep </span><span class="si">{}</span><span class="s2"> log:</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">,</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">val</span><span class="p">)))</span>
+            <span class="k">return</span> <span class="n">final_logs</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.send_lechmere_command"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.send_lechmere_command">[docs]</a>    <span class="k">def</span> <span class="nf">send_lechmere_command</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cmd</span><span class="p">,</span> <span class="n">serial</span><span class="p">,</span> <span class="n">content_type</span><span class="o">=</span><span class="s2">&quot;application/json&quot;</span><span class="p">,</span> <span class="n">request_type</span><span class="o">=</span><span class="s2">&quot;POST&quot;</span><span class="p">,</span>
+                              <span class="n">command_type</span><span class="o">=</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="n">fragmented</span><span class="o">=</span><span class="s2">&quot;false&quot;</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">request_json</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Send a command to the mock player cloud services that will be passed to the desired player</span>
+<span class="sd">        with specified serial number</span>
+<span class="sd">        :param cmd:</span>
+<span class="sd">        :param serial:</span>
+<span class="sd">        :param content_type:</span>
+<span class="sd">        :param request_type:</span>
+<span class="sd">        :param command_type:</span>
+<span class="sd">        :param fragmented:</span>
+<span class="sd">        :param response_json:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_endpoint</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_SERVER_BASE_URI</span><span class="p">,</span>
+                                          <span class="n">serial</span><span class="p">,</span> <span class="n">command_type</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">request_json</span><span class="p">:</span>
+            <span class="n">payload</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">payload</span> <span class="o">=</span> <span class="n">cmd</span>
+        <span class="n">headers</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;content-type&quot;</span><span class="p">:</span> <span class="n">content_type</span><span class="p">,</span>
+                   <span class="s2">&quot;fragmented&quot;</span><span class="p">:</span> <span class="n">fragmented</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="n">request_type</span><span class="p">,</span> <span class="n">muse_endpoint</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span>
+                               <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="n">response_json</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.push_music_accounts"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.push_music_accounts">[docs]</a>    <span class="k">def</span> <span class="nf">push_music_accounts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">accounts</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fullSync</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Send PUT request to update accounts.xml in the cloud.</span>
+<span class="sd">        :param musehhid</span>
+<span class="sd">        :param accounts</span>
+<span class="sd">        :param fullSync</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;PUT&#39;</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_REPLICATION_URI</span><span class="p">,</span>
+                               <span class="n">headers</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;content-type&#39;</span><span class="p">:</span> <span class="s1">&#39;application/xml&#39;</span><span class="p">,</span> <span class="s1">&#39;x-sonos-musehouseholdid&#39;</span><span class="p">:</span> <span class="n">musehhid</span><span class="p">},</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;fullSync&#39;</span><span class="p">:</span> <span class="n">fullSync</span><span class="p">},</span> <span class="n">data</span><span class="o">=</span><span class="n">accounts</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.sync_music_accounts"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.sync_music_accounts">[docs]</a>    <span class="k">def</span> <span class="nf">sync_music_accounts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">operation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fullSync</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sync music accounts between the cloud and the player.</span>
+<span class="sd">        :param musehhid</span>
+<span class="sd">        :param operation</span>
+<span class="sd">        :param fullSync</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">LM_ACCOUNT_SYNC_URI</span><span class="p">,</span>
+                               <span class="n">params</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;householdId&#39;</span><span class="p">:</span> <span class="n">musehhid</span><span class="p">,</span> <span class="s1">&#39;operation&#39;</span><span class="p">:</span> <span class="n">operation</span><span class="p">,</span> <span class="s1">&#39;fullSync&#39;</span><span class="p">:</span> <span class="n">fullSync</span><span class="p">})</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.add_sonos_api_key_to_cache"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.add_sonos_api_key_to_cache">[docs]</a>    <span class="k">def</span> <span class="nf">add_sonos_api_key_to_cache</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">api_key</span><span class="o">=</span><span class="n">X_SONOS_API_KEY</span><span class="p">,</span> <span class="n">key_name</span><span class="o">=</span><span class="n">MITC_ENVIRONMENT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Cache an api key inside the mock lechemere instance</span>
+<span class="sd">        :param api_key: Api key used by player which will be cached in mock lechemere for its duration</span>
+<span class="sd">        :param key_name: Name used to identify key</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;clientKey&quot;</span><span class="p">:</span> <span class="n">api_key</span><span class="p">,</span> <span class="s2">&quot;keyName&quot;</span><span class="p">:</span> <span class="n">key_name</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_V3_CLIENT_URI</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_sonos_api_key_from_cache"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_sonos_api_key_from_cache">[docs]</a>    <span class="k">def</span> <span class="nf">get_sonos_api_key_from_cache</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">api_key</span><span class="o">=</span><span class="n">X_SONOS_API_KEY</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get full key object from mock lechmere. Returns 404 if not found.</span>
+<span class="sd">        :param api_key: Api key used by player which should be cached in mock lechemere</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;clientKey&quot;</span><span class="p">:</span> <span class="n">api_key</span><span class="p">}</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_AUTH_V3_CLIENT_URI</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.flush_api_key_cache"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.flush_api_key_cache">[docs]</a>    <span class="k">def</span> <span class="nf">flush_api_key_cache</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Flush keys from mock lechmere.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_FLUSH_CLIENTKEY</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Configure mock metrics service behavior</span>
+<span class="sd">    :param int  pull_response_code response code for pull requests</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.configure_metrics_service"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.configure_metrics_service">[docs]</a>    <span class="k">def</span> <span class="nf">configure_metrics_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">response_code</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">response_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;responseCode&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">response_code</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">LM_METRICS_CONFIG_PROPERTIES</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">response_json</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Mock Recycle Service</span>
+<span class="sd">    https://confluence.sonos.com/x/ljwpC</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.configure_recycle_service"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.configure_recycle_service">[docs]</a>    <span class="k">def</span> <span class="nf">configure_recycle_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">response_code</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">request_wait_time</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure mock recycle service behavior</span>
+<span class="sd">        :param response_code for recycle requests</span>
+<span class="sd">        :param request_wait_time for delaying mock responses</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">response_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;responseCode&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">response_code</span>
+        <span class="k">if</span> <span class="n">request_wait_time</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;requestWaitTime&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">request_wait_time</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/config&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_URI</span><span class="p">),</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.set_deactivation_state"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.set_deactivation_state">[docs]</a>    <span class="k">def</span> <span class="nf">set_deactivation_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">action</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">deactivationTTLSeconds</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set the deactivation state</span>
+<span class="sd">        :param action for recycle requests</span>
+<span class="sd">        :param deactivationTTLSeconds for recycle requests</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">action</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;action&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">action</span>
+        <span class="k">if</span> <span class="n">deactivationTTLSeconds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">payload</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;deactivationTTLSeconds&#39;</span><span class="p">:</span> <span class="n">deactivationTTLSeconds</span><span class="p">}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">payload</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/deactivationstate&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_URI</span><span class="p">),</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">,</span> <span class="n">json</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_deactivation_state"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_deactivation_state">[docs]</a>    <span class="k">def</span> <span class="nf">get_deactivation_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">playerid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the deactivation state</span>
+<span class="sd">        :param playerid for recycle requests</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">/deactivationstate&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_URI</span><span class="p">,</span> <span class="n">playerid</span><span class="p">))</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.get_deactivation_state_for_all_players"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.get_deactivation_state_for_all_players">[docs]</a>    <span class="k">def</span> <span class="nf">get_deactivation_state_for_all_players</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">userid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">musehhid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the deactivation state for all players for a user in a household</span>
+<span class="sd">        :param userid for recycle requests</span>
+<span class="sd">        :param musehhid for recycle requests</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">if</span> <span class="n">userid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;userid&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">userid</span>
+        <span class="k">if</span> <span class="n">musehhid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">params</span><span class="p">[</span><span class="s1">&#39;musehhid&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">musehhid</span>
+
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;GET&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/deactivationstate&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_URI</span><span class="p">),</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MockPlayerCloudServicesControl.reset_deactivaton_state_for_player"><a class="viewcode-back" href="../../../webserver.helpers.html#webserver.helpers.mock_player_cloud_services_control.MockPlayerCloudServicesControl.reset_deactivaton_state_for_player">[docs]</a>    <span class="k">def</span> <span class="nf">reset_deactivaton_state_for_player</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">playerid</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Reset the deactivation state for a player</span>
+<span class="sd">        NOTE: An API for QA - only in lower envs to allow resetting the deactivated state for a player to allow</span>
+<span class="sd">            repeatedly testing deactivation with the same player.</span>
+<span class="sd">        :param playerid for recycle requests</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;action&#39;</span><span class="p">:</span> <span class="s1">&#39;reset&#39;</span><span class="p">}</span>
+        <span class="n">req</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">Request</span><span class="p">(</span><span class="s1">&#39;POST&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">/deactivationstate&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">LM_RECYCLE_RESET_URI</span><span class="p">,</span> <span class="n">playerid</span><span class="p">),</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_int_request</span><span class="p">(</span><span class="n">req</span><span class="p">)</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

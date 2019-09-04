@@ -1,0 +1,339 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>voice.voice_end_to_end.voice_xml_status &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for voice.voice_end_to_end.voice_xml_status</h1><div class="highlight"><pre>
+<span></span><span class="c1"># pylint: disable=R0904</span>
+<span class="c1"># ignoring: too many public methods (21/20)</span>
+<span class="sd">&quot;&quot;&quot;this module validates ip:1400/status/xml. the first portion</span>
+<span class="sd">describes the xpath statement to target several nodes that should be</span>
+<span class="sd">populated via automation. following this, the values of the nodes or</span>
+<span class="sd">attributes (depending on the investigation) is asserted against an</span>
+<span class="sd">expected value.&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">urllib</span>
+
+<span class="kn">from</span> <span class="nn">elementtree.ElementTree</span> <span class="k">import</span> <span class="n">ElementTree</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">voice.voice_end_to_end.voice_end_to_end_base</span> <span class="k">import</span> <span class="n">VoiceEndToEndBase</span>
+<span class="kn">from</span> <span class="nn">voice_util.voice_overlay</span> <span class="k">import</span> <span class="n">VoiceOverlay</span>
+
+
+<span class="c1"># voice overlay</span>
+<span class="n">VOICETAP_PATH</span> <span class="o">=</span> <span class="s2">&quot;/Automation/voicetap/alexa_tests/basic/&quot;</span>
+<span class="n">VOICETAP_FILE</span> <span class="o">=</span> <span class="s1">&#39;alexa_whats_the_weather.raw&#39;</span>
+
+<span class="c1"># xpath</span>
+<span class="n">VOICE_SERVICE</span> <span class="o">=</span> <span class="s1">&#39;/VoiceProcessingInfo/VoiceServices/VoiceService/State&#39;</span>
+<span class="n">VOICE_SERVICE_CONNECTED</span> <span class="o">=</span> <span class="s1">&#39;CONNECTED&#39;</span>
+
+<span class="n">MIC_STATE</span> <span class="o">=</span> <span class="s1">&#39;/VoiceProcessingInfo/MicState&#39;</span>
+<span class="n">MIC_STATE_ACTIVE</span> <span class="o">=</span> <span class="s1">&#39;Active&#39;</span>
+
+<span class="n">MIC_STREAMS</span> <span class="o">=</span> <span class="s1">&#39;VoiceProcessingInfo/MicStreams&#39;</span>
+<span class="n">NUM_MIC_STREAMS</span> <span class="o">=</span> <span class="mi">6</span>
+
+<span class="n">DAC_STREAMS</span> <span class="o">=</span> <span class="s1">&#39;/VoiceProcessingInfo/ECSStreams&#39;</span>
+<span class="n">NUM_DAC_STREAMS</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="c1"># expect &gt; 0</span>
+<span class="n">VP_TRIG</span> <span class="o">=</span> <span class="s1">&#39;/VoiceProcessingInfo/VPTriggerHistory/&#39;</span>
+<span class="n">VP_TOTAL_WW</span> <span class="o">=</span> <span class="n">VP_TRIG</span> <span class="o">+</span> <span class="s1">&#39;VPTotalWWs&#39;</span>
+<span class="n">VP_TOTAL_TRIGGERS</span> <span class="o">=</span> <span class="n">VP_TRIG</span> <span class="o">+</span> <span class="s1">&#39;VPTotalTriggers&#39;</span>
+<span class="n">VP_AVG_CONF</span> <span class="o">=</span> <span class="n">VP_TRIG</span> <span class="o">+</span> <span class="s1">&#39;VPAverageConfidence&#39;</span>
+<span class="n">VP_TRIGGER_HISTORY</span> <span class="o">=</span> <span class="n">VP_TRIG</span> <span class="o">+</span> <span class="s1">&#39;VPTriggers/VPTriggerEntry&#39;</span>
+<span class="n">VP_TRIGGER_HISTORY_ATTRIB</span> <span class="o">=</span> <span class="s1">&#39;triggerConfidence&#39;</span>
+<span class="n">VP_TRIGGER_STAT</span> <span class="o">=</span> <span class="n">VP_TRIG</span> <span class="o">+</span> <span class="s1">&#39;VPTriggerStats/VPTriggerStatEntry&#39;</span>
+<span class="n">VP_TRIGGER_STAT_ATTRIB</span> <span class="o">=</span> <span class="s1">&#39;trigStatTime&#39;</span>
+
+
+<div class="viewcode-block" id="VoiceStatusValidator"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator">[docs]</a><span class="k">class</span> <span class="nc">VoiceStatusValidator</span><span class="p">(</span><span class="n">VoiceEndToEndBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; validates IP:1400/status/voice &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; read in data, read in xpath statements &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceStatusValidator</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">xml_root</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="VoiceStatusValidator.setUpFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; set up fixture from workflow, get a bootleg&quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceStatusValidator</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                              <span class="s2">&quot;Expect atleast one voice enabled player in HH&quot;</span><span class="p">)</span>
+        <span class="n">local_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span> <span class="o">=</span> <span class="n">local_path</span> <span class="o">+</span> <span class="s1">&#39;/resource/&#39;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">setup_webserver</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">:</span>
+            <span class="c1"># If for any reason ext audio src is already playing, stop it.</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop</span><span class="p">(</span><span class="mi">8008</span><span class="p">)</span>
+            <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+                <span class="k">pass</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>  <span class="c1"># hack</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_files_from_nas</span><span class="p">(</span><span class="n">VOICETAP_PATH</span><span class="p">,</span> <span class="n">files_list</span><span class="o">=</span><span class="p">[</span><span class="n">VOICETAP_FILE</span><span class="p">])</span>
+        <span class="n">voice_overlay</span> <span class="o">=</span> <span class="n">VoiceOverlay</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap_url</span><span class="p">(</span><span class="n">VOICETAP_FILE</span><span class="p">)</span>
+        <span class="n">voice_overlay</span><span class="o">.</span><span class="n">load_and_start_overlay</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">urllib</span><span class="o">.</span><span class="n">urlretrieve</span><span class="p">(</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/status/voice&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">),</span>
+                           <span class="n">filename</span><span class="o">=</span><span class="s2">&quot;voice.xml&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">xml_root</span> <span class="o">=</span> <span class="n">ElementTree</span><span class="p">(</span><span class="n">file</span><span class="o">=</span><span class="s2">&quot;voice.xml&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.setUpTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; set up test from workflow&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Test&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.tearDownTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; workflow test teardown. &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Teardown Test&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.tearDownFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; workflow test teardown. &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceStatusValidator</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_voice_service_connected"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_voice_service_connected">[docs]</a>    <span class="k">def</span> <span class="nf">test_voice_service_connected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; assert voice service connected &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_node</span><span class="p">(</span><span class="n">VOICE_SERVICE</span><span class="p">,</span>
+                                  <span class="n">VOICE_SERVICE_CONNECTED</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VOICE_SERVICE</span><span class="p">,</span>
+                             <span class="n">VOICE_SERVICE_CONNECTED</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_mic_state"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_mic_state">[docs]</a>    <span class="k">def</span> <span class="nf">test_mic_state</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify that microphone is enabled successfully. &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_node</span><span class="p">(</span><span class="n">MIC_STATE</span><span class="p">,</span>
+                                  <span class="n">MIC_STATE_ACTIVE</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">MIC_STATE</span><span class="p">,</span>
+                             <span class="n">MIC_STATE_ACTIVE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_mic_streams"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_mic_streams">[docs]</a>    <span class="k">def</span> <span class="nf">test_mic_streams</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify correct number of mic streams. &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_int_node</span><span class="p">(</span><span class="n">MIC_STREAMS</span><span class="p">,</span>
+                                      <span class="n">NUM_MIC_STREAMS</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">MIC_STREAMS</span><span class="p">,</span>
+                             <span class="n">NUM_MIC_STREAMS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_dac_streams"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_dac_streams">[docs]</a>    <span class="k">def</span> <span class="nf">test_dac_streams</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify correct number of dac streams. &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_int_node</span><span class="p">(</span><span class="n">DAC_STREAMS</span><span class="p">,</span>
+                                      <span class="n">NUM_DAC_STREAMS</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DAC_STREAMS</span><span class="p">,</span>
+                             <span class="n">NUM_DAC_STREAMS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_total_ww"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_total_ww">[docs]</a>    <span class="k">def</span> <span class="nf">test_total_ww</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify non-zero total wakewords&quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_nonzero_int_node</span><span class="p">(</span><span class="n">VP_TOTAL_WW</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VP_TOTAL_WW</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_total_triggers"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_total_triggers">[docs]</a>    <span class="k">def</span> <span class="nf">test_total_triggers</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify non-zero total ww triggers&quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_nonzero_int_node</span><span class="p">(</span><span class="n">VP_TOTAL_TRIGGERS</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VP_TOTAL_WW</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_avg_conf"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_avg_conf">[docs]</a>    <span class="k">def</span> <span class="nf">test_avg_conf</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify non-zero avg total confidence &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_nonzero_int_node</span><span class="p">(</span><span class="n">VP_AVG_CONF</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VP_AVG_CONF</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_trigger_history"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_trigger_history">[docs]</a>    <span class="k">def</span> <span class="nf">test_trigger_history</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify non-zero trigger confidence &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_nonzero_int_attrib</span><span class="p">(</span><span class="n">VP_TRIGGER_HISTORY</span><span class="p">,</span>
+                                                <span class="n">VP_TRIGGER_HISTORY_ATTRIB</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VP_TRIGGER_HISTORY</span><span class="p">,</span>
+                             <span class="n">VP_TRIGGER_HISTORY_ATTRIB</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.test_trigger_stat"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.test_trigger_stat">[docs]</a>    <span class="k">def</span> <span class="nf">test_trigger_stat</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify non-zero trigger confidence &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verify_nonzero_int_attrib</span><span class="p">(</span><span class="n">VP_TRIGGER_STAT</span><span class="p">,</span>
+                                                <span class="n">VP_TRIGGER_STAT_ATTRIB</span><span class="p">)</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VP_TRIGGER_STAT</span><span class="p">,</span>
+                             <span class="n">VP_TRIGGER_STAT_ATTRIB</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">status</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.verify_node"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.verify_node">[docs]</a>    <span class="k">def</span> <span class="nf">verify_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">expected_state</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify node value &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">node_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_xml_node_value</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">node_val</span> <span class="o">==</span> <span class="n">expected_state</span><span class="p">:</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">status</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.verify_int_node"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.verify_int_node">[docs]</a>    <span class="k">def</span> <span class="nf">verify_int_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">expected_state</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify node value &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">node_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_xml_node_value</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">node_val</span><span class="p">)</span> <span class="o">==</span> <span class="n">expected_state</span><span class="p">:</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">status</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.verify_nonzero_int_attrib"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.verify_nonzero_int_attrib">[docs]</a>    <span class="k">def</span> <span class="nf">verify_nonzero_int_attrib</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">attrib</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify node value &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">node_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_xml_attrib_value</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">attrib</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">node_val</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">status</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.verify_nonzero_int_node"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.verify_nonzero_int_node">[docs]</a>    <span class="k">def</span> <span class="nf">verify_nonzero_int_node</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; verify node value &quot;&quot;&quot;</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">node_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_xml_node_value</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">node_val</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">status</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.get_xml_attrib_value"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.get_xml_attrib_value">[docs]</a>    <span class="k">def</span> <span class="nf">get_xml_attrib_value</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">xpath</span><span class="p">,</span> <span class="n">attrib</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;given xpath and attrib, get the value&quot;&quot;&quot;</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml_root</span>
+        <span class="n">node</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">xpath</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">node</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">attrib</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceStatusValidator.get_xml_node_value"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_xml_status.VoiceStatusValidator.get_xml_node_value">[docs]</a>    <span class="k">def</span> <span class="nf">get_xml_node_value</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">xpath</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;given xpath and attrib, get the value&quot;&quot;&quot;</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml_root</span>
+        <span class="n">node</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="n">xpath</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">node</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">text</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">SUITE</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;VoiceStatusValidator&quot;</span><span class="p">)</span>
+    <span class="n">FIXTURES</span> <span class="o">=</span> <span class="p">[</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">,</span> <span class="n">VoiceStatusValidator</span><span class="p">]</span>
+    <span class="n">SUITE</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">f</span><span class="p">()</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">FIXTURES</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

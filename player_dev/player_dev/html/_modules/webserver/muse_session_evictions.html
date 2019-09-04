@@ -1,0 +1,659 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.muse_session_evictions &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.muse_session_evictions</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Functional tests for the conditions that should/should not lead</span>
+<span class="sd">to a muse session eviction.</span>
+<span class="sd">Players must support the muse websocket endpoint.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="k">import</span> <span class="n">ifilter</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span><span class="n">Error</span><span class="p">,</span> <span class="n">GroupStatus</span><span class="p">,</span> <span class="n">SessionState</span><span class="p">,</span> <span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                                           <span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                                           <span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">Success</span><span class="p">,</span> <span class="n">PlaybackError</span><span class="p">,</span> <span class="n">PlaybackErrorEvent</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="p">(</span><span class="n">BaseMuseFixture</span><span class="p">,</span>
+                                         <span class="n">MuseClientFixtureMixin</span><span class="p">,</span>
+                                         <span class="n">MuseCloudServerFixtureMixin</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.muse_api_helpers</span> <span class="k">import</span> <span class="n">MuseSessionMixin</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.ignore_invoke_errors</span> <span class="k">import</span> <span class="n">IgnoreInvokeErrors</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.cloud_queue_control</span> <span class="k">import</span> <span class="n">CloudQueueControl</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+
+<span class="n">muse_session_mixin</span> <span class="o">=</span> <span class="n">MuseSessionMixin</span><span class="p">()</span>
+<span class="n">cq_control</span> <span class="o">=</span> <span class="n">CloudQueueControl</span><span class="p">()</span>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl">[docs]</a><span class="k">class</span> <span class="nc">MuseSessionEvictionTestsImpl</span><span class="p">(</span><span class="n">BaseMuseFixture</span><span class="p">):</span>
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span> <span class="o">=</span> <span class="n">ifilter</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">d</span><span class="p">:</span> <span class="p">(</span><span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span>
+                       <span class="ow">and</span> <span class="ow">not</span> <span class="n">d</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()</span>
+                       <span class="ow">and</span> <span class="n">d</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_server</span><span class="p">(</span><span class="n">stdout</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span>
+                                                    <span class="n">stderr</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.tearDownTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">leave_group_and_wait</span><span class="p">()</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">stop_cloud_queue_server</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_new_session_from_same_client_evicts_existing"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_new_session_from_same_client_evicts_existing">[docs]</a>    <span class="k">def</span> <span class="nf">test_new_session_from_same_client_evicts_existing</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test that creating a new session from a the same client causes the player to send</span>
+<span class="sd">        an eviction notice to clients attached to the old session. As of PTS-2566 we</span>
+<span class="sd">        no longer suppress eviction messages when the same client creates multiple sessions</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">original_session_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,</span>
+                                 <span class="n">custom_data</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_id</span> <span class="o">!=</span> <span class="n">original_session_id</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_id</span> <span class="o">==</span> <span class="n">original_session_id</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_new_session_from_different_client_causes_eviction"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_new_session_from_different_client_causes_eviction">[docs]</a>    <span class="k">def</span> <span class="nf">test_new_session_from_different_client_causes_eviction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test that creating a new session from a different client causes the player to send</span>
+<span class="sd">        an eviction notice to clients attached to the old session. As of PTS-2566 we</span>
+<span class="sd">        no longer suppress eviction messages when the same client creates multiple sessions</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="c1"># Create a second Muse client to the same player and wait</span>
+        <span class="n">second_muse_client</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">second_muse_client</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                          <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                          <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                          <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,</span>
+                                          <span class="n">custom_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_avt_uri_changes_evict_session"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_avt_uri_changes_evict_session">[docs]</a>    <span class="k">def</span> <span class="nf">test_avt_uri_changes_evict_session</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test AVTransportURI changing away from the private queue causes a session</span>
+<span class="sd">        eviction</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_avt_uri_changes_evict_session_without_cloud_queue_loaded"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_avt_uri_changes_evict_session_without_cloud_queue_loaded">[docs]</a>    <span class="k">def</span> <span class="nf">test_avt_uri_changes_evict_session_without_cloud_queue_loaded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test that changing the AVTransportURI causes an eviction when there is a</span>
+<span class="sd">        session and a cloud queue has not yet been loaded</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_adding_to_group_causes_group_gone"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_adding_to_group_causes_group_gone">[docs]</a>    <span class="k">def</span> <span class="nf">test_adding_to_group_causes_group_gone</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that adding a player into a different group while</span>
+<span class="sd">        that player is playing a CloudQueue causes a group gone event</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="c1"># SWBPL-60951</span>
+        <span class="c1"># Make sure that non-response still returns a &#39;global:1&#39; namespace</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">namespace</span> <span class="o">==</span> <span class="s2">&quot;global&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_dropping_gc_causes_group_moved_event"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_dropping_gc_causes_group_moved_event">[docs]</a>    <span class="k">def</span> <span class="nf">test_dropping_gc_causes_group_moved_event</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that when a GC is dropped from a group that player sends an</span>
+<span class="sd">        GROUP_STATUS_MOVED event to the client to direct it to move its</span>
+<span class="sd">        connection to the new GC.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_play_on_former_gc_returns_group_moved_event"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_play_on_former_gc_returns_group_moved_event">[docs]</a>    <span class="k">def</span> <span class="nf">test_play_on_former_gc_returns_group_moved_event</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that trying to send a muse command to a GC dropped from the</span>
+<span class="sd">        current session responds with a GroupCoordinatorChanged event and directs</span>
+<span class="sd">        the client to the new GC.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">first_muse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">first_muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                  <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">first_muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_created</span> <span class="ow">and</span>
+                                                    <span class="nb">len</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">))</span>
+        <span class="n">first_session_id</span> <span class="o">=</span> <span class="n">first_muse</span><span class="o">.</span><span class="n">session_id</span>
+        <span class="n">first_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+        <span class="n">first_muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">first_session_id</span><span class="p">,</span>
+                                    <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                    <span class="n">queue_base_url</span><span class="o">=</span><span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                    <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+
+        <span class="n">first_muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">first_group_id</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="n">first_session_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="c1"># SWBPL-60951</span>
+        <span class="c1"># Make sure that the response to the play command has &quot;playback:1&quot; as the namespace</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">first_muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">player_id</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">namespace</span> <span class="o">==</span> <span class="s2">&quot;playback&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_play_on_former_gc_returns_gc_moved_event_without_cloud_queue"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_play_on_former_gc_returns_gc_moved_event_without_cloud_queue">[docs]</a>    <span class="k">def</span> <span class="nf">test_play_on_former_gc_returns_gc_moved_event_without_cloud_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that trying to send a muse command to a GC dropped from the</span>
+<span class="sd">        current session responds with a GroupCoordinatorChanged event and directs</span>
+<span class="sd">        the client to the new GC. Additionally validates that the playerId in</span>
+<span class="sd">        the GROUP_MOVED is the udn of the new GC.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">muse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                            <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                            <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                            <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_created</span> <span class="ow">and</span>
+                                                    <span class="nb">len</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">))</span>
+
+        <span class="n">first_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+
+        <span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">first_group_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">player_id</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_create_private_queue_causes_eviction"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_create_private_queue_causes_eviction">[docs]</a>    <span class="k">def</span> <span class="nf">test_create_private_queue_causes_eviction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify creating a private queue on a player while it is playing</span>
+<span class="sd">        a cloudqueue causes a session eviction</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">my_session_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">Queue</span><span class="o">.</span><span class="n">CreateQueue</span><span class="p">(</span><span class="n">queueownerid</span><span class="o">=</span><span class="s2">&quot;Python&quot;</span><span class="p">,</span>
+                                  <span class="n">queueownercontext</span><span class="o">=</span><span class="s2">&quot;None&quot;</span><span class="p">,</span>
+                                  <span class="n">queuepolicy</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_id</span> <span class="o">==</span> <span class="n">my_session_id</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_become_coordinator_of_standalone_group_status_gone"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_become_coordinator_of_standalone_group_status_gone">[docs]</a>    <span class="k">def</span> <span class="nf">test_become_coordinator_of_standalone_group_status_gone</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test BecomeCoordinatorOfStandaloneGroup on a player with an active Muse</span>
+<span class="sd">        session that the player sends a GROUP_STATUS_GONE to all attached clients.</span>
+<span class="sd">        This specifically tests the case where a session exists but has not been</span>
+<span class="sd">        activated by loading a cloud queue.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_become_coordinator_of_standalone_group_while_playing"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_become_coordinator_of_standalone_group_while_playing">[docs]</a>    <span class="k">def</span> <span class="nf">test_become_coordinator_of_standalone_group_while_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test BecomeCoordinatorOfStandaloneGroup on a player</span>
+<span class="sd">        with an active Muse session, and is playing a CQ source. The player should send a</span>
+<span class="sd">        GROUP_STATUS_GONE error to the attached client.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_set_next_avturi_fails_while_playing_cq"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_set_next_avturi_fails_while_playing_cq">[docs]</a>    <span class="k">def</span> <span class="nf">test_set_next_avturi_fails_while_playing_cq</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify attempts to SetNextAVTransportURI while playing a CloudQueue fail</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">IgnoreInvokeErrors</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">701</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span>
+                                   <span class="s2">&quot;Attempts to SetNextAVTransportURI while playing a CQ should fail&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_loading_cq_clears_next_avturi"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_loading_cq_clears_next_avturi">[docs]</a>    <span class="k">def</span> <span class="nf">test_loading_cq_clears_next_avturi</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that loading a CloudQueue on a player clears any existing NextAVTransportURI</span>
+<span class="sd">        value</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/0.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetNextAVTransportURI_and_wait</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;NextAVTransportURI&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_delegate_playback_non_restorable_avt_sends_group_moved"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_delegate_playback_non_restorable_avt_sends_group_moved">[docs]</a>    <span class="k">def</span> <span class="nf">test_delegate_playback_non_restorable_avt_sends_group_moved</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify when a player is playing a CQ and has a non-restorable AVT URI saved</span>
+<span class="sd">        (blank AVT, private queue) and delegates playback to a different zone that the</span>
+<span class="sd">        original player sends a group moved error to attached clients.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_delegate_playback_non_restorable_avt_sends_group_moved_without_cloud_queue_loaded"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_delegate_playback_non_restorable_avt_sends_group_moved_without_cloud_queue_loaded">[docs]</a>    <span class="k">def</span> <span class="nf">test_delegate_playback_non_restorable_avt_sends_group_moved_without_cloud_queue_loaded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify when a player is not playing a CQ and has a non-restorable AVT URI saved</span>
+<span class="sd">        (blank AVT, private queue) and delegates playback to a different zone that the</span>
+<span class="sd">        original player sends a group moved error to attached clients.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_delegate_playback_with_restorable_avt_sends_group_moved"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_delegate_playback_with_restorable_avt_sends_group_moved">[docs]</a>    <span class="k">def</span> <span class="nf">test_delegate_playback_with_restorable_avt_sends_group_moved</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify when a player is playing a CQ and has a restorable AVT URI saved</span>
+<span class="sd">        (SMAPI internet radio, direct URL) and delegates playback to a different zone that the</span>
+<span class="sd">        original player sends a group moved GroupCoordinatorChanged event to attached clients.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_delegate_playback_with_restorable_avt_sends_group_moved_without_cloud_queue_loaded"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_delegate_playback_with_restorable_avt_sends_group_moved_without_cloud_queue_loaded">[docs]</a>    <span class="k">def</span> <span class="nf">test_delegate_playback_with_restorable_avt_sends_group_moved_without_cloud_queue_loaded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify when a player is not playing a CQ and has a restorable AVT URI saved</span>
+<span class="sd">        (SMAPI internet radio, direct URL) and delegates playback to a different zone that the</span>
+<span class="sd">        original player sends a group moved GroupCoordinatorChanged event to attached clients.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_create_session_after_delegation"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_create_session_after_delegation">[docs]</a>    <span class="k">def</span> <span class="nf">test_create_session_after_delegation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the response to createSession on a player that recently delegated playback returns the</span>
+<span class="sd">        sessionCreated flag as True.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">my_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span> <span class="o">!=</span> <span class="n">my_group_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_created</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_create_session_after_delegation_without_cloud_queue_loaded"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_create_session_after_delegation_without_cloud_queue_loaded">[docs]</a>    <span class="k">def</span> <span class="nf">test_create_session_after_delegation_without_cloud_queue_loaded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the response to createSession on a player that recently delegated playback returns the</span>
+<span class="sd">        sessionCreated flag as True.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">my_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span> <span class="o">!=</span> <span class="n">my_group_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_created</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_group_coordinator_changed_event_session_subscription"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_group_coordinator_changed_event_session_subscription">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_coordinator_changed_event_session_subscription</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify groupCoordinatorChanged events are sent when a client only has a</span>
+<span class="sd">        subscription to the session namespace. These events should not require</span>
+<span class="sd">        a client to have a subscription to any other service. PTS-2359</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">my_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span> <span class="o">!=</span> <span class="n">my_group_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="c1"># SWBPL-60951</span>
+        <span class="c1"># Make sure that the response to the create_session command</span>
+        <span class="c1"># has &quot;playbackSession&quot; as the namespace</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">namespace</span> <span class="o">==</span> <span class="s2">&quot;playbackSession&quot;</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_group_coordinator_changed_event_session_subscription_without_cloud_queue_loaded"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_group_coordinator_changed_event_session_subscription_without_cloud_queue_loaded">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_coordinator_changed_event_session_subscription_without_cloud_queue_loaded</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify groupCoordinatorChanged events are sent when a client only has a</span>
+<span class="sd">        subscription to the session namespace. These events should not require</span>
+<span class="sd">        a client to have a subscription to any other service. PTS-2359</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">my_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span> <span class="o">!=</span> <span class="n">my_group_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">my_group_id</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_play_without_loading_cloud_queue_causes_eviction"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_play_without_loading_cloud_queue_causes_eviction">[docs]</a>    <span class="k">def</span> <span class="nf">test_play_without_loading_cloud_queue_causes_eviction</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify a client that creates a session, but does not load a cloudQueue, is evicted</span>
+<span class="sd">        after attempting to UPnP play with the &quot;attempted to play non-music source&quot; reason</span>
+
+<span class="sd">        see SWPBL-49061</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">track/data/1.mp3&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">),</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="c1"># Muse playback fails because there isn&#39;t any media loaded</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">PlaybackError</span><span class="o">.</span><span class="n">NO_CONTENT</span><span class="p">))</span>
+
+        <span class="c1"># UPnP Play command forces an eviction</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_session_evicted_when_single_player_added_to_group"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_session_evicted_when_single_player_added_to_group">[docs]</a>    <span class="k">def</span> <span class="nf">test_session_evicted_when_single_player_added_to_group</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify when a single player is playing a cloudqueue but is then added into another group</span>
+<span class="sd">        attached Muse clients receive a session eviction notice.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_group_updated_when_player_added_to_group"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_group_updated_when_player_added_to_group">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_updated_when_player_added_to_group</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test that a &quot;group updated&quot; event is sent when a new player is added to the group</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">UPDATED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_group_moved_when_adding_gc_into_new_group"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_group_moved_when_adding_gc_into_new_group">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_moved_when_adding_gc_into_new_group</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify attached Muse clients receive a group moved event when the GC of a group that</span>
+<span class="sd">        contains more than one player is added directly into another group as a member. This</span>
+<span class="sd">        test requires 3 or more zone players.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;This test requires at least 3 zone players&quot;</span><span class="p">)</span>
+        <span class="n">gc_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span>
+        <span class="c1"># the following call creates a new group, effectively canceling the GC subscription</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">create_zone_group_of_xnum_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">,</span>
+                                                              <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span> <span class="o">!=</span> <span class="n">gc_group_id</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()[</span><span class="s1">&#39;CurrentZonePlayerUUIDsInGroup&#39;</span><span class="p">])</span>
+
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_session</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="s1">&#39;subscribe&#39;</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_group_moved_when_adding_gc_into_new_group_without_loaded_cloud_queue"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_group_moved_when_adding_gc_into_new_group_without_loaded_cloud_queue">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_moved_when_adding_gc_into_new_group_without_loaded_cloud_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify attached Muse clients receive a group moved event when the GC of a group that</span>
+<span class="sd">        contains more than one player is added directly into another group as a member and</span>
+<span class="sd">        additionally validates the playerId of the new GC.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;This test requires at least 3 zone players&quot;</span><span class="p">)</span>
+        <span class="n">gc_group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span>
+        <span class="c1"># the following call creates a new group, effectively canceling the GC subscription</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">create_zone_group_of_xnum_devices</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">,</span>
+                                                              <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span> <span class="o">!=</span> <span class="n">gc_group_id</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()[</span><span class="s1">&#39;CurrentZonePlayerUUIDsInGroup&#39;</span><span class="p">])</span>
+
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="s1">&#39;subscribe&#39;</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">MOVED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionEvictionTestsImpl.test_grouping_after_404_on_load_cloud_queue"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionEvictionTestsImpl.test_grouping_after_404_on_load_cloud_queue">[docs]</a>    <span class="k">def</span> <span class="nf">test_grouping_after_404_on_load_cloud_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Regression test for SWPBL-47129. This test verifies the session is evicted following</span>
+<span class="sd">        a 404 response on loadCloudQueue() and then grouping the DUT to another player.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">muse_session_mixin</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span><span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">my_session</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span>
+
+        <span class="c1"># a loadcloudqueue call with this queuebaseurl will return a 404 from the server, note v1.1 not v1.0</span>
+        <span class="n">bad_cq_uri</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">/musicqueue/v1.1/&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">my_session</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="n">bad_cq_uri</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupCoordinatorChangedEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group_status</span> <span class="o">==</span> <span class="n">GroupStatus</span><span class="o">.</span><span class="n">GONE</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">past_events</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">iterations</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">header</span><span class="o">.</span><span class="n">sessionId</span> <span class="o">==</span> <span class="n">my_session</span> <span class="ow">and</span>
+                                                   <span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">))</span></div></div>
+
+<div class="viewcode-block" id="MuseSessionNamespaceEvictionTests"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseSessionNamespaceEvictionTests">[docs]</a><span class="k">class</span> <span class="nc">MuseSessionNamespaceEvictionTests</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span>
+                                     <span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_MUSE_SESSION_NAMESPACE&#39;</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="MuseCloudClientSessionEvictionTests"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_evictions.MuseCloudClientSessionEvictionTests">[docs]</a><span class="k">class</span> <span class="nc">MuseCloudClientSessionEvictionTests</span><span class="p">(</span><span class="n">MuseSessionEvictionTestsImpl</span><span class="p">,</span>
+                                          <span class="n">MuseCloudServerFixtureMixin</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_CLOUD_MUSE&#39;</span><span class="p">]</span></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">sys</span><span class="o">,</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Muse Session Namespace Eviction Tests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">MuseSessionNamespaceEvictionTests</span><span class="p">()])</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span> <span class="k">if</span> <span class="n">suite</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">is_pass</span><span class="p">()</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

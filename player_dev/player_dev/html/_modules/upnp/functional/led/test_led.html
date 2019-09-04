@@ -1,0 +1,415 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.led.test_led &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.led.test_led</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">defaultdict</span><span class="p">,</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">error</span> <span class="k">as</span> <span class="n">SocketError</span>
+
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.services.deviceproperties</span> <span class="k">import</span> <span class="n">HTPositions</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.avtransport</span> <span class="k">import</span> <span class="p">(</span><span class="n">add_files_as_uri_to_queue</span><span class="p">,</span>
+                                      <span class="n">start_playback_with_source_selector</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.util</span> <span class="k">import</span> <span class="n">cleanup</span>
+
+
+<div class="viewcode-block" id="LEDBitmaskTests"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests">[docs]</a><span class="k">class</span> <span class="nc">LEDBitmaskTests</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Grab a Sub and bond as satellite to Playbar/S1.  Then playback to Playbar/S1.  Disable &quot;Sub&quot; and then inspect log to</span>
+<span class="sd">    look for &lt;diag:leds_zp,2&gt; apply led mode mode:0xXXXXXX bitmask.</span>
+
+<span class="sd">    .. warning:: Original bug wes intermittent in reproducibility.  When it does reproduce, the time to failure varies</span>
+<span class="sd">    from few seconds to more than 10 minutes.</span>
+
+<span class="sd">    .. note:: Due to SWPBL-55824, this test was born to check led bitmask that was being logged to determine expected.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;LED&#39;</span><span class="p">,</span> <span class="p">]</span>
+    <span class="n">MUSIC_SOURCE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;radio&#39;</span><span class="p">]</span>
+    <span class="n">STATUS_URL</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">:1400/status&#39;</span>
+    <span class="n">DIAG_LEVELS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;leds_zp&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+                   <span class="s1">&#39;rc_impl&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+                   <span class="s1">&#39;htsnk&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}</span>
+    <span class="n">MONITORED_ERROR_STRINGS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;large sync error&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;failed to play lla samples&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;WATCHDOG: &#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;request frame: network I/O error&#39;</span><span class="p">,</span>
+                               <span class="s1">&#39;synchronizedPlay: network I/O error&#39;</span>
+                               <span class="p">]</span>
+    <span class="n">SHUTTING_DOWN_LOG_PATTERN</span> <span class="o">=</span> <span class="s1">&#39;Shutting down&#39;</span>
+    <span class="n">LED_MODE_LOG_PATTERN</span> <span class="o">=</span> <span class="s1">&#39;.*apply led mode mode:0x(.*)$&#39;</span>
+    <span class="n">SATELLITE_AUDIO_DISABLED_LOG_PATTERN</span> <span class="o">=</span> <span class="s1">&#39;.*satellite audio disabled (.)$&#39;</span>
+    <span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span> <span class="o">=</span> <span class="s1">&#39;.*SetEQ: SubEnable (.)$&#39;</span>
+    <span class="n">LOCAL_TEST_DATA_DIR</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba/Automation/SPDIF/functional/playback&#39;</span>
+    <span class="n">WEBSERVER_TEST_FILES</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;track1&#39;</span><span class="p">:</span> <span class="s1">&#39;2ch_L_857_R_997_44kHz_320kbps.ogg&#39;</span><span class="p">}</span>
+    <span class="n">LOCAL_WEB_SERVER_PORT</span> <span class="o">=</span> <span class="mi">50001</span>
+    <span class="c1"># The failure symptom took few seconds to 10 minutes sometimes, so it is nto 100% repro within a fixed time.</span>
+    <span class="n">WAIT_FOR_FAILURE</span> <span class="o">=</span> <span class="mi">60</span>
+    <span class="n">R_AUDIOSTAT_POLL_INTERVAL_SECS</span> <span class="o">=</span> <span class="mi">5</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Local per test state variables</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__results</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">dict</span><span class="p">)</span>
+
+<div class="viewcode-block" id="LEDBitmaskTests.generate_subwoofer_pairing_devices"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.generate_subwoofer_pairing_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_subwoofer_pairing_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">sub</span><span class="p">)</span> <span class="ow">in</span> <span class="p">[</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="s1">&#39;S9&#39;</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="s1">&#39;Sub&#39;</span><span class="p">)),</span>
+            <span class="c1"># (self.get_testbed_device_by_model(&#39;S1&#39;), self.get_testbed_device_by_model(&#39;Sub&#39;))</span>
+        <span class="p">]:</span>
+            <span class="k">yield</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">sub</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LOCAL_WEB_SERVER_PORT</span><span class="p">,</span>
+                                <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LOCAL_TEST_DATA_DIR</span><span class="p">,</span>
+                                <span class="n">handlers</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Could not start web server&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started web server&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">__websrv</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">):</span>
+        <span class="c1"># As a sub, how do I unbond myself when I am bonded via UPNP and nto through the HT Master or GC?</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing cleanup of </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">((</span><span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">)))</span>
+        <span class="p">[</span><span class="n">cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Adding files as URIs to </span><span class="si">{}</span><span class="s2">&#39;s queue: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                         <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">WEBSERVER_TEST_FILES</span><span class="p">))</span>
+        <span class="n">uris</span> <span class="o">=</span> <span class="n">add_files_as_uri_to_queue</span><span class="p">(</span><span class="n">master</span><span class="p">,</span>
+                                         <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">WEBSERVER_TEST_FILES</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                                         <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">__websrv</span><span class="o">.</span><span class="n">host</span><span class="p">()))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;URIs: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uris</span><span class="p">))</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="s2">&quot;MONITORED_ERROR_STRINGS&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="nb">dict</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">expr</span> <span class="ow">in</span> <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">MONITORED_ERROR_STRINGS</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="s2">&quot;MONITORED_ERROR_STRINGS&quot;</span><span class="p">][</span><span class="n">expr</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span> <span class="o">=</span> <span class="n">deque</span><span class="p">()</span>
+            <span class="c1"># Default when bonded as satellite sub</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">DIAG_LEVELS</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_setup_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing cleanup of </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+        <span class="n">cleanup</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">)]</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;NORMAL&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_setup_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup udp logger and pass in callbacks for strings we are looking for</span>
+
+<span class="sd">        :param zp: sonos zone player for which to setup udp logger</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up udp logger on : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">SocketError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger port error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">error_string</span><span class="p">,</span>
+                                          <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">detected_error</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+         <span class="k">for</span> <span class="n">error_string</span> <span class="ow">in</span> <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">MONITORED_ERROR_STRINGS</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">,</span>
+                                         <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">update_zp_led_state</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">SATELLITE_AUDIO_DISABLED_LOG_PATTERN</span><span class="p">,</span>
+                                         <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">update_zp_audio_disabled_state</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">,</span>
+                                         <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">update_zp_audio_disabled_state</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">SHUTTING_DOWN_LOG_PATTERN</span><span class="p">,</span>
+                                         <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">detected_shutdown</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+<div class="viewcode-block" id="LEDBitmaskTests.detected_error"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.detected_error">[docs]</a>    <span class="k">def</span> <span class="nf">detected_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Process the MONITORED_ERROR_STRINGS as counters.</span>
+
+<span class="sd">        :param msg: UDP log msg</span>
+<span class="sd">        :type zp: :obj:`str`</span>
+
+<span class="sd">        :param zp: sonos zone player for which msg was detected</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># self._collect_anacapa_and_threadinfo_from(zp)</span>
+        <span class="k">for</span> <span class="n">expr</span> <span class="ow">in</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">msg</span><span class="p">,</span> <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">MONITORED_ERROR_STRINGS</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="s2">&quot;MONITORED_ERROR_STRINGS&quot;</span><span class="p">][</span><span class="n">expr</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.detected_shutdown"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.detected_shutdown">[docs]</a>    <span class="k">def</span> <span class="nf">detected_shutdown</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Shutdown has been detected by a zp...we need to restart the UDP logger.</span>
+
+<span class="sd">        :param zp: sonos zone player for which msg was detected</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Workaround for https://jira.sonos.com/browse/SWPBL-55060</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">DIAG_LEVELS</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.update_zp_led_state"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.update_zp_led_state">[docs]</a>    <span class="k">def</span> <span class="nf">update_zp_led_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Updates ZP&#39;s LED bitmask from UDP log lines.</span>
+
+<span class="sd">        :param msg: UDP log msg</span>
+<span class="sd">        :type zp: :obj:`str`</span>
+
+<span class="sd">        :param zp: sonos zone player for which msg was detected</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">prog</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">,</span> <span class="n">flags</span><span class="o">=</span><span class="n">re</span><span class="o">.</span><span class="n">DOTALL</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="p">(</span><span class="n">prog</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span><span class="o">.</span><span class="n">groups</span><span class="p">()[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> LED bitmask: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.update_zp_audio_disabled_state"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.update_zp_audio_disabled_state">[docs]</a>    <span class="k">def</span> <span class="nf">update_zp_audio_disabled_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Updates ZP&#39;s &quot;Audio Enabled&quot; state from UDP log lines.</span>
+
+<span class="sd">        :param msg: UDP log msg</span>
+<span class="sd">        :type zp: :obj:`str`</span>
+
+<span class="sd">        :param zp: sonos zone player for which msg was detected</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        :return: None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">prog</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">,</span> <span class="n">flags</span><span class="o">=</span><span class="n">re</span><span class="o">.</span><span class="n">DOTALL</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">prog</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span> <span class="k">if</span> <span class="n">prog</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span><span class="o">.</span><span class="n">groups</span><span class="p">()[</span>
+                                                                                        <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="k">else</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">prog</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">SATELLITE_AUDIO_DISABLED_LOG_PATTERN</span><span class="p">,</span> <span class="n">flags</span><span class="o">=</span><span class="n">re</span><span class="o">.</span><span class="n">DOTALL</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span> <span class="k">if</span> <span class="n">prog</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span><span class="o">.</span><span class="n">groups</span><span class="p">()[</span>
+                                                                                        <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span> <span class="k">else</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> Sub Enabled: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="LEDBitmaskTests.test_led"><a class="viewcode-back" href="../../../../upnp.functional.led.html#upnp.functional.led.test_led.LEDBitmaskTests.test_led">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_subwoofer_pairing_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_led</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check ZP&#39;s LED bitmask from ungrouped, grouped playing, grouped playing (Sub disabled) to ungroup again.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Master: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Subwoofer: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sub</span><span class="p">))</span>
+
+        <span class="k">if</span> <span class="n">master</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_ht_satellite</span><span class="p">(</span><span class="n">sub</span><span class="p">,</span> <span class="n">HTPositions</span><span class="o">.</span><span class="n">SW</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_bonded_sub_to_this_device</span><span class="p">(</span><span class="n">sub</span><span class="p">)</span>
+
+        <span class="c1"># Intentional toggle to force logging</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_sub_enable</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Master </span><span class="si">{}</span><span class="s2"> starting </span><span class="si">{}</span><span class="s2"> playback.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="s1">&#39;queue&#39;</span><span class="p">))</span>
+        <span class="n">start_playback_with_source_selector</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="p">(</span><span class="s1">&#39;queue&#39;</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Master </span><span class="si">{}</span><span class="s2"> started playback.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+
+        <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;REPEAT_ONE&quot;</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">R_AUDIOSTAT_POLL_INTERVAL_SECS</span><span class="p">)</span>
+        <span class="c1"># What I realy want is sub.AVTransport.is_playing() and sub.RenderingControl.GetEQ(&#39;SubEnable&#39;)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                        <span class="n">sub</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()</span> <span class="ow">and</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span> <span class="ow">and</span> <span class="nb">int</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetEQ</span><span class="p">(</span>
+                            <span class="s1">&#39;SubEnable&#39;</span><span class="p">))</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]),</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Expected Sub to be in Playing, Bonded and SubEnable state.&#39;</span><span class="p">)</span>
+        <span class="n">last_actual_led_bitmask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_hhid_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_HHID</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_led_state_off</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_STATE_OFF</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_playing_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_PLAYING</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_audio_off_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_AUDIO_OFF</span><span class="p">)))</span>
+
+        <span class="c1"># Clear sub&#39;s historical LED states</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+
+        <span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">set_sub_enable</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">WAIT_FOR_FAILURE</span><span class="p">)</span>  <span class="c1"># &quot;apply led&quot; takes some time to update from last action.</span>
+        <span class="c1"># What I realy want is sub.AVTransport.is_playing() and sub.RenderingControl.GetEQ(&#39;SubEnable&#39;)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                        <span class="n">sub</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">()</span> <span class="ow">and</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">int</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetEQ</span><span class="p">(</span>
+                            <span class="s1">&#39;SubEnable&#39;</span><span class="p">))</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]),</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Expected Sub to be in Playing, Bonded and Not SubEnable state.&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">EQ_SUB_ENABLE_LOG_PATTERN</span><span class="p">]</span> <span class="o">==</span> <span class="kc">False</span><span class="p">,</span>
+                                  <span class="s2">&quot;Sub is disabled as expected.&quot;</span><span class="p">)</span>
+        <span class="n">last_actual_led_bitmask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_hhid_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_HHID</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_led_state_off</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_STATE_OFF</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_playing_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_PLAYING</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_audio_off_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_AUDIO_OFF</span><span class="p">)))</span>
+
+        <span class="c1"># Clear sub&#39;s historical LED states</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+
+        <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">R_AUDIOSTAT_POLL_INTERVAL_SECS</span><span class="p">)</span>
+
+        <span class="n">last_actual_led_bitmask</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">sub</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="n">LED_MODE_LOG_PATTERN</span><span class="p">]</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_hhid_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Expected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_HHID</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_led_state_off</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_STATE_OFF</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_playing_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_PLAYING</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_actual_led_bitmask</span><span class="o">.</span><span class="n">is_audio_off_set</span><span class="p">(),</span>
+                                  <span class="s2">&quot;Unexpected </span><span class="si">{}</span><span class="s2"> in bitmask&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">LEDBitmask</span><span class="o">.</span><span class="n">R_LED_AUDIO_OFF</span><span class="p">)))</span>
+
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span><span class="s2">&quot;MONITORED_ERROR_STRINGS&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span>
+                                   <span class="s2">&quot;Detected failure message in </span><span class="si">{}</span><span class="s2"> anacapa.trace: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sub</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">__results</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">get_uuid</span><span class="p">()][</span>
+                                       <span class="s2">&quot;MONITORED_ERROR_STRINGS&quot;</span><span class="p">]))</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">sub</span><span class="p">)]</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">LEDBitmaskTests</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">LEDBitmaskTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

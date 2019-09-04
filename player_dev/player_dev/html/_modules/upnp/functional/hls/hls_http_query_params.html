@@ -1,0 +1,436 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.hls.hls_http_query_params &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.hls.hls_http_query_params</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">shutil</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">from</span> <span class="nn">twisted.web</span> <span class="k">import</span> <span class="n">static</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span><span class="p">,</span> <span class="n">get_random_web_port_to_use</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.hls.hls_negative_tests</span> <span class="k">import</span><span class="p">(</span>
+    <span class="n">BoolCallBackSetter</span><span class="p">,</span> <span class="n">StaticFileHandler</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="HLSHTTPQueryParams"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams">[docs]</a><span class="k">class</span> <span class="nc">HLSHTTPQueryParams</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify the player can play back an HLS stream that includes</span>
+<span class="sd">    HTTP query params in either the playlist file or the media file.</span>
+<span class="sd">    For example, a playlist file that references a media file such</span>
+<span class="sd">    http://&lt;Server IP&gt;/media.m3u8?sd=10&amp;rebase=on</span>
+<span class="sd">    the player should be able to open. Similarly for media files that</span>
+<span class="sd">    reference audio file streams</span>
+<span class="sd">    http://&lt;Server IP&gt;/&lt;data file&gt;?sd=10&amp;rebase=on</span>
+<span class="sd">    the player should be able to extract the &lt;data file&gt; and ignore</span>
+<span class="sd">    the query parameters.</span>
+<span class="sd">    Verifies SWPBL-41171.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;HLS_PLAYBACK&quot;</span><span class="p">]</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Path where all HLS web content for this test resides.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TESTBED_SRV_PATH</span> <span class="o">=</span> <span class="s2">&quot;/srv/samba/Automation/HLS/Rogers/&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Name of the master HLS file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MASTER_HLS_NAME</span> <span class="o">=</span> <span class="s2">&quot;master.m3u8&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Name of media HLS file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MEDIA_HLS_NAME</span> <span class="o">=</span> <span class="s2">&quot;media.m3u8&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Master playlist template, IP and port added dynamically.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">AAC_MASTER_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=48000,CODECS=&quot;mp4a.40.2&quot;</span>
+<span class="s2">http://</span><span class="si">{}</span><span class="s2">/media.m3u8</span><span class="si">{}</span><span class="s2"></span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Media file header contents, media files added dynamically.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">AAC_MEDIA_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-TARGETDURATION:10</span>
+<span class="s2">#EXT-X-ALLOW-CACHE:YES</span>
+<span class="s2">#EXT-X-VERSION:3</span>
+<span class="s2">#EXT-X-MEDIA-SEQUENCE:143419997</span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="n">TS_MASTER_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-VERSION:2</span>
+<span class="s2">#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=50880,CODECS=&quot;mp4a.40.5&quot;</span>
+<span class="s2">http://</span><span class="si">{}</span><span class="s2">/media.m3u8</span><span class="si">{}</span><span class="s2"></span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="n">TS_MEDIA_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-VERSION:2</span>
+<span class="s2">## Created with Unified Streaming Platform(version=1.7.3)</span>
+<span class="s2">#EXT-X-MEDIA-SEQUENCE:222747492</span>
+<span class="s2">#EXT-X-ALLOW-CACHE:NO</span>
+<span class="s2">#EXT-X-TARGETDURATION:7</span>
+<span class="s2">#USP-X-TIMESTAMP-MAP:MPEGTS=3292649888,LOCAL=2015-03-05T19:32:22.400000Z</span>
+<span class="s2">#EXT-X-PROGRAM-DATE-TIME:2015-03-05T19:32:22.400000Z</span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="n">DIAG_LEVEL_DICT</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;hlsaudio&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+                       <span class="s2">&quot;hlsmeta&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+                       <span class="s2">&quot;hlsplaylist&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+                       <span class="s2">&quot;hlsradio&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+                       <span class="s2">&quot;hls&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+                       <span class="s2">&quot;segaudio&quot;</span><span class="p">:</span> <span class="mi">4</span>
+                       <span class="p">}</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Indicator when player re-opens the HLS stream.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">OPEN_STREAM_DIAGC</span> <span class="o">=</span> <span class="s2">&quot;media: http://</span><span class="si">{}</span><span class="s2">/media.m3u8&quot;</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Input test data.</span>
+<span class="sd">    The format of the tuple is:</span>
+<span class="sd">    (Master playlist file,</span>
+<span class="sd">    Media file,</span>
+<span class="sd">    Media file reference,</span>
+<span class="sd">    Query params,</span>
+<span class="sd">    Audio data stream suffix)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">QUERY_PARAMS_TEST_DATA</span> <span class="o">=</span> <span class="p">((</span><span class="n">AAC_MASTER_TEMPLATE</span><span class="p">,</span>
+                               <span class="n">AAC_MEDIA_TEMPLATE</span><span class="p">,</span>
+                               <span class="s2">&quot;#EXTINF:10.000,</span><span class="se">\n</span><span class="s2">http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;?sd=10&amp;rebase=on&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;aac&quot;</span><span class="p">),</span>
+                              <span class="p">(</span><span class="n">AAC_MASTER_TEMPLATE</span><span class="p">,</span>
+                               <span class="n">AAC_MEDIA_TEMPLATE</span><span class="p">,</span>
+                               <span class="s2">&quot;#EXTINF:10.000,</span><span class="se">\n</span><span class="s2">http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;aac&quot;</span><span class="p">),</span>
+                              <span class="p">(</span><span class="n">TS_MASTER_TEMPLATE</span><span class="p">,</span>
+                               <span class="n">TS_MEDIA_TEMPLATE</span><span class="p">,</span>
+                               <span class="s2">&quot;#EXTINF:6, no desc</span><span class="se">\n</span><span class="s2">http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;?sd=10&amp;rebase=on&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+                              <span class="p">(</span><span class="n">TS_MASTER_TEMPLATE</span><span class="p">,</span>
+                               <span class="n">TS_MEDIA_TEMPLATE</span><span class="p">,</span>
+                               <span class="s2">&quot;#EXTINF:6, no desc</span><span class="se">\n</span><span class="s2">http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}{}</span><span class="se">\n</span><span class="s2">&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;ts&quot;</span><span class="p">),)</span>
+
+    <span class="n">FILE_SUFFIX</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;aac&#39;</span><span class="p">,</span> <span class="s1">&#39;ts&#39;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.query_params_test_data"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.query_params_test_data">[docs]</a>    <span class="k">def</span> <span class="nf">query_params_test_data</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        HLS test data generator. Test all unique play back devices</span>
+<span class="sd">        using the test data.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_unique_playback_devices</span><span class="p">():</span>
+            <span class="k">for</span> <span class="n">query_data</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">QUERY_PARAMS_TEST_DATA</span><span class="p">:</span>
+                <span class="n">master</span><span class="p">,</span> <span class="n">media</span><span class="p">,</span> <span class="n">media_fmt</span><span class="p">,</span> <span class="n">query_str</span><span class="p">,</span> <span class="n">suffix</span> <span class="o">=</span> <span class="n">query_data</span>
+                <span class="k">yield</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">media</span><span class="p">,</span> <span class="n">media_fmt</span><span class="p">,</span> <span class="n">query_str</span><span class="p">,</span> <span class="n">suffix</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create a list of audio data files used as input in the test.</span>
+<span class="sd">        Start web server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span> <span class="o">=</span> <span class="n">BoolCallBackSetter</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_files</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;data</span><span class="si">{:04d}</span><span class="s2">.</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+                           <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span> <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">FILE_SUFFIX</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_websrv</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.setup_websrv"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.setup_websrv">[docs]</a>    <span class="k">def</span> <span class="nf">setup_websrv</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up the local web server.</span>
+<span class="sd">        Creates a handler dictionary for the web server.</span>
+<span class="sd">        Starts web server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span>
+            <span class="n">port</span><span class="o">=</span><span class="n">get_random_web_port_to_use</span><span class="p">(),</span>
+            <span class="n">path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span> <span class="o">=</span> <span class="s2">&quot;hls-aac://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_files</span><span class="p">:</span>
+            <span class="n">shutil</span><span class="o">.</span><span class="n">copyfile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">TESTBED_SRV_PATH</span> <span class="o">+</span> <span class="n">name</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="c1"># Add handlers for the master, media and audio files</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">,</span>
+                                <span class="n">StaticFileHandler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">,</span>
+                                <span class="n">StaticFileHandler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">data_file</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_files</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="n">data_file</span><span class="p">,</span>
+                                    <span class="n">StaticFileHandler</span><span class="p">(</span><span class="n">data_file</span><span class="p">))</span></div>
+
+    <span class="k">def</span> <span class="nf">_setup_master_and_media_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">media</span><span class="p">,</span> <span class="n">media_fmt</span><span class="p">,</span>
+                                      <span class="n">query_str</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates master and media files based on the supplied parameters.</span>
+<span class="sd">        :param str master: Master playlist template.</span>
+<span class="sd">        :param str media: Media template.</span>
+<span class="sd">        :param str media_fmt: Media reference format.</span>
+<span class="sd">        :param str query_str: HTTP query and params string</span>
+<span class="sd">        :param str suffix: Audio file type, &#39;AAC&#39; or &#39;TS&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">,</span> <span class="s1">&#39;wb+&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">query_str</span><span class="p">))</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">,</span> <span class="s1">&#39;wb+&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">media</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">data_file</span> <span class="ow">in</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">suffix</span> <span class="ow">in</span> <span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_files</span><span class="p">):</span>
+                <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">media_fmt</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+                    <span class="n">data_file</span><span class="p">,</span>
+                    <span class="n">query_str</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_cleanup_avt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Resets the state of the AV on the zone player.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone component under test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">diagm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">DIAG_LEVEL_DICT</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagm</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">DIAG_LEVEL_DICT</span><span class="p">[</span><span class="n">diagm</span><span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">diagm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">DIAG_LEVEL_DICT</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagm</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Shuts down the web server.</span>
+<span class="sd">        Removes all files used as web content.</span>
+<span class="sd">        TODO - test presence before removing</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">data_file</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_files</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="n">data_file</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.start_playback"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param str uri: URI string</span>
+<span class="sd">        :param int timeout_seconds: Maximum time in seconds to wait</span>
+<span class="sd">        for playback to start.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI</span><span class="p">(</span>
+            <span class="n">uri</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">ret</span><span class="p">,</span>
+            <span class="s2">&quot;Set AV transport URI </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uri</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">played</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="n">played</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="n">played</span></div>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.wait_on_diag"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.wait_on_diag">[docs]</a>    <span class="k">def</span> <span class="nf">wait_on_diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return: The state of the call back. True if the particular</span>
+<span class="sd">        watch string has been captured and the call back invoked</span>
+<span class="sd">        or False.</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param str watch_str: UDP watch string.</span>
+<span class="sd">        :param int timeout_seconds: Time in seconds to wait for diag.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">get_state</span><span class="p">(),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">get_state</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="HLSHTTPQueryParams.test_http_query_params"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_http_query_params.HLSHTTPQueryParams.test_http_query_params">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;query_params_test_data&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_http_query_params</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">media</span><span class="p">,</span> <span class="n">media_fmt</span><span class="p">,</span>
+                               <span class="n">query_str</span><span class="p">,</span> <span class="n">suffix</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given a set of input parameters, the test confirms the player</span>
+<span class="sd">        plays the HLS stream.</span>
+<span class="sd">        Build a master and media playlist files containing the test criteria.</span>
+<span class="sd">        The test criteria are the whether or not there&#39;s a query string in the</span>
+<span class="sd">        HTTP reference and the type of media stream, AAC or TS.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param str master: Master playlist template.</span>
+<span class="sd">        :param str media: Media template.</span>
+<span class="sd">        :param str media_fmt: Media reference format.</span>
+<span class="sd">        :param str query_str: HTTP query and params string</span>
+<span class="sd">        :param str suffix: Audio file type, &#39;AAC&#39; or &#39;TS&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_master_and_media_files</span><span class="p">(</span>
+            <span class="n">master</span><span class="p">,</span>
+            <span class="n">media</span><span class="p">,</span>
+            <span class="n">media_fmt</span><span class="p">,</span>
+            <span class="n">query_str</span><span class="p">,</span>
+            <span class="n">suffix</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">watch_str</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">OPEN_STREAM_DIAGC</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">())</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch_str</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">True</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span><span class="p">),</span>
+            <span class="s2">&quot;Expect to play stream &#39;</span><span class="si">{}</span><span class="s2">&#39; </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_avt_state</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">STOPPED_STATE</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">35</span><span class="p">)</span>
+        <span class="n">end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+            <span class="n">end</span><span class="o">-</span><span class="n">start</span><span class="p">,</span>
+            <span class="mf">20.0</span><span class="p">,</span>
+            <span class="s2">&quot;Played stream un-interrupted ?&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">),</span>
+            <span class="s2">&quot;Expected diagnostic string &#39;</span><span class="si">{}</span><span class="s2">&#39; from player </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">watch_str</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;HLS HTTP Query Params&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">HLSHTTPQueryParams</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

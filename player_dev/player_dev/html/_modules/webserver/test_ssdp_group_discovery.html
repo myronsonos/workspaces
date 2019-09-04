@@ -1,0 +1,932 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.test_ssdp_group_discovery &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.test_ssdp_group_discovery</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This suite contains tests for the SSDP SpeakerGroup:1 Search Target (ST). The SSDP messages</span>
+<span class="sd">in this suite are parsed in /core/src/sonos/group_ssdp/notification.py where the correct</span>
+<span class="sd">ST is set in __init__(). All verifications within this script are comparing a device UDN</span>
+<span class="sd">from self.my_devices to the latest &#39;alive&#39; or &#39;byebye&#39; received with the SpeakerGroup:1 ST or NT.</span>
+
+<span class="sd">Currently this script relies on the Workflow framework to manage the initial set of</span>
+<span class="sd">players to test against, which uses responses from the existing SSDP ST `ZonePlayer:1`</span>
+<span class="sd">and then compares that to a list of M-Search responses returned for Speakergroup:1. This</span>
+<span class="sd">may be non-obvious to people not familiar with the framework and new search target and</span>
+<span class="sd">issues have been seen in the past where more devices were in self.my_devices than were</span>
+<span class="sd">returned by searching for SpeakerGroup:1 (this can be seen in some tests where we filter</span>
+<span class="sd">the SUB out of the my_devices list)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pprint</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">multiprocessing.pool</span> <span class="k">import</span> <span class="n">ThreadPool</span>
+
+<span class="kn">from</span> <span class="nn">requests</span> <span class="k">import</span> <span class="n">codes</span> <span class="k">as</span> <span class="n">HTTPCode</span>
+
+<span class="kn">from</span> <span class="nn">common.cloud.utils</span> <span class="k">import</span> <span class="n">CloudUtilsMixin</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">PLAYBACK_DEVICES</span>
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="n">PlayerRegistration</span>
+<span class="kn">from</span> <span class="nn">sonos.configuration_creation</span> <span class="k">import</span> <span class="n">create_ht</span><span class="p">,</span> <span class="n">create_stereo</span><span class="p">,</span> <span class="n">create_stereo_subbed</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.group_ssdp.msearcher</span> <span class="k">import</span> <span class="p">(</span><span class="n">MSearcher</span><span class="p">,</span> <span class="n">SSDP_MS_FORMATTER</span><span class="p">,</span> <span class="n">SSDP_ADDR</span><span class="p">,</span>
+                                        <span class="n">SSDP_PORT</span><span class="p">,</span> <span class="n">SSDP_MX</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.group_ssdp.notification</span> <span class="k">import</span> <span class="p">(</span><span class="n">group_notification_monitor</span><span class="p">,</span>
+                                           <span class="n">player_notification_monitor</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.netstart</span> <span class="k">import</span> <span class="n">NetstartTest</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">skip</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.mock_player_cloud_services_control</span> <span class="k">import</span> <span class="n">MockPlayerCloudServicesControl</span> <span class="k">as</span> <span class="n">MPCSC</span>
+
+<span class="n">SSDP_MS_SONOS_GROUP</span> <span class="o">=</span> <span class="s1">&#39;&#39;&#39;M-SEARCH * HTTP/1.1</span>
+<span class="s1">HOST: </span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1"></span>
+<span class="s1">MAN: &quot;ssdp:discover&quot;</span>
+<span class="s1">MX: </span><span class="si">{}</span><span class="s1"></span>
+<span class="s1">ST: urn:smartspeaker-audio:service:SpeakerGroup:1</span>
+<span class="s1">USER-AGENT: SONOS-Automation/2014 UPnP/1.1 SONOS-Automation/2014</span>
+
+<span class="s1">&#39;&#39;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SSDP_ADDR</span><span class="p">,</span> <span class="n">SSDP_PORT</span><span class="p">,</span> <span class="n">SSDP_MX</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_cleanup_all</span><span class="p">(</span><span class="o">*</span><span class="n">devices</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns all the devices back into a solo, ungrouped state</span>
+<span class="sd">    :param devices: Devices to revert back to normal state</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">devices</span><span class="p">:</span>
+        <span class="n">MPCSC</span><span class="o">.</span><span class="n">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">PLAYBACK_DEVICES</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+
+<span class="k">def</span> <span class="nf">_escape_http_quoted_string</span><span class="p">(</span><span class="n">quoted_string</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">quoted_string</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\\</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="se">\\\\</span><span class="s1">&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;&quot;&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="se">\\</span><span class="s1">&quot;&#39;</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery">[docs]</a><span class="k">class</span> <span class="nc">TestSSDPGroupDiscovery</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_PLAYERGROUP_SSDP&#39;</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">_configuration_generator</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Run the test with the individual players</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;all devices configuration: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">))</span>
+        <span class="k">yield</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">,</span> <span class="p">]</span>
+
+        <span class="c1"># Run the test on a home theater configuration</span>
+        <span class="n">ht_master</span><span class="p">,</span> <span class="n">unused_devices</span> <span class="o">=</span> <span class="n">create_ht</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ht_master</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;home theater configuration: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+            <span class="k">yield</span> <span class="p">[</span><span class="n">ht_master</span><span class="p">,</span> <span class="p">]</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+
+        <span class="c1"># Run the test on a bonded configuration with a sub</span>
+        <span class="n">stereo_sub_master</span><span class="p">,</span> <span class="n">unused_devices</span> <span class="o">=</span> <span class="n">create_stereo_subbed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">stereo_sub_master</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;stereo sub configuration: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">stereo_sub_master</span><span class="p">))</span>
+            <span class="k">yield</span> <span class="p">[</span><span class="n">stereo_sub_master</span><span class="p">,</span> <span class="p">]</span>
+            <span class="n">stereo_sub_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+
+        <span class="c1"># Run the test on a bonded configuration without a sub</span>
+        <span class="n">stereo_master</span><span class="p">,</span> <span class="n">leftover_devices</span> <span class="o">=</span> <span class="n">create_stereo</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">stereo_master</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;stereo configuration: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">stereo_master</span><span class="p">))</span>
+            <span class="k">yield</span> <span class="p">[</span><span class="n">stereo_master</span><span class="p">,</span> <span class="p">]</span>
+            <span class="n">stereo_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_cleanup_all</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">wait_for_all_environment_devices</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+        <span class="n">_cleanup_all</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.test_no_search_response"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.test_no_search_response">[docs]</a>    <span class="k">def</span> <span class="nf">test_no_search_response</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Build an MSearcher and send two MSearches</span>
+        <span class="n">msearcher</span> <span class="o">=</span> <span class="n">MSearcher</span><span class="p">()</span>
+        <span class="n">msearcher</span><span class="o">.</span><span class="n">send_msearch</span><span class="p">(</span><span class="n">SSDP_MS_FORMATTER</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">SSDP_ADDR</span><span class="p">,</span> <span class="n">SSDP_PORT</span><span class="p">,</span> <span class="n">SSDP_MX</span><span class="p">,</span>
+            <span class="s2">&quot;urn:schemas-upnp-org:device:ZonePlayer:1&quot;</span><span class="p">))</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">SSDP_MX</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span>
+        <span class="n">msearcher</span><span class="o">.</span><span class="n">send_msearch</span><span class="p">(</span><span class="n">SSDP_MS_FORMATTER</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">SSDP_ADDR</span><span class="p">,</span> <span class="n">SSDP_PORT</span><span class="p">,</span> <span class="n">SSDP_MX</span><span class="p">,</span>
+            <span class="s2">&quot;urn:schemas-upnp-org:device:ZonePlayer:1&quot;</span><span class="p">))</span>
+
+        <span class="c1"># Collect the results of the MSearches</span>
+        <span class="n">zp_uuids</span> <span class="o">=</span> <span class="p">{</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="p">}</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">response</span><span class="o">.</span><span class="n">uuid</span><span class="p">:</span> <span class="n">response</span>
+                   <span class="k">for</span> <span class="n">response</span> <span class="ow">in</span> <span class="n">msearcher</span><span class="o">.</span><span class="n">generate_responses</span><span class="p">()</span>
+                   <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">uuid</span> <span class="ow">in</span> <span class="n">zp_uuids</span><span class="p">}</span>
+
+        <span class="c1"># Verify results</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span>
+                                   <span class="s2">&quot;Expected no responses&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.test_no_search_response_from_sub"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.test_no_search_response_from_sub">[docs]</a>    <span class="k">def</span> <span class="nf">test_no_search_response_from_sub</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Collect the results of the MSearches</span>
+        <span class="n">zp_uuids</span> <span class="o">=</span> <span class="p">{</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_sub</span><span class="p">()}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrSkip</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">zp_uuids</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Test requires a sub.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Build an MSearcher and send two MSearches</span>
+        <span class="n">msearcher</span> <span class="o">=</span> <span class="n">MSearcher</span><span class="p">()</span>
+        <span class="n">msearcher</span><span class="o">.</span><span class="n">send_msearch</span><span class="p">()</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">SSDP_MX</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span>
+        <span class="n">msearcher</span><span class="o">.</span><span class="n">send_msearch</span><span class="p">()</span>
+
+        <span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">response</span><span class="o">.</span><span class="n">uuid</span><span class="p">:</span> <span class="n">response</span>
+                <span class="k">for</span> <span class="n">response</span> <span class="ow">in</span> <span class="n">msearcher</span><span class="o">.</span><span class="n">generate_responses</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">response</span><span class="o">.</span><span class="n">uuid</span> <span class="ow">in</span> <span class="n">zp_uuids</span><span class="p">}</span>
+
+        <span class="c1"># Verify results</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> <span class="s2">&quot;Expected no responses&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_validate_msearch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">devices</span><span class="p">):</span>
+        <span class="c1"># Typically, we should send three to five multicast and broadcast</span>
+        <span class="c1"># msearch requests, one second apart from one another. Unfortunately,</span>
+        <span class="c1"># coherence does not allow us to do this. Let&#39;s settle for the next</span>
+        <span class="c1"># best thing, sending five multicast msearch requests two and a half</span>
+        <span class="c1"># seconds apart from one other.</span>
+        <span class="n">msearcher</span> <span class="o">=</span> <span class="n">MSearcher</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">xrange</span><span class="p">(</span><span class="mi">5</span><span class="p">):</span>
+            <span class="n">msearcher</span><span class="o">.</span><span class="n">send_msearch</span><span class="p">()</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">SSDP_MX</span> <span class="o">*</span> <span class="mi">2</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span>
+
+        <span class="c1"># Collect the results of the MSearches</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">expected_udns</span> <span class="o">=</span> <span class="p">{</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">devices</span>
+                            <span class="k">if</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">playback_device</span><span class="p">)</span> <span class="p">}</span>
+        <span class="k">except</span> <span class="ne">TypeError</span><span class="p">:</span>
+            <span class="n">expected_udns</span> <span class="o">=</span> <span class="p">[</span><span class="n">devices</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="p">]</span>
+
+        <span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">response</span><span class="o">.</span><span class="n">uuid</span><span class="p">:</span> <span class="n">response</span>
+                   <span class="k">for</span> <span class="n">response</span> <span class="ow">in</span> <span class="n">msearcher</span><span class="o">.</span><span class="n">generate_responses</span><span class="p">()}</span>
+        <span class="c1"># Verify results</span>
+        <span class="k">for</span> <span class="n">expected_udn</span> <span class="ow">in</span> <span class="n">expected_udns</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyInOrStop</span><span class="p">(</span><span class="n">expected_udn</span><span class="p">,</span> <span class="nb">set</span><span class="p">(</span><span class="n">results</span><span class="o">.</span><span class="n">keys</span><span class="p">()),</span>
+                                    <span class="s2">&quot;Expected playback device </span><span class="si">{}</span><span class="s2"> to send a response&quot;</span>
+                                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">expected_udn</span><span class="p">))</span>
+
+        <span class="k">for</span> <span class="n">uuid</span><span class="p">,</span> <span class="n">response</span> <span class="ow">in</span> <span class="n">results</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;UUID: </span><span class="si">{}</span><span class="s2"> Response: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uuid</span><span class="p">,</span> <span class="n">response</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;UUID: </span><span class="si">{}</span><span class="s2">  raw: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uuid</span><span class="p">,</span> <span class="n">response</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+            <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_device_by_udn</span><span class="p">(</span><span class="n">uuid</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">zp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;ZP was not found with UUID:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uuid</span><span class="p">))</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">api_version</span><span class="p">,</span>
+                <span class="n">response</span><span class="o">.</span><span class="n">api_version</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zone group api version to match response. Expected: </span><span class="si">{}</span><span class="s2"> Got: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">api_version</span><span class="p">,</span> <span class="n">response</span><span class="o">.</span><span class="n">api_version</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">min_api_version</span><span class="p">,</span>
+                <span class="n">response</span><span class="o">.</span><span class="n">min_api_version</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zone group min api version to match response. Expected: </span><span class="si">{}</span><span class="s2"> Got: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">min_api_version</span><span class="p">,</span> <span class="n">response</span><span class="o">.</span><span class="n">min_api_version</span><span class="p">))</span>
+
+            <span class="n">zg</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zg</span><span class="p">[</span><span class="s1">&#39;CurrentZoneGroupID&#39;</span><span class="p">],</span>
+                <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">id</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zone group ID to match response. Expected: </span><span class="si">{}</span><span class="s2"> Got: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zg</span><span class="p">[</span><span class="s1">&#39;CurrentZoneGroupID&#39;</span><span class="p">],</span> <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">id</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zg</span><span class="p">[</span><span class="s1">&#39;CurrentZoneGroupName&#39;</span><span class="p">],</span>
+                <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zone group name to match response. Expected: </span><span class="si">{}</span><span class="s2"> Got: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zg</span><span class="p">[</span><span class="s1">&#39;CurrentZoneGroupName&#39;</span><span class="p">],</span> <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">is_group_coordinator_local</span><span class="p">()</span>
+                <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_visible</span><span class="p">(),</span>
+                <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zone group coordinatorship to match response. Expected: </span><span class="si">{}</span><span class="s2"> Got: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span>
+                <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">is_group_coordinator_local</span><span class="p">(),</span> <span class="n">response</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">))</span>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.test_msearch_discovery_with_configurations"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.test_msearch_discovery_with_configurations">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;_configuration_generator&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_msearch_discovery_with_configurations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">devices</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test that msearches are returned by everything in the household</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_validate_msearch</span><span class="p">(</span><span class="n">devices</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_to_household</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hh_zp</span><span class="p">,</span> <span class="n">new_zp</span><span class="p">):</span>
+        <span class="n">netstart_test</span> <span class="o">=</span> <span class="n">NetstartTest</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="p">)</span>
+        <span class="n">result_code</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">netstart_test</span><span class="o">.</span><span class="n">add_component</span><span class="p">(</span><span class="n">hh_zp</span><span class="p">,</span> <span class="n">new_zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+            <span class="mi">0</span><span class="p">,</span> <span class="n">result_code</span><span class="p">,</span>
+            <span class="s2">&quot;Expect the new zp to successfully join the household&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+            <span class="n">hh_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetHouseholdID</span><span class="p">(),</span>
+            <span class="n">new_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetHouseholdID</span><span class="p">(),</span>
+            <span class="s2">&quot;Expect the new zp&#39;s HHID to match the HHID&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="TestSSDPGroupDiscovery.test_not_in_household"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupDiscovery.test_not_in_household">[docs]</a>    <span class="k">def</span> <span class="nf">test_not_in_household</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Test that msearches are returned by everything in the household&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting msearch discovery test&quot;</span><span class="p">)</span>
+        <span class="n">original_devices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">allDevices</span><span class="p">[:]</span>
+
+        <span class="c1"># Get some arbitrary ZP on its own and remove it from the household</span>
+        <span class="n">lone_zp</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">([</span>
+            <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span>
+                <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_sub</span><span class="p">()</span>
+                <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">())])</span>
+        <span class="c1"># It is possible that lone_zp might be none if none of the above if</span>
+        <span class="c1"># conditions are met. If this occurs, let&#39;s stop the test.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span><span class="n">lone_zp</span><span class="p">,</span> <span class="s2">&quot;lone_zp is not equal to none&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Selected </span><span class="si">{}</span><span class="s2"> as lone_zp&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">lone_zp</span><span class="p">))</span>
+        <span class="c1"># Remove the player from the subnet manually and then back up the</span>
+        <span class="c1"># localsettings and netsettings files. This is essentially what</span>
+        <span class="c1"># the backup_settings() context manager does but that was causing</span>
+        <span class="c1"># issues with this test when/if lone_zp didn&#39;t reset correctly</span>
+        <span class="n">lone_zp</span><span class="o">.</span><span class="n">force_subnet_removal</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">prefix</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;net&#39;</span><span class="p">,</span> <span class="s1">&#39;local&#39;</span><span class="p">]:</span>
+            <span class="n">lone_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cp /jffs/</span><span class="si">{prefix}</span><span class="s1">settings.txt &#39;</span>
+                <span class="s1">&#39;/jffs/</span><span class="si">{prefix}</span><span class="s1">settings.</span><span class="si">{suffix}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="n">prefix</span><span class="p">,</span>
+                    <span class="n">suffix</span><span class="o">=</span><span class="s1">&#39;old&#39;</span><span class="p">))</span>
+        <span class="n">lone_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;rm /jffs/*settings.txt&#39;</span><span class="p">)</span>
+        <span class="c1"># Poke anacapa to restart here with no HH affiliation</span>
+        <span class="n">lone_zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">lone_zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expected the lone zp to be removed from &quot;</span>
+                                   <span class="s2">&quot;the household and have no hhid&quot;</span><span class="p">)</span>
+        <span class="n">original_devices</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">lone_zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_validate_msearch</span><span class="p">(</span><span class="n">original_devices</span><span class="p">)</span>
+        <span class="c1"># Restore the previous HH settings, again mimicking the end</span>
+        <span class="c1"># of the backup_settings context manager manually</span>
+        <span class="k">for</span> <span class="n">prefix</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;net&#39;</span><span class="p">,</span> <span class="s1">&#39;local&#39;</span><span class="p">]:</span>
+            <span class="n">lone_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;mv /jffs/</span><span class="si">{prefix}</span><span class="s1">settings.old &#39;</span>
+                <span class="s1">&#39;/jffs/</span><span class="si">{prefix}</span><span class="s1">settings.</span><span class="si">{suffix}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">prefix</span><span class="o">=</span><span class="n">prefix</span><span class="p">,</span>
+                    <span class="n">suffix</span><span class="o">=</span><span class="s1">&#39;txt&#39;</span><span class="p">))</span>
+        <span class="c1"># Poke anacapa again and wait for the device to come back</span>
+        <span class="n">lone_zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements">[docs]</a><span class="k">class</span> <span class="nc">TestSSDPGroupAdvertisements</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_PLAYERGROUP_SSDP&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">_cleanup_all</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">wait_for_all_environment_devices</span><span class="p">()</span>
+        <span class="n">_cleanup_all</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_reboot_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_reboot_and_wait_many</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">):</span>
+        <span class="n">pool</span> <span class="o">=</span> <span class="n">ThreadPool</span><span class="p">()</span>
+        <span class="n">pool</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_reboot_and_wait</span><span class="p">,</span> <span class="n">zps</span><span class="p">)</span>
+        <span class="n">pool</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">pool</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_do_rename_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">name_suffix</span><span class="o">=</span><span class="s1">&#39;renamed&#39;</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up rename test&quot;</span><span class="p">)</span>
+        <span class="n">zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="p">(</span><span class="n">members</span> <span class="ow">or</span> <span class="p">[])</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+            <span class="k">def</span> <span class="nf">reset_name</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">zf</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+                <span class="k">def</span> <span class="nf">f</span><span class="p">():</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Resetting </span><span class="si">{}</span><span class="s2"> to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">n</span><span class="p">))</span>
+                    <span class="n">zf</span><span class="p">(</span><span class="n">n</span><span class="p">)</span>
+                <span class="k">return</span> <span class="n">f</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">addCleanup</span><span class="p">(</span><span class="n">reset_name</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                       <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">set_zone_name</span><span class="p">,</span>
+                                       <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">()))</span>
+
+        <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">monitor</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Restart anacapa to get byebye message&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_reboot_and_wait_many</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">members</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting ZP </span><span class="si">{}</span><span class="s2"> to be a group coordinator with </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">members</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting ZP </span><span class="si">{}</span><span class="s2"> to be a standalone group&quot;</span>
+                             <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc</span><span class="p">))</span>
+
+            <span class="k">if</span> <span class="n">members</span><span class="p">:</span>
+                <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">member</span> <span class="ow">in</span> <span class="n">members</span><span class="p">:</span>
+                    <span class="n">gc</span><span class="o">.</span><span class="n">topology</span><span class="o">.</span><span class="n">wait_for_topologies_to_match</span><span class="p">(</span><span class="n">member</span><span class="p">)</span>
+
+            <span class="n">final_alives</span><span class="p">,</span> <span class="n">final_byebyes</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                    <span class="n">final_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected byebye for </span><span class="si">{}</span><span class="s2"> to precede alive&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+            <span class="n">expected_boot_ids</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">uuid</span><span class="p">:</span> <span class="n">n</span><span class="o">.</span><span class="n">boot_id</span>
+                <span class="k">for</span> <span class="n">uuid</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">final_alives</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+            <span class="p">}</span>
+            <span class="n">previous_config_ids</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">uuid</span><span class="p">:</span> <span class="n">n</span><span class="o">.</span><span class="n">config_id</span>
+                <span class="k">for</span> <span class="n">uuid</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">final_alives</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+            <span class="p">}</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Renaming zp and verifying alive message&quot;</span><span class="p">)</span>
+            <span class="n">new_names</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">zp</span><span class="p">:</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">-</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">()[:</span><span class="mi">56</span><span class="p">],</span>
+                    <span class="n">name_suffix</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span>
+            <span class="p">}</span>
+            <span class="k">for</span> <span class="n">zp</span><span class="p">,</span> <span class="n">new_name</span> <span class="ow">in</span> <span class="n">new_names</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">set_zone_name</span><span class="p">(</span><span class="n">new_name</span><span class="p">)</span>
+
+            <span class="n">expected_group_name</span> <span class="o">=</span> <span class="n">new_names</span><span class="p">[</span><span class="n">gc</span><span class="p">]</span>
+            <span class="c1"># SWPBL-12010: Escape the special characters (backslash and DQUOTE) in the name</span>
+            <span class="n">expected_group_name</span> <span class="o">=</span> <span class="n">_escape_http_quoted_string</span><span class="p">(</span><span class="n">expected_group_name</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">members</span><span class="p">:</span>
+                <span class="n">expected_group_name</span> <span class="o">+=</span> <span class="s2">&quot; + </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">members</span><span class="p">))</span>
+
+            <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="n">final_alives</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+            <span class="n">final_byebyes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">expected_boot_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected boot id not to change.&quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">zp</span> <span class="o">==</span> <span class="n">gc</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                          <span class="s2">&quot;Expect GC to report in ALIVE&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                        <span class="n">previous_config_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                        <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">config_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Expected config id to grow.&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                        <span class="n">expected_group_name</span><span class="p">,</span>
+                        <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                        <span class="s2">&quot;Expected name to match new name.&quot;</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                           <span class="s2">&quot;Expect member to not report GC in ALIVE&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                        <span class="n">previous_config_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                        <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">config_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Expected config id not to grow for non-gc.&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                        <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                        <span class="s2">&quot;Expected group name to be blank.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Restarting anacapa to verify byebye message and &quot;</span>
+                            <span class="s2">&quot;alive message on restart&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_reboot_and_wait_many</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="n">final_alives</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+            <span class="n">final_byebyes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">expected_boot_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                    <span class="n">final_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected prior alive to match final byebye&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                    <span class="n">final_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected final byebye to precede final alive&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">_escape_http_quoted_string</span><span class="p">(</span><span class="n">new_names</span><span class="p">[</span><span class="n">zp</span><span class="p">]),</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected name to match new name still.&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.test_rename_standalone"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.test_rename_standalone">[docs]</a>    <span class="k">def</span> <span class="nf">test_rename_standalone</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Tests that standalone devices send alive and byebye messages as</span>
+<span class="sd">        expected.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting ZP </span><span class="si">{}</span><span class="s2"> to be a standalone group&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_do_rename_test</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.test_rename_with_special_characters"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.test_rename_with_special_characters">[docs]</a>    <span class="k">def</span> <span class="nf">test_rename_with_special_characters</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;SWPBL-12010</span>
+<span class="sd">        Tests that group names with special characters are properly escaped.</span>
+<span class="sd">        The special characters in this context are DQUOTE and backslash.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_do_rename_test</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">name_suffix</span><span class="o">=</span><span class="s1">&#39;renamed&quot;</span><span class="se">\\</span><span class="s1">&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.test_rename_with_group"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.test_rename_with_group">[docs]</a>    <span class="k">def</span> <span class="nf">test_rename_with_group</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Tests that group coordinators and their members send alive and</span>
+<span class="sd">        byebye messages as expected.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="p">,</span> <span class="n">member</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span>
+                      <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span> <span class="ow">and</span> <span class="ow">not</span>
+                      <span class="n">d</span><span class="o">.</span><span class="n">is_secondary_bonded_zone</span><span class="p">()][:</span><span class="mi">2</span><span class="p">]</span>
+        <span class="c1"># Clear play state and set players back to standalone</span>
+        <span class="k">for</span> <span class="n">player</span> <span class="ow">in</span> <span class="p">[</span><span class="n">zp</span><span class="p">,</span> <span class="n">member</span><span class="p">]:</span>
+            <span class="n">player</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_do_rename_test</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="p">[</span><span class="n">member</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="TestSSDPGroupAdvertisements.test_group_ungroup"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPGroupAdvertisements.test_group_ungroup">[docs]</a>    <span class="k">def</span> <span class="nf">test_group_ungroup</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Tests that group and ungroup actions send alive and byebye messages</span>
+<span class="sd">        as expected from the group coordinator and members.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Preparing for group/ungroup testing&quot;</span><span class="p">)</span>
+        <span class="c1"># Gather group coordinator and member and create zps collection as a</span>
+        <span class="c1"># handy reference to all DUTs</span>
+        <span class="n">zps</span> <span class="o">=</span> <span class="n">gc</span><span class="p">,</span> <span class="n">member</span> <span class="o">=</span> <span class="p">[</span><span class="n">d</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span>
+                            <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span>
+                            <span class="ow">and</span> <span class="ow">not</span> <span class="n">d</span><span class="o">.</span><span class="n">is_secondary_bonded_zone</span><span class="p">()][:</span><span class="mi">2</span><span class="p">]</span>
+
+        <span class="c1"># Reset ZPs to be standalone</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+        <span class="c1"># Watch for SSDP notifications</span>
+        <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">monitor</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Reboot all devices under test and validate SSDP notifications&quot;</span><span class="p">)</span>
+            <span class="c1"># Reboot all ZPs to reset boot id on notifications and make sure</span>
+            <span class="c1"># everyone is alone. Then collect notifications.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_reboot_and_wait_many</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+            <span class="n">final_alives</span><span class="p">,</span> <span class="n">final_byebyes</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+
+            <span class="c1"># For each ZP validate that the boot id incremented and that for</span>
+            <span class="c1"># each ZP a group is advertised with the zp as group coordinator and</span>
+            <span class="c1"># the group name matching the ZP&#39;s name</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                    <span class="n">final_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected byebye for </span><span class="si">{}</span><span class="s2"> to precede alive&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected to be a group coordinator for a standalone group&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">(),</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected group name to match standalone coordinator name&quot;</span><span class="p">)</span>
+
+            <span class="c1"># Keep track of the boot ids and config ids for later</span>
+            <span class="n">expected_boot_ids</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">uuid</span><span class="p">:</span> <span class="n">n</span><span class="o">.</span><span class="n">boot_id</span>
+                <span class="k">for</span> <span class="n">uuid</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">final_alives</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+            <span class="p">}</span>
+            <span class="n">previous_config_ids</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">uuid</span><span class="p">:</span> <span class="n">n</span><span class="o">.</span><span class="n">config_id</span>
+                <span class="k">for</span> <span class="n">uuid</span><span class="p">,</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">final_alives</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+            <span class="p">}</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Create group and validate SSDP notifications&quot;</span><span class="p">)</span>
+            <span class="c1"># Create the group and capture subsequent notifications</span>
+            <span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">link_zones</span><span class="p">([</span><span class="n">member</span><span class="p">])</span>
+            <span class="n">gc</span><span class="o">.</span><span class="n">topology</span><span class="o">.</span><span class="n">wait_for_topologies_to_match</span><span class="p">(</span><span class="n">member</span><span class="p">)</span>
+            <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="n">final_alives</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+            <span class="n">final_byebyes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+            <span class="c1"># Validate that the new group is named correctly, that boot ids are</span>
+            <span class="c1"># correct, that config ids increment, that the group coordinator</span>
+            <span class="c1"># is marked as such and that the member is marked non-gc and the</span>
+            <span class="c1"># associated group name is blank.</span>
+            <span class="n">expected_group_name</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> + 1&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">gc</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">())</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">expected_boot_ids</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                <span class="s2">&quot;Expected same boot id&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                <span class="n">previous_config_ids</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">config_id</span><span class="p">,</span>
+                <span class="s2">&quot;Expected increase in config id&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">expected_group_name</span><span class="p">,</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                <span class="s2">&quot;Expected name to grouped name.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">gc</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">,</span>
+                <span class="s2">&quot;Expected zp to be group coordinator.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">expected_boot_ids</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                <span class="s2">&quot;Expected same boot id&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                <span class="n">previous_config_ids</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">config_id</span><span class="p">,</span>
+                <span class="s2">&quot;Expected increase in config id&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">final_alives</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                <span class="s2">&quot;Expected member group name to be empty.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span>
+                <span class="n">final_alives</span><span class="p">[</span><span class="n">member</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">,</span>
+                <span class="s2">&quot;Expected member to not be group coordinator.&quot;</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disband group and validate SSDP notifications&quot;</span><span class="p">)</span>
+            <span class="c1"># Disband the group and collect notifications</span>
+            <span class="n">member</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+            <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span>
+            <span class="n">final_alives</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+            <span class="n">final_byebyes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
+
+            <span class="c1"># Confirm that boot id and config id are right, that the group name</span>
+            <span class="c1"># matches the ZP name and that each ZP is considered its own</span>
+            <span class="c1"># group coordinator.</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">expected_boot_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">boot_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected same boot id&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrStop</span><span class="p">(</span>
+                    <span class="n">previous_config_ids</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">config_id</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected increase in config id&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">(),</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected name to grouped name.&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                    <span class="n">final_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">group_info</span><span class="o">.</span><span class="n">is_coordinator</span><span class="p">,</span>
+                    <span class="s2">&quot;Expected zp to be group coordinator.&quot;</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery">[docs]</a><span class="k">class</span> <span class="nc">TestSSDPPlayerDiscovery</span><span class="p">(</span><span class="n">CloudUtilsMixin</span><span class="p">,</span> <span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_PLAYERGROUP_SSDP&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span> <span class="o">=</span> <span class="s2">&quot;museHouseholdId&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">hhid</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span> <span class="o">=</span> <span class="n">MPCSC</span><span class="p">(</span><span class="n">gateway</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+
+        <span class="c1"># Secure register one device</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_playback_device</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">StopIteration</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Test requires a playback device!&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Secure register device if need be</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_secure_registered</span><span class="p">():</span>
+                <span class="c1"># Secure register with real environment</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">set_string_overrides_and_bounce_anacapa</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">PlayerRegistration</span><span class="o">.</span><span class="n">reg_zp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">),</span>
+                    <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; successfully registered?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+            <span class="c1"># Point player at mock lechmere</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_player_connect_override_mutual_ssl</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">)</span>
+
+        <span class="c1"># Use the rest of the devices to test non secure reg cases</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_playback_devices</span><span class="p">()</span> <span class="k">if</span> <span class="n">zp</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">]</span>
+        <span class="c1"># Secure deregister these devices</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">secure_deregister</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Clear muse household Ids</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_muse_household_id</span><span class="p">(</span><span class="kc">None</span><span class="p">),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span>
+        <span class="c1"># Bounce anacapa to re-read jffs</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">(),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Secure deregister everything</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">secure_deregister</span><span class="p">(),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">clear_player_connect_overrides</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.test_no_secure_reg_with_muse_hhid_advertises_on_boot"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.test_no_secure_reg_with_muse_hhid_advertises_on_boot">[docs]</a>    <span class="k">def</span> <span class="nf">test_no_secure_reg_with_muse_hhid_advertises_on_boot</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify final alive contains the correct value for the muse household Id</span>
+<span class="sd">        when present on boot</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Test requires at least two devices!&quot;</span><span class="p">)</span>
+
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span>
+                                 <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_muse_household_id</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span><span class="p">),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">(),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">group_monitor</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">player_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">player_monitor</span><span class="p">:</span>
+                <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">(),</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span>
+                <span class="n">player_alives</span><span class="p">,</span> <span class="n">player_byebyes</span> <span class="o">=</span> <span class="n">player_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+                <span class="n">group_alives</span><span class="p">,</span> <span class="n">group_byebyes</span> <span class="o">=</span> <span class="n">group_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+
+                <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">:</span>
+                    <span class="c1"># Verify alives</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="c1"># Verify byebyes</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">player_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">group_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.test_no_secure_reg_no_muse_hhid_advertises_on_boot"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.test_no_secure_reg_no_muse_hhid_advertises_on_boot">[docs]</a>    <span class="k">def</span> <span class="nf">test_no_secure_reg_no_muse_hhid_advertises_on_boot</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that non secure registered players with no muse household Id</span>
+<span class="sd">        advertise the default muse household Id on boot.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">group_monitor</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">player_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">player_monitor</span><span class="p">:</span>
+                <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">(),</span>
+                                         <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">)</span>
+                <span class="n">player_alives</span><span class="p">,</span> <span class="n">player_byebyes</span> <span class="o">=</span> <span class="n">player_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+                <span class="n">group_alives</span><span class="p">,</span> <span class="n">group_byebyes</span> <span class="o">=</span> <span class="n">group_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+
+                <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">:</span>
+                    <span class="c1"># Verify alives</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="c1"># Verify byebyes</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">player_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">group_byebyes</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.test_secure_reg_advertise_after_connecting_to_lechmere"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.test_secure_reg_advertise_after_connecting_to_lechmere">[docs]</a>    <span class="k">def</span> <span class="nf">test_secure_reg_advertise_after_connecting_to_lechmere</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a secure registered player connects to Lechmere and attempts</span>
+<span class="sd">        to get the muse household Id before advertising.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">group_monitor</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">player_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">player_monitor</span><span class="p">:</span>
+                <span class="c1"># Bounce anacapa and wait</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_for_cloud_connected</span><span class="p">(</span><span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+                <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; not connected to Lechmere when advertising!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+
+                <span class="c1"># Get the muse hhid from telnet and verify it is not empty</span>
+                <span class="n">muse_hhid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_muse_household_id</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                           <span class="s2">&quot;Mock should have set muse hhid on ZP &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+                <span class="c1"># Verify that rootdevice muse hhid matches</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                           <span class="s2">&quot;RootDevice museHouseholdId for ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; &quot;</span>
+                                           <span class="s2">&quot;matches telnet?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+
+                <span class="c1"># Look at alives and verify the final alive has the muse hhid</span>
+                <span class="n">player_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">player_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+                <span class="n">group_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">group_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                           <span class="n">player_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                                           <span class="s2">&quot;Got muse hhid in alive &lt;</span><span class="si">{}</span><span class="s2">&gt; after player &lt;</span><span class="si">{}</span><span class="s2">&gt; connected?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                               <span class="n">player_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                           <span class="n">group_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                                           <span class="s2">&quot;Got muse hhid in alive &lt;</span><span class="si">{}</span><span class="s2">&gt; after player &lt;</span><span class="si">{}</span><span class="s2">&gt; connected?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                               <span class="n">group_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.test_secure_reg_player_no_muse_hhid_advertise_after_failing_to_connect_to_lechmere"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.test_secure_reg_player_no_muse_hhid_advertise_after_failing_to_connect_to_lechmere">[docs]</a>    <span class="k">def</span> <span class="nf">test_secure_reg_player_no_muse_hhid_advertise_after_failing_to_connect_to_lechmere</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a securely registered player eventually advertises even</span>
+<span class="sd">        if it can&#39;t connect to Lechmere.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># Configure mock to reject connections</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_upgrade_response</span><span class="p">(</span><span class="n">upgrade_response_code</span><span class="o">=</span><span class="n">HTTPCode</span><span class="o">.</span><span class="n">BAD_REQUEST</span><span class="p">)</span> <span class="c1"># @UndefinedVariable</span>
+            <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">group_monitor</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">player_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">player_monitor</span><span class="p">:</span>
+                    <span class="c1"># Clear muse hhid, then bounce anacapa and wait</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_muse_household_id</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+                    <span class="c1"># Verify player is not connected by the time it comes back up</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_cloud_connected</span><span class="p">(),</span>
+                        <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; not connected to Lechmere when advertising?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+
+                    <span class="c1"># Get the muse hhid from telnet and verify it is still empty</span>
+                    <span class="n">muse_hhid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_muse_household_id</span><span class="p">()</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNoneOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                            <span class="s2">&quot;Muse hhid should not be present on ZP &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+
+                    <span class="c1"># Verify that rootdevice muse hhid matches</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                               <span class="s2">&quot;RootDevice museHouseholdId for ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; &quot;</span>
+                                               <span class="s2">&quot;matches telnet?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+
+                    <span class="c1"># Look at alives and verify the final alive has the muse hhid (unregistered)</span>
+                    <span class="n">player_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">player_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+                    <span class="n">group_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">group_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                                               <span class="s2">&quot;Got muse hhid in alive &lt;</span><span class="si">{}</span><span class="s2">&gt; after player &lt;</span><span class="si">{}</span><span class="s2">&gt; connected?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                   <span class="n">player_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                                                   <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">st_no_muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                                               <span class="s2">&quot;Got muse hhid in alive &lt;</span><span class="si">{}</span><span class="s2">&gt; after player &lt;</span><span class="si">{}</span><span class="s2">&gt; connected?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                   <span class="n">group_alives</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">],</span>
+                                                   <span class="bp">self</span><span class="o">.</span><span class="n">secure_reg_zp</span><span class="p">))</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="c1"># Restore token response code to default</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">reset_upgrade_response</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestSSDPPlayerDiscovery.test_advertise_muse_hhid_on_secure_register_and_connect"><a class="viewcode-back" href="../../webserver.html#webserver.test_ssdp_group_discovery.TestSSDPPlayerDiscovery.test_advertise_muse_hhid_on_secure_register_and_connect">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s2">&quot;Skip until real lechmere test is issuing muse household ids&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_advertise_muse_hhid_on_secure_register_and_connect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that when a player secure registers and gets a new muse HHID, it advertises</span>
+<span class="sd">        it in the next alive.</span>
+
+<span class="sd">        * Can&#39;t do this with the mock due to lack of mock secure registration service</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Pick a zp</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_secure_reg_zps</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+            <span class="c1"># Point the player at real cloud services so that it can register</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_string_overrides_and_bounce_anacapa</span><span class="p">([</span><span class="n">zp</span><span class="p">])</span>
+
+            <span class="c1"># Wait for cloud connected</span>
+            <span class="k">with</span> <span class="n">group_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">group_monitor</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">player_notification_monitor</span><span class="p">()</span> <span class="k">as</span> <span class="n">player_monitor</span><span class="p">:</span>
+                    <span class="c1"># Secure register and wait for the player to connect</span>
+                    <span class="n">PlayerRegistration</span><span class="o">.</span><span class="n">reg_zp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_until_cloud_connected</span><span class="p">()</span>
+
+                    <span class="c1"># Get muse HHID from telnet</span>
+                    <span class="n">muse_hhid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_muse_household_id</span><span class="p">()</span>
+
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                        <span class="s2">&quot;ZP &lt;</span><span class="si">{}</span><span class="s2">&gt; got muse hhid from lechmere?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+                    <span class="c1"># Get alives</span>
+                    <span class="n">player_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">player_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+                    <span class="n">group_alives</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">group_monitor</span><span class="o">.</span><span class="n">get_notifications</span><span class="p">()</span>
+
+                    <span class="c1"># Verify new alives have the muse hhid</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                               <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">player_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                               <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">household_id</span><span class="p">,</span>
+                        <span class="s2">&quot;Got expected householdId for &lt;</span><span class="si">{}</span><span class="s2">&gt; (data: &lt;</span><span class="si">{}</span><span class="s2">&gt;)?&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                                                 <span class="n">group_alives</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="p">))</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">secure_deregister</span><span class="p">()</span>
+                <span class="c1"># Point players back at mock lechmere</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">mock_lechmere</span><span class="o">.</span><span class="n">set_player_connect_override_mutual_ssl</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;TestSSDPGroup&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">TestSSDPGroupDiscovery</span><span class="p">(),</span> <span class="n">TestSSDPGroupAdvertisements</span><span class="p">(),</span> <span class="n">TestSSDPPlayerDiscovery</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

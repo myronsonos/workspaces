@@ -1,0 +1,450 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.test_cloudqueue_apikey_headers &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.test_cloudqueue_apikey_headers</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test suite covers the player support for cloudqueue interaction containing APIKey headers</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                                           <span class="n">MetadataStatusEvent</span><span class="p">,</span>
+                                           <span class="n">PlaybackState</span><span class="p">,</span>
+                                           <span class="n">PlaybackErrorEvent</span><span class="p">,</span>
+                                           <span class="n">Success</span><span class="p">,</span>
+                                           <span class="n">Error</span><span class="p">,</span>
+                                           <span class="n">musicServiceAccountsEvent</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">error</span> <span class="k">as</span> <span class="n">SocketError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers</span> <span class="k">import</span> <span class="n">node_smapi_control</span>
+<span class="kn">from</span> <span class="nn">sonos.crypto</span> <span class="k">import</span> <span class="n">SecureStringFactory</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">urllib2</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">MuseClientFixtureMixin</span><span class="p">)</span>
+
+<span class="n">NODE_SID</span> <span class="o">=</span> <span class="mi">240</span>
+<span class="n">WSDL</span> <span class="o">=</span> <span class="s1">&#39;https://s3.amazonaws.com/mock-smapi-dev/wsdl/Sonos.wsdl&#39;</span>
+<span class="n">NODE_MOCKSMAPI_ACCOUNT_CREDENTIALS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">]</span>
+<span class="n">CUSTOM_CAPABILITIES</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;search&#39;</span><span class="p">,</span> <span class="s1">&#39;trFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;alFavorites&#39;</span><span class="p">,</span> <span class="s1">&#39;ucPlaylists&#39;</span><span class="p">,</span> <span class="s1">&#39;logging&#39;</span><span class="p">,</span>
+                       <span class="s1">&#39;playbackLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;accountLogging&#39;</span><span class="p">,</span> <span class="s1">&#39;extendedMD&#39;</span><span class="p">,</span> <span class="s1">&#39;mediaUriActions&#39;</span><span class="p">,</span>
+                       <span class="s1">&#39;contextHeaders&#39;</span><span class="p">,</span> <span class="s1">&#39;contextReporting&#39;</span><span class="p">,</span> <span class="s1">&#39;userInfo&#39;</span><span class="p">,</span> <span class="s1">&#39;manifest&#39;</span><span class="p">]</span>
+<span class="n">AUDIOBOOK_OBJECT_ID</span> <span class="o">=</span> <span class="s2">&quot;bk1&quot;</span>
+<span class="n">NEG_TEST_AUDIOBOOK_OBJECT_ID</span> <span class="o">=</span> <span class="s2">&quot;bk2&quot;</span>
+
+<span class="n">smapi_ctl</span> <span class="o">=</span> <span class="n">node_smapi_control</span><span class="o">.</span><span class="n">NodeSmapiControl</span><span class="p">()</span>
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl">[docs]</a><span class="k">class</span> <span class="nc">CloudQueueAPIKeyTestsImpl</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="n">smapi_port</span> <span class="o">=</span> <span class="mi">3000</span>
+    <span class="n">cq_port</span> <span class="o">=</span> <span class="mi">4000</span>
+    <span class="n">sid</span> <span class="o">=</span> <span class="n">NODE_SID</span>
+    <span class="n">apiKey</span> <span class="o">=</span> <span class="s2">&quot;X-MockSMAPI-ApiKey:David did not start the fire&quot;</span>
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;test_service_manifest: setUpFixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_account_id</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">museConnection</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+        <span class="c1"># Make sure we start with a clean system</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">remove_all_service_accounts</span><span class="p">(),</span> <span class="s2">&quot;Removed all service accounts&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_account_settings</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_music_service_manifests</span><span class="p">()</span>
+
+        <span class="c1"># we will run the tests on 1 zp of each model available</span>
+        <span class="n">unique_device_collection</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span> <span class="ow">and</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">unique_device_collection</span><span class="p">:</span>
+                <span class="n">unique_device_collection</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span> <span class="o">=</span> <span class="n">zp</span>
+                <span class="k">continue</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span> <span class="o">=</span> <span class="n">unique_device_collection</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;svcmanifest&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;accountsmgr&quot;</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;musicservices&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;zpsa&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+            <span class="k">except</span> <span class="n">SocketError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger port error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;test_service_manifest: tearDownFixture&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="c1"># clear play state and reset diag level one more time just in case</span>
+                <span class="c1"># a test failed</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;svcmanifest&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;accountsmgr&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;musicservices&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;zpsa&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+            <span class="k">except</span> <span class="n">SocketError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger port error during test teardown: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">remove_all_service_accounts</span><span class="p">(),</span> <span class="s2">&quot;Removed all service accounts&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_account_settings</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_music_service_manifests</span><span class="p">()</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi</span> <span class="o">=</span> <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">start_node_smapi_server</span><span class="p">(</span><span class="n">stdout</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stdout</span><span class="p">,</span>
+                                                        <span class="n">stderr</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">,</span>
+                                                        <span class="n">server_port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span><span class="p">,</span>
+                                                        <span class="n">server_internal_id</span><span class="o">=</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">get_account_type</span><span class="p">(</span><span class="n">NODE_SID</span><span class="p">),</span>
+                                                        <span class="n">server_sid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">,</span>
+                                                        <span class="n">magicLinkCode</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+                                                        <span class="n">magicLinkDeviceId</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Setup custom SD. Eventhough the function may suggest otherwise, we are not</span>
+        <span class="c1"># creating an account here (add_account=False), we are simply creating a SMAPI service record</span>
+        <span class="c1"># via custom SD.</span>
+        <span class="n">manifest_delay</span> <span class="o">=</span> <span class="mi">4000</span>
+        <span class="n">manifest_uri</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/manifest?delayMillis=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span><span class="p">,</span> <span class="n">manifest_delay</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">smapi_account_setup</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                            <span class="n">sid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">,</span>
+                                                            <span class="n">manifest_version</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+                                                            <span class="n">manifest_uri</span><span class="o">=</span><span class="n">manifest_uri</span><span class="p">,</span>
+                                                            <span class="n">caps</span><span class="o">=</span><span class="n">CUSTOM_CAPABILITIES</span><span class="p">,</span>
+                                                            <span class="n">auth_type</span><span class="o">=</span><span class="s1">&#39;DeviceLink&#39;</span><span class="p">,</span>
+                                                            <span class="n">add_account</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+                              <span class="s2">&quot;Successfully setup node-smapi server?&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Get manifest from : http://node_smapi_ip:node_smapi_port/manifest/</span>
+        <span class="n">manifest_get_uri</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/manifest&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span><span class="p">)</span>
+        <span class="n">contents</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">manifest_get_uri</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;manifest hosted on Node_SMAPI: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">contents</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_account_settings</span><span class="p">()</span>
+        <span class="n">accounts</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">get_service_accounts</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accounts</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect no accounts in the household (2). There are </span><span class="si">{}</span><span class="s2"> accounts in the household.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accounts</span><span class="p">)))</span>
+
+        <span class="c1"># start the cloud queue server</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_cloud_queue_server</span><span class="p">(</span><span class="n">cq_port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_port</span><span class="p">,</span> <span class="n">library_path</span><span class="o">=</span><span class="s2">&quot;/audiobooks&quot;</span><span class="p">,</span>
+                                      <span class="n">containersPath</span><span class="o">=</span><span class="s2">&quot;containers/v1&quot;</span><span class="p">,</span>
+                                      <span class="n">endpoint_version</span><span class="o">=</span><span class="mf">2.1</span><span class="p">,</span> <span class="n">partnerApiKey</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">apiKey</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl.tearDownTest"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">smapi_ctl</span><span class="o">.</span><span class="n">stop_node_smapi_server</span><span class="p">(</span><span class="n">smapi_server</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">smapi</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_cloud_queue_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_port</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">host_port</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span> <span class="o">+</span> <span class="mi">1</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTestsImpl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTestsImpl.test_api_key_in_CQ_header"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTestsImpl.test_api_key_in_CQ_header">[docs]</a>    <span class="k">def</span> <span class="nf">test_api_key_in_CQ_header</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">test_zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_duplicate_players</span><span class="p">:</span>
+            <span class="c1"># set base class zp to the next one. This helps with failures so the right ZP anacapa logs</span>
+            <span class="c1"># get generated</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="n">test_zp</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Running tests against </span><span class="si">{}</span><span class="s2"> (</span><span class="si">{}</span><span class="s2">)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">test_zp</span><span class="o">.</span><span class="n">friendly_name</span><span class="p">,</span> <span class="n">test_zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_test_apikey_in_CQ_header</span><span class="p">(</span><span class="n">target_zp</span><span class="o">=</span><span class="n">test_zp</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_test_apikey_in_CQ_header</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Creates CloudQueue server and issues &#39;creates session&#39; with matched accountId.</span>
+<span class="sd">        Verifies CloudQueue server will only work when account is specified that contains APIKey in Manifest</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_anacapa_trace</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">()</span>
+
+        <span class="n">accounts</span> <span class="o">=</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">get_service_accounts</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accounts</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span>
+                              <span class="s2">&quot;Expect no accounts in the household (1). There are </span><span class="si">{}</span><span class="s2"> accounts in the household.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">accounts</span><span class="p">)))</span>
+
+        <span class="n">manifest_rs_version</span> <span class="o">=</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_music_service_manifests_version</span><span class="p">()</span>
+
+        <span class="n">museConnection</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="n">target_zp</span><span class="p">)</span>
+
+        <span class="c1"># Attempt to match new mockSMAPI account - this should always create an account because</span>
+        <span class="c1"># we remove all accounts at the end of this function.</span>
+        <span class="n">resp_msg</span> <span class="o">=</span> <span class="n">museConnection</span><span class="o">.</span><span class="n">ms_accounts</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">user_hash</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">nickname</span><span class="o">=</span><span class="s2">&quot;service&quot;</span><span class="p">,</span>
+                                                         <span class="n">service_id</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">),</span> <span class="n">link_code</span><span class="o">=</span><span class="s2">&quot;MAGIC_LINK_CODE&quot;</span><span class="p">,</span>
+                                                         <span class="n">linkDeviceId</span><span class="o">=</span><span class="s2">&quot;MAGIC_LINK_DEVICE_ID&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">musicServiceAccountsEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">nickname</span> <span class="o">==</span> <span class="s2">&quot;NICKNAME&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">service</span><span class="o">.</span><span class="n">id</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sid</span><span class="p">)</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">userIdHashCode</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">isGuest</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">accountId</span> <span class="o">=</span> <span class="n">resp_msg</span><span class="o">.</span><span class="n">id</span>
+
+        <span class="c1"># wait for guest account update to replicate throughout the system</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting for replication....&quot;</span><span class="p">)</span>
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_account_settings</span><span class="p">()</span>
+        <span class="c1"># target_zp.settings.sync_music_service_manifests(expected_ver=manifest_rs_version+1)</span>
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_music_service_manifests</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;... replication done&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Sanity check that the manifest end-point is valid</span>
+        <span class="n">manifest_get_uri</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/manifest&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">smapi_ctl</span><span class="o">.</span><span class="n">host_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_port</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">manifest_get_uri</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span>
+                                 <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">manifest_get_uri</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span> <span class="o">!=</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting until manifest hosted on Node_SMAPI returns something&quot;</span><span class="p">)</span>
+        <span class="n">contents</span> <span class="o">=</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">manifest_get_uri</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;manifest hosted on Node_SMAPI: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">contents</span><span class="p">))</span>
+        <span class="n">expected_manifest</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">contents</span><span class="p">)</span>
+        <span class="n">expected_apikeyzp</span> <span class="o">=</span> <span class="n">expected_manifest</span><span class="p">[</span><span class="s2">&quot;apiKey&quot;</span><span class="p">][</span><span class="s2">&quot;zp&quot;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">expected_apikeyzp</span><span class="p">),</span> <span class="mi">128</span><span class="p">,</span> <span class="s2">&quot;apiKey.zp exists in manifest source&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Verify manifest file has been replicated and is correct.</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_music_service_manifests</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span>
+                                 <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_music_service_manifests</span><span class="p">()</span> <span class="o">!=</span> <span class="s2">&quot;&quot;</span><span class="p">),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting until music service manifest returns something&quot;</span><span class="p">)</span>
+        <span class="n">manifest_rs</span> <span class="o">=</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_music_service_manifests</span><span class="p">()</span>
+        <span class="n">manifest</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">manifest_rs</span><span class="p">)</span>
+        <span class="n">entries</span> <span class="o">=</span> <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;manifests&quot;</span><span class="p">]</span>
+        <span class="n">manifest_rs_version</span> <span class="o">=</span> <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;version&quot;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">entries</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;Expect one manifest in the household for version </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">manifest_rs_version</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">:</span>
+            <span class="n">sid</span> <span class="o">=</span> <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;sid&quot;</span><span class="p">]</span>
+            <span class="n">actual_manifest</span> <span class="o">=</span> <span class="n">entry</span><span class="p">[</span><span class="s2">&quot;manifest&quot;</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="s2">&quot;X-MockSMAPI-ApiKey:David did not start the fire&quot;</span><span class="p">,</span> <span class="n">actual_manifest</span><span class="p">[</span><span class="s2">&quot;apiKey&quot;</span><span class="p">][</span><span class="s2">&quot;zp&quot;</span><span class="p">],</span> <span class="s2">&quot;Found expected apiKey&quot;</span><span class="p">)</span>
+
+        <span class="n">book_endpoint</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">book/</span><span class="si">{}</span><span class="s2">/&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span> <span class="n">AUDIOBOOK_OBJECT_ID</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Creating Session for account </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">accountId</span><span class="p">))</span>
+        <span class="n">groupId</span> <span class="o">=</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">app_id</span><span class="o">=</span><span class="s2">&quot;auto_new_session&quot;</span><span class="p">,</span> <span class="n">app_context</span><span class="o">=</span><span class="s2">&quot;one_time&quot;</span><span class="p">,</span>
+                                  <span class="n">accountId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">accountId</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Session created: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                    <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                    <span class="n">queue_base_url</span><span class="o">=</span><span class="n">book_endpoint</span><span class="p">,</span>
+                                    <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                                    <span class="n">httpAuthorization</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;subscribe playback gid=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">groupId</span><span class="p">))</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">playback</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="c1"># Play, wait and verify item 0 is playing</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">pause</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_paused</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PAUSED</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">skip_to_next</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                <span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PAUSED</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">target_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span> <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span><span class="p">)</span>
+
+
+        <span class="c1"># Playing is good indication that /context and /itemWindow worked correctly. However, we still need to check</span>
+        <span class="c1"># for /timePlayed and /version</span>
+        <span class="n">cq_logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="s1">&#39;api&#39;</span><span class="p">,</span>
+                                                        <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/book/bk1/version&#39;</span> <span class="ow">and</span>
+                                                                      <span class="n">l</span><span class="p">[</span><span class="s1">&#39;headers&#39;</span><span class="p">][</span>
+                                                                          <span class="s1">&#39;x-mocksmapi-apikey&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;David did not start the fire&#39;</span><span class="p">),</span>
+                                                        <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                                        <span class="n">expected</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">cq_logs</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;was apiKey sent to /version?&quot;</span><span class="p">)</span>
+
+        <span class="n">cq_logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="s1">&#39;api&#39;</span><span class="p">,</span>
+                                                        <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/book/bk1/timePlayed&#39;</span> <span class="ow">and</span>
+                                                                      <span class="n">l</span><span class="p">[</span><span class="s1">&#39;headers&#39;</span><span class="p">][</span>
+                                                                          <span class="s1">&#39;x-mocksmapi-apikey&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;David did not start the fire&#39;</span><span class="p">),</span>
+                                                        <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                                        <span class="n">expected</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">cq_logs</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;was apiKey sent to /timePlayed&quot;</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">playback</span><span class="o">.</span><span class="n">unsubscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">unsubscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+
+        <span class="c1">#</span>
+        <span class="c1"># Now create a session without a matched account and expect it to fail because the CQ server expects the api key</span>
+        <span class="c1">#</span>
+        <span class="n">book_endpoint</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">book/</span><span class="si">{}</span><span class="s2">/&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span> <span class="n">NEG_TEST_AUDIOBOOK_OBJECT_ID</span><span class="p">)</span>
+
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Running test without match account&quot;</span><span class="p">)</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">app_id</span><span class="o">=</span><span class="s2">&quot;auto_new_session&quot;</span><span class="p">,</span> <span class="n">app_context</span><span class="o">=</span><span class="s2">&quot;one_time&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Session created: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;subscribe playback gid=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">groupId</span><span class="p">))</span>
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">playback</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                    <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                    <span class="n">queue_base_url</span><span class="o">=</span><span class="n">book_endpoint</span><span class="p">,</span>
+                                    <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+
+        <span class="n">museConnection</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">groupId</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="n">target_zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="n">museConnection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackErrorEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">museConnection</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="s2">&quot;ERROR_PLAYBACK_NO_CONTENT&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">reason</span> <span class="o">==</span> <span class="s2">&quot;ERROR_NO_CONTENT&quot;</span><span class="p">))</span>
+
+        <span class="c1"># We are done with this zp, clear its play state, remove accounts and wait so the next</span>
+        <span class="c1"># model ZP gets to do the same test.</span>
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">target_zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">remove_all_service_accounts</span><span class="p">(),</span> <span class="s2">&quot;Removed all service accounts&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting for replication(2)....&quot;</span><span class="p">)</span>
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_account_settings</span><span class="p">()</span>
+        <span class="n">target_zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">sync_music_service_manifests</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;... replication(2) done&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Closing muse connection&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="n">museConnection</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueAPIKeyTests"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_apikey_headers.CloudQueueAPIKeyTests">[docs]</a><span class="k">class</span> <span class="nc">CloudQueueAPIKeyTests</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTestsImpl</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_CQ&#39;</span><span class="p">]</span></div>
+
+<span class="c1"># section:main</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="c1"># section: suite</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">CloudQueueAPIKeyTests</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="n">log_level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">CloudQueueAPIKeyTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

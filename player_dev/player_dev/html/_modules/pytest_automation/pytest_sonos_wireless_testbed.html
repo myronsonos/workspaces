@@ -1,0 +1,239 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.pytest_sonos_wireless_testbed &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.pytest_sonos_wireless_testbed</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Pytest plugin to manage Wireless (MCS9) testbed operations.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.mixins</span> <span class="k">import</span> <span class="p">(</span><span class="n">SerialPortSupportMixin</span><span class="p">,</span>
+                                   <span class="n">EthernetWireMixin</span><span class="p">,</span>
+                                   <span class="n">PowerOutletMixin</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="pytest_addoption"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.pytest_addoption">[docs]</a><span class="k">def</span> <span class="nf">pytest_addoption</span><span class="p">(</span><span class="n">parser</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wireless testbed command line arguments</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">wireless_testbed_ops</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">getgroup</span><span class="p">(</span><span class="s2">&quot;MCS9 Testbed Operations:&quot;</span><span class="p">)</span>
+    <span class="n">wireless_testbed_ops</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+        <span class="s2">&quot;--keep_unused_zones_powered_on&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;disable_unused_zones&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_false&quot;</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;By default, devices filtered by TESTBED_MODELS are powered &quot;</span>
+             <span class="s2">&quot;off. Passing this flag will prevent unused devices from being &quot;</span>
+             <span class="s2">&quot;powered down.&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="pytest_sessionstart"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.pytest_sessionstart">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">hookimpl</span><span class="p">(</span><span class="n">trylast</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">pytest_sessionstart</span><span class="p">(</span><span class="n">session</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Plugin entry point. This hook is called once after the UPnP framework</span>
+<span class="sd">    initiates, provided sonos_device_selection has been loaded already.</span>
+
+<span class="sd">    .. note::</span>
+
+<span class="sd">        This fixture requires managed ethernet, programmable power, and/or</span>
+<span class="sd">        a terminal server to be installed and configured in your testbed</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pytest</span><span class="p">,</span> <span class="s2">&quot;subnet&quot;</span><span class="p">):</span>
+        <span class="c1"># Stow away plugin context in .session</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">_wireless_testbed</span> <span class="o">=</span> <span class="n">WirelessTestbedPlugin</span><span class="p">(</span><span class="n">pytest</span><span class="o">.</span><span class="n">subnet</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="pytest_collection_modifyitems"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.pytest_collection_modifyitems">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">hookimpl</span><span class="p">(</span><span class="n">trylast</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">pytest_collection_modifyitems</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">items</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Plugin operation once test functions have been collected. Updates</span>
+<span class="sd">    the test config to make sure unused zone players have power turned off.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pytest</span><span class="p">,</span> <span class="s2">&quot;subnet&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">disable_unused_zones</span><span class="p">:</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">_wireless_testbed</span><span class="o">.</span><span class="n">power_off_unused_zones</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="pytest_sessionfinish"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.pytest_sessionfinish">[docs]</a><span class="k">def</span> <span class="nf">pytest_sessionfinish</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">exitstatus</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Re-enable any devices that were powered off during session teardown</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="s2">&quot;_wireless_testbed&quot;</span><span class="p">):</span>
+        <span class="n">session</span><span class="o">.</span><span class="n">_wireless_testbed</span><span class="o">.</span><span class="n">power_on_unused_zones</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="WirelessTestbedPlugin"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.WirelessTestbedPlugin">[docs]</a><span class="k">class</span> <span class="nc">WirelessTestbedPlugin</span><span class="p">(</span><span class="n">SerialPortSupportMixin</span><span class="p">,</span> <span class="n">EthernetWireMixin</span><span class="p">,</span>
+                            <span class="n">PowerOutletMixin</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extend subnet with managed power, Ethernet and serial by using existing</span>
+<span class="sd">    Workflow mixins.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">POWER_OFF_DELAY_SEC</span> <span class="o">=</span> <span class="mi">5</span>  <span class="c1"># Time required for a device to shutdown</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">subnet</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># Spoof &#39;subnet&#39; and &#39;execution_configuration&#39; members to simulate a</span>
+        <span class="c1"># workflow object. All three mixins expect these two members to exist:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span> <span class="o">=</span> <span class="n">subnet</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span> <span class="o">=</span> <span class="n">subnet</span><span class="o">.</span><span class="n">environment</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">conditionally_add_serial_ports_to_devices</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conditionally_add_managed_wires_to_devices</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conditionally_add_power_outlets_to_devices</span><span class="p">()</span>
+
+<div class="viewcode-block" id="WirelessTestbedPlugin.power_off_unused_zones"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.WirelessTestbedPlugin.power_off_unused_zones">[docs]</a>    <span class="k">def</span> <span class="nf">power_off_unused_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Power-off zones that aren&#39;t included in testbed, but are plugged</span>
+<span class="sd">        in to a programmable power outlet.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">env</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">env</span><span class="o">.</span><span class="n">testbed</span><span class="p">,</span> <span class="s2">&quot;power_outlets&quot;</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">pwr</span> <span class="ow">in</span> <span class="n">env</span><span class="o">.</span><span class="n">testbed</span><span class="o">.</span><span class="n">power_outlets</span><span class="p">:</span>
+                <span class="n">outlet_mappings</span> <span class="o">=</span> <span class="n">pwr</span><span class="o">.</span><span class="n">outlet_mapping</span><span class="o">.</span><span class="n">as_dict</span><span class="p">()</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+                <span class="k">for</span> <span class="n">serial</span><span class="p">,</span> <span class="n">port_map</span> <span class="ow">in</span> <span class="n">outlet_mappings</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">serial</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">env</span><span class="o">.</span><span class="n">get_test_bed_serial_numbers</span><span class="p">():</span>
+                        <span class="c1"># Power off all power outlet ports, including</span>
+                        <span class="c1"># cases where there are multiple labeled power outlets</span>
+                        <span class="c1"># mapped to one device</span>
+                        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">port_map</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                                <span class="p">{</span><span class="s2">&quot;obj&quot;</span><span class="p">:</span> <span class="n">pwr</span><span class="o">.</span><span class="n">managed_power_object</span><span class="p">,</span>
+                                 <span class="s2">&quot;port&quot;</span><span class="p">:</span> <span class="n">port_map</span><span class="p">})</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="k">for</span> <span class="n">port</span> <span class="ow">in</span> <span class="n">port_map</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+                                <span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                                    <span class="p">{</span><span class="s2">&quot;obj&quot;</span><span class="p">:</span> <span class="n">pwr</span><span class="o">.</span><span class="n">managed_power_object</span><span class="p">,</span>
+                                     <span class="s2">&quot;port&quot;</span><span class="p">:</span> <span class="n">port</span><span class="p">})</span>
+
+        <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;obj&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">off</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;port&quot;</span><span class="p">]),</span> <span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span><span class="p">)</span>
+
+        <span class="c1"># Some models stay alive for a few seconds, after power is removed</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span><span class="p">):</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">POWER_OFF_DELAY_SEC</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessTestbedPlugin.power_on_unused_zones"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_wireless_testbed.WirelessTestbedPlugin.power_on_unused_zones">[docs]</a>    <span class="k">def</span> <span class="nf">power_on_unused_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Bring unused zones back online by re-enabling AC power.&quot;&quot;&quot;</span>
+        <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">p</span><span class="p">:</span> <span class="n">p</span><span class="p">[</span><span class="s2">&quot;obj&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">on</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s2">&quot;port&quot;</span><span class="p">]),</span> <span class="bp">self</span><span class="o">.</span><span class="n">unused_zones</span><span class="p">)</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

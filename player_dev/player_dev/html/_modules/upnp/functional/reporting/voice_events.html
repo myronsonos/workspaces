@@ -1,0 +1,502 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.reporting.voice_events &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.reporting.voice_events</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="k">import</span> <span class="n">Event</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">gaierror</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">voice_util.voice_overlay</span> <span class="k">import</span> <span class="n">VoiceOverlay</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.event_reporting</span> <span class="k">import</span> <span class="n">EventReporting</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.usage_metrics</span> <span class="k">import</span> <span class="n">EVENT_TIME_FORMAT</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.usage_metrics_utils</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">is_numeric</span><span class="p">,</span>
+    <span class="n">is_float</span><span class="p">,</span>
+    <span class="n">is_boolean</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">voice.voice_end_to_end.voice_end_to_end_base</span> <span class="k">import</span> <span class="n">VoiceEndToEndBase</span>
+<span class="kn">from</span> <span class="nn">voice_util.wav_to_raw</span> <span class="k">import</span> <span class="n">WavToRaw</span>
+<span class="kn">from</span> <span class="nn">sonos.voice.constants</span> <span class="k">import</span> <span class="n">VoiceServices</span><span class="p">,</span> <span class="n">VoiceNicknames</span>
+
+<span class="n">VOICE_UPLOAD_EVENT_NAME</span> <span class="o">=</span> <span class="s1">&#39;voice&#39;</span>
+<span class="n">VOICETAP_WAV_PATH</span> <span class="o">=</span> <span class="s2">&quot;/Automation/voicetap/alexa_tests_wav/basic/&quot;</span>
+<span class="n">VOICETAP_WAV</span> <span class="o">=</span> <span class="s2">&quot;alexa_whats_the_weather.wav&quot;</span>
+<span class="n">VOICETAP_RAW</span> <span class="o">=</span> <span class="s2">&quot;alexa_whats_the_weather.raw&quot;</span>
+<span class="n">PLAYER_CONFIG_VOICE_KEYS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;num&#39;</span><span class="p">,</span> <span class="s1">&#39;ena&#39;</span><span class="p">]</span>
+<span class="c1"># This is taken from oc/zone/zoneplayer/sonos_ww_wrapper.cxx:get_sonos_ww_engine_type_str</span>
+<span class="n">WW_ENGINE_STR_CHOICES</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;amazon-pryon-lite&quot;</span><span class="p">,</span> <span class="s2">&quot;sensory&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="p">)</span>
+
+
+<div class="viewcode-block" id="VoiceEventReporting"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting">[docs]</a><span class="k">class</span> <span class="nc">VoiceEventReporting</span><span class="p">(</span><span class="n">EventReporting</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify voice event uploading on wake word detection.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;VOICE_EVENT_REPORTING&quot;</span><span class="p">]</span>
+    <span class="n">EXPECTED_VOICE_UPLOAD_KEYS</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s1">&#39;eventType&#39;</span><span class="p">,</span> <span class="s1">&#39;wwDirection&#39;</span><span class="p">,</span> <span class="s1">&#39;localSilence&#39;</span><span class="p">,</span> <span class="s1">&#39;service&#39;</span><span class="p">,</span> <span class="s1">&#39;dialogId&#39;</span><span class="p">,</span> <span class="s1">&#39;doneTime&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;opMs&#39;</span><span class="p">,</span> <span class="s1">&#39;samples&#39;</span><span class="p">,</span> <span class="s1">&#39;success&#39;</span><span class="p">,</span> <span class="s1">&#39;timeout&#39;</span><span class="p">,</span> <span class="s1">&#39;rcvdResponse&#39;</span><span class="p">,</span> <span class="s1">&#39;wwEngine&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;wwSensitivity&#39;</span><span class="p">,</span> <span class="s1">&#39;forced&#39;</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceEventReporting</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<div class="viewcode-block" id="VoiceEventReporting.generate_voice_zones"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.generate_voice_zones">[docs]</a>    <span class="k">def</span> <span class="nf">generate_voice_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Reformats the yield from unique generators.generate_testbed_unique_voice_capable_devices()</span>
+<span class="sd">        by placing the zone player objects inside a tuple. This is done meet the</span>
+<span class="sd">        requirements of parameterized_setup.</span>
+
+<span class="sd">        :return: a device with built in speakers in the testbed</span>
+<span class="sd">        :rtype: :obj:`tuple` of :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_unique_voice_capable_devices</span><span class="p">():</span>
+            <span class="k">yield</span> <span class="p">(</span><span class="n">zp</span><span class="p">,)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceEventReporting</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_voice_accounts</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Configuring voice account on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">VoiceEndToEndBase</span><span class="o">.</span><span class="n">configure_voice_account</span><span class="p">(</span><span class="n">VoiceEndToEndBase</span><span class="p">(),</span> <span class="n">zp</span><span class="p">)</span>
+            <span class="n">google_account</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">get_account</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">GOOGLE</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">google_account</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">google_account</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;ACTIVE&quot;</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">set_service_status</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">GOOGLE</span><span class="p">,</span> <span class="s2">&quot;INACTIVE&quot;</span><span class="p">)</span>
+
+            <span class="n">alexa_account</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">get_account</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">AMAZON</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">alexa_account</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">alexa_account</span><span class="o">.</span><span class="n">status</span> <span class="o">==</span> <span class="s2">&quot;INACTIVE&quot;</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">set_service_status</span><span class="p">(</span><span class="n">VoiceServices</span><span class="o">.</span><span class="n">AMAZON</span><span class="p">,</span> <span class="s2">&quot;ACTIVE&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                                 <span class="s2">&quot;Expect at least one voice enabled player in HH&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">save_ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">SAVE_ALL</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_reporting_subsystems</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_upload_event</span> <span class="o">=</span> <span class="n">Event</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.convert_wav_to_raw"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.convert_wav_to_raw">[docs]</a>    <span class="k">def</span> <span class="nf">convert_wav_to_raw</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">wav_path</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Convert wav tap file to raw for given zp type</span>
+<span class="sd">        :param zp: Sonos zone component for which to get voicetap url</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str wav_path: Full path of wav file</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Converting wav to raw voicetap for model: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+        <span class="n">raw_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">wav_path</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">converter</span> <span class="o">=</span> <span class="n">WavToRaw</span><span class="p">(</span><span class="n">infile</span><span class="o">=</span><span class="n">wav_path</span><span class="p">,</span>
+                             <span class="n">outfile_name</span><span class="o">=</span><span class="n">raw_path</span> <span class="o">+</span> <span class="s1">&#39;.raw&#39;</span><span class="p">,</span>
+                             <span class="n">num_mics</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_num_mics</span><span class="p">(),</span>
+                             <span class="n">num_dacs</span><span class="o">=</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_num_dacs</span><span class="p">(),</span>
+                             <span class="n">overwrite</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">converter</span><span class="o">.</span><span class="n">convert</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.get_voicetap"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.get_voicetap">[docs]</a>    <span class="k">def</span> <span class="nf">get_voicetap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Copy voicetap from NAS</span>
+<span class="sd">        :param str resource_path: Location where voicetap is stored locally.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Getting </span><span class="si">{}</span><span class="s2"> from </span><span class="si">{}</span><span class="s2">&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">VOICETAP_WAV</span><span class="p">,</span> <span class="n">VOICETAP_WAV_PATH</span><span class="p">))</span>
+        <span class="n">wav_path</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">resource_path</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">resource_path</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="n">sftp</span><span class="o">.</span><span class="n">chdir</span><span class="p">(</span><span class="n">VOICETAP_WAV_PATH</span><span class="p">)</span>
+            <span class="n">voicetaps</span> <span class="o">=</span> <span class="n">sftp</span><span class="o">.</span><span class="n">listdir</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;Available taps on nas : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">voicetaps</span><span class="p">))</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">tap</span> <span class="ow">in</span> <span class="n">voicetaps</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">tap</span> <span class="o">==</span> <span class="n">VOICETAP_WAV</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Copying tap: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tap</span><span class="p">))</span>
+                        <span class="n">src</span> <span class="o">=</span> <span class="n">VOICETAP_WAV_PATH</span> <span class="o">+</span> <span class="n">tap</span>
+                        <span class="n">dst</span> <span class="o">=</span> <span class="n">resource_path</span> <span class="o">+</span> <span class="n">VOICETAP_WAV</span>
+                        <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">src</span><span class="p">,</span> <span class="n">dst</span><span class="p">)</span>
+                        <span class="n">wav_path</span> <span class="o">=</span> <span class="n">dst</span>
+            <span class="k">except</span> <span class="ne">IOError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Required tap not available&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Wav path: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">wav_path</span><span class="p">))</span>
+            <span class="k">return</span> <span class="n">wav_path</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.get_voicetap_url"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.get_voicetap_url">[docs]</a>    <span class="k">def</span> <span class="nf">get_voicetap_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get voicetap file url after hosting on web server</span>
+<span class="sd">        :param zp: Sonos zone component for which to get voicetap url</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return str url: Voice tap file url</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">local_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="n">resource_path</span> <span class="o">=</span> <span class="n">local_path</span> <span class="o">+</span> <span class="s1">&#39;/resource/&#39;</span>
+        <span class="n">wav_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap</span><span class="p">(</span><span class="n">resource_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">convert_wav_to_raw</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wav_path</span><span class="p">)</span>
+        <span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">()</span>
+        <span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="mi">9000</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">VOICETAP_RAW</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">url</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceEventReporting</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_diagcs</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voicep&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voiceupl&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voictrlr&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.set_diagcs"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.set_diagcs">[docs]</a>    <span class="k">def</span> <span class="nf">set_diagcs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set diagcs on dut</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voicep&#39;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voiceupl&#39;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s1">&#39;voictrlr&#39;</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.wait_for_voicetap_eof"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.wait_for_voicetap_eof">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_voicetap_eof</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for voicetap playback to complete.</span>
+<span class="sd">        :return: True if diagnostic received else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">diag_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">watch_string</span> <span class="o">=</span> <span class="s1">&#39;input overlay file eof&#39;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch_string</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">watch_diag</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.register_voice_upload_msg"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.register_voice_upload_msg">[docs]</a>    <span class="k">def</span> <span class="nf">register_voice_upload_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create an event to monitor the upload message</span>
+<span class="sd">        :return: The event object that will monitor the</span>
+<span class="sd">        upload message event</span>
+<span class="sd">        :rtype: :obj:`Event`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_upload_event</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="s2">&quot;handleUploadFinished&quot;</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_upload_event</span><span class="o">.</span><span class="n">set</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.wait_for_voice_upload"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.wait_for_voice_upload">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_voice_upload</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mf">10.0</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_upload_event</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_upload_event</span><span class="o">.</span><span class="n">isSet</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.verify_all_voiceupload_entries_present"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.verify_all_voiceupload_entries_present">[docs]</a>    <span class="k">def</span> <span class="nf">verify_all_voiceupload_entries_present</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">entries</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify all entries are present from expected voice entries.</span>
+<span class="sd">        :param list entries: List of expect voice entries.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">keys</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="p">[</span><span class="n">keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">)</span> <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">]</span>
+        <span class="n">key_status</span> <span class="o">=</span> <span class="p">[</span><span class="n">key</span> <span class="ow">in</span> <span class="n">keys</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">EXPECTED_VOICE_UPLOAD_KEYS</span><span class="p">]</span>
+        <span class="n">missing</span> <span class="o">=</span> <span class="p">[</span><span class="n">key</span> <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">status</span>
+                   <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EXPECTED_VOICE_UPLOAD_KEYS</span><span class="p">,</span> <span class="n">key_status</span><span class="p">)</span>
+                   <span class="k">if</span> <span class="ow">not</span> <span class="n">status</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Missing entry key in voice uploader report </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">missing</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="nb">all</span><span class="p">(</span><span class="n">key_status</span><span class="p">),</span>
+                              <span class="s2">&quot;Expect all known entry keys: </span><span class="si">{}</span><span class="s2"> to be present&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EXPECTED_VOICE_UPLOAD_KEYS</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.validate_voiceupload_entries"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.validate_voiceupload_entries">[docs]</a>    <span class="k">def</span> <span class="nf">validate_voiceupload_entries</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">entries</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify entry values for each entry in voice event</span>
+<span class="sd">        :param list entries: List of voice entries found in event.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">:</span>
+            <span class="n">fail</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="k">if</span> <span class="s1">&#39;wwd&#39;</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="ow">or</span> <span class="s1">&#39;win&#39;</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">is_float</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Not expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value other than float&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;service&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;avs1&#39;</span><span class="p">,</span> <span class="s1">&#39;avs2&#39;</span><span class="p">]</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value in [&#39;avs1&#39;, &#39;avs2&#39;]&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;opMs&#39;</span><span class="p">,</span> <span class="s1">&#39;wwDirection&#39;</span><span class="p">,</span> <span class="s1">&#39;samples&#39;</span><span class="p">]:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">is_numeric</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Not expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value other than int type&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;localSilence&#39;</span><span class="p">,</span> <span class="s1">&#39;timeout&#39;</span><span class="p">,</span> <span class="s1">&#39;rcvdResponse&#39;</span><span class="p">]:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;false&#39;</span><span class="p">,</span> <span class="s1">&#39;true&#39;</span><span class="p">]</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value in [&#39;false&#39;, &#39;true&#39;]&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;success&#39;</span><span class="p">:</span>
+                <span class="c1"># store success for comparison to serviceCode</span>
+                <span class="n">success</span> <span class="o">=</span> <span class="kc">True</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s1">&#39;true&#39;</span> <span class="k">else</span> <span class="kc">False</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;false&#39;</span><span class="p">,</span> <span class="s1">&#39;true&#39;</span><span class="p">]</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value in [&#39;false&#39;, &#39;true&#39;]&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="c1"># Make sure the event time is parseable in the expected format</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;doneTime&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span>
+                    <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="n">EVENT_TIME_FORMAT</span><span class="p">),</span> <span class="p">(</span><span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="p">,))</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting date in format </span><span class="si">{}</span><span class="s2"> entry.value </span><span class="si">{}</span><span class="s2">&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">EVENT_TIME_FORMAT</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;dialogId&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting DUT SN (</span><span class="si">{}</span><span class="s2">) in entry.value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;eventType&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="s1">&#39;UtteranceUpload&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting entry.value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;serviceCode&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="n">success</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: should be 0 if success key is True, otherwise &quot;</span>
+                       <span class="s2">&quot;non-zero: entry.value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;wwEngine&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">WW_ENGINE_STR_CHOICES</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Expecting entry.value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;wwSensitivity&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">is_numeric</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Not expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value other than int type&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;forced&#39;</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">is_boolean</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Not expecting &#39;</span><span class="si">{}</span><span class="s2">&#39; value other than bool type&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">fail</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> not found in expected voice event keys: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">EXPECTED_VOICE_UPLOAD_KEYS</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="ow">not</span> <span class="n">fail</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.verify_serial_number_in_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.verify_serial_number_in_report">[docs]</a>    <span class="k">def</span> <span class="nf">verify_serial_number_in_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">cfg_rpt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the report is from dut serial</span>
+<span class="sd">        :param :class:`sonos.services.common.XMLAccessor`cfg_rpt:</span>
+<span class="sd">            Config report accessor object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># The format of the serial number in the report is</span>
+        <span class="c1"># &quot;aa-bb-cc-dd-ee-ff:X&quot; format.</span>
+        <span class="c1"># Modify the reported serial number in order</span>
+        <span class="c1"># to compare with internal expected serial number</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> </span><span class="se">\&quot;</span><span class="si">{}</span><span class="se">\&quot;</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">cfg_rpt</span><span class="p">))</span>
+        <span class="n">temp</span> <span class="o">=</span> <span class="n">cfg_rpt</span><span class="p">[</span><span class="s1">&#39;sn&#39;</span><span class="p">]</span>
+        <span class="n">sn</span> <span class="o">=</span> <span class="n">temp</span><span class="p">[:</span><span class="n">temp</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">)]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;-&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="n">sn</span><span class="p">,</span> <span class="s2">&quot;Expect zone serial number in report&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.test_wwd_rate_eventing"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.test_wwd_rate_eventing">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_zones&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_wwd_rate_eventing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validate eventing on wake word detection</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span> <span class="o">=</span> <span class="n">VoiceOverlay</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap_url</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">register_voice_upload_msg</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">load_and_start_overlay</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">url</span><span class="p">)</span>
+        <span class="c1"># voice tap plays automatically once mic is turned on.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_voicetap_eof</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_voice_upload</span><span class="p">(),</span>
+            <span class="s2">&quot;Expect voice upload to succeed&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">flush_usage_metrics_events</span><span class="p">(),</span>
+            <span class="s2">&quot;Flushing events succeeded&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_name_in_reports</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">VOICE_UPLOAD_EVENT_NAME</span><span class="p">)</span>
+        <span class="n">voice_events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">find_names_in_reports</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">VOICE_UPLOAD_EVENT_NAME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">voice_events</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">&quot;Expect at least 1 voice upload event&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">voice_events</span><span class="p">:</span>
+            <span class="n">entries</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">entry</span>
+            <span class="k">if</span> <span class="n">entries</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;eventType&#39;</span> <span class="ow">and</span> <span class="n">entries</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="s1">&#39;UtteranceUpload&#39;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verify_all_voiceupload_entries_present</span><span class="p">(</span><span class="n">entries</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">validate_voiceupload_entries</span><span class="p">(</span><span class="n">entries</span><span class="p">,</span> <span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEventReporting.test_voice_info_in_player_config_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.voice_events.VoiceEventReporting.test_voice_info_in_player_config_report">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_voice_zones&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_voice_info_in_player_config_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify number of voice accounts and microphone enabled</span>
+<span class="sd">        information available in player config report.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span> <span class="o">=</span> <span class="n">VoiceOverlay</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_report</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">),</span>
+            <span class="s2">&quot;Received player config report from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">report</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">umh</span><span class="o">.</span><span class="n">get_reports</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="c1"># convert the XMLAccessor object to dictionary</span>
+            <span class="n">cfg_rpt</span> <span class="o">=</span> <span class="n">report</span><span class="o">.</span><span class="n">player_config_report</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> Expect a single player config report&quot;</span>
+                          <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="c1"># Verifier</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrFailCase</span><span class="p">(</span>
+            <span class="n">cfg_rpt</span><span class="p">,</span> <span class="s2">&quot;Expect voice element in player config report&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_serial_number_in_report</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">cfg_rpt</span><span class="p">)</span>
+        <span class="n">voice_accounts</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_service</span><span class="o">.</span><span class="n">get_accounts</span><span class="p">()</span>
+        <span class="n">mic_enabled</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_mic_on</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="nb">all</span><span class="p">([</span><span class="n">k</span> <span class="ow">in</span> <span class="n">cfg_rpt</span><span class="p">[</span><span class="s1">&#39;voice&#39;</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">PLAYER_CONFIG_VOICE_KEYS</span><span class="p">]),</span>
+            <span class="s2">&quot;Expect all keys to be present&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">cfg_rpt</span><span class="p">[</span><span class="s1">&#39;voice&#39;</span><span class="p">][</span><span class="s1">&#39;num&#39;</span><span class="p">])</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">voice_accounts</span><span class="p">),</span>
+            <span class="s2">&quot;Expect num voice account to match&quot;</span><span class="p">)</span>
+        <span class="c1"># Verify the names</span>
+        <span class="n">svcs</span> <span class="o">=</span> <span class="n">cfg_rpt</span><span class="p">[</span><span class="s1">&#39;voice&#39;</span><span class="p">][</span><span class="s1">&#39;svcs&#39;</span><span class="p">]</span>
+        <span class="n">voice_account_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">account</span><span class="o">.</span><span class="n">service</span> <span class="k">for</span> <span class="n">account</span> <span class="ow">in</span> <span class="n">voice_accounts</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">svc</span> <span class="ow">in</span> <span class="n">svcs</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">svc</span><span class="o">.</span><span class="n">name</span> <span class="ow">in</span> <span class="n">voice_account_names</span><span class="p">,</span>
+                <span class="s2">&quot;Expect voice service &#39;</span><span class="si">{}</span><span class="s2">&#39; in report&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">svc</span><span class="o">.</span><span class="n">name</span><span class="p">))</span>
+            <span class="n">ww_in_report</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="k">for</span> <span class="n">account</span> <span class="ow">in</span> <span class="n">voice_accounts</span><span class="p">:</span>
+                <span class="c1"># We&#39;re expecting either of these two engines</span>
+                <span class="c1"># where the wake word in the player config report</span>
+                <span class="c1"># is constructed.</span>
+                <span class="c1"># Taken from voicewakefilemanager.cxx:VoiceWakeFileManager::formatWakeFile</span>
+                <span class="k">if</span> <span class="n">svc</span><span class="o">.</span><span class="n">ww</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">result</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">ur</span><span class="s2">&quot;(\S+)\.(\d+)\.(\S+)_(\S+)&quot;</span><span class="p">,</span> <span class="n">svc</span><span class="o">.</span><span class="n">ww</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">result</span><span class="p">:</span>
+                        <span class="n">ww_in_report</span> <span class="o">=</span> <span class="kc">True</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">ww_in_report</span><span class="p">,</span> <span class="s2">&quot;The wakeword variant &quot;</span>
+                                              <span class="s2">&quot;should be included in the config report&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">cfg_rpt</span><span class="p">[</span><span class="s1">&#39;voice&#39;</span><span class="p">][</span><span class="s1">&#39;ena&#39;</span><span class="p">])</span> <span class="o">==</span> <span class="n">mic_enabled</span><span class="p">,</span>
+            <span class="s2">&quot;Expect mic info to match&quot;</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">VoiceEventReporting</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="c1"># suite.run([VoiceEventReporting()])</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">VoiceEventReporting</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

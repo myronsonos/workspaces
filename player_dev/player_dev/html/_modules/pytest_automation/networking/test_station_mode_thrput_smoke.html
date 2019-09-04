@@ -1,0 +1,347 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.networking.test_station_mode_thrput_smoke &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.networking.test_station_mode_thrput_smoke</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Pytest to run a quick smoke test throughput of a station mode DUT</span>
+
+<span class="sd">This test is intended to be on the cb-wifi-x testbeds which</span>
+<span class="sd">have exactly 1 ZP DUT (mediatek radio based) and 1 openWRT AP</span>
+<span class="sd">which are both in separate iso chambers.</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">metrics.metrics_json_file_writer</span> <span class="k">import</span> <span class="n">MetricsJsonFileWriter</span>
+<span class="kn">from</span> <span class="nn">metrics.metrics_wifi_throughput_collector</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">WifiThroughputMetricsCollector</span><span class="p">)</span>
+
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s1">&#39;station_mode_network&#39;</span><span class="p">)</span>
+
+<span class="n">ITERATIONS</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">TRAFFIC_TIME_SEC</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="n">WAIT_FOR_TX_RATE_STABLE</span> <span class="o">=</span> <span class="mi">60</span>  <span class="c1"># make sure DUT has reached max TX rate 24 mbps</span>
+
+<span class="n">PASSING_MBPS_11G_RX</span> <span class="o">=</span> <span class="mf">18.0</span>
+<span class="n">PASSING_MBPS_11G_TX</span> <span class="o">=</span> <span class="mf">12.5</span>
+<span class="n">UDP_BANDWIDTH_11G_RX</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">UDP_BANDWIDTH_11G_TX</span> <span class="o">=</span> <span class="mi">14</span>
+<span class="n">UDP_BANDWIDTH_11N</span> <span class="o">=</span> <span class="mi">130</span>  <span class="c1"># MCS15 theoretical max</span>
+
+<span class="n">MCS_RATE_VS_PASSING_THRPUT</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;MCS 0&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 1&quot;</span><span class="p">:</span> <span class="mf">5.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 2&quot;</span><span class="p">:</span> <span class="mf">8.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 3&quot;</span><span class="p">:</span> <span class="mf">12.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 4&quot;</span><span class="p">:</span> <span class="mf">20.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 5&quot;</span><span class="p">:</span> <span class="mf">22.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 6&quot;</span><span class="p">:</span> <span class="mf">25.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 7&quot;</span><span class="p">:</span> <span class="mf">30.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 8&quot;</span><span class="p">:</span> <span class="mf">5.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 9&quot;</span><span class="p">:</span> <span class="mf">12.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 10&quot;</span><span class="p">:</span> <span class="mf">15.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 11&quot;</span><span class="p">:</span> <span class="mf">20.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 12&quot;</span><span class="p">:</span> <span class="mf">30.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 13&quot;</span><span class="p">:</span> <span class="mf">45.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 14&quot;</span><span class="p">:</span> <span class="mf">48.0</span><span class="p">,</span>
+    <span class="s2">&quot;MCS 15&quot;</span><span class="p">:</span> <span class="mf">50.0</span>
+<span class="p">}</span>
+
+
+<div class="viewcode-block" id="tput_dut"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.tput_dut">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">tput_dut</span><span class="p">(</span><span class="n">a_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Prepare the DUT for throughput testing</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">has_mic</span> <span class="o">=</span> <span class="n">a_device</span><span class="o">.</span><span class="n">is_dhuez</span><span class="p">()</span>  <span class="c1"># Restrict this to Alpine for now</span>
+
+    <span class="k">if</span> <span class="n">has_mic</span><span class="p">:</span>
+        <span class="n">a_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">(</span><span class="n">via_proc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">a_device</span>
+
+    <span class="k">if</span> <span class="n">has_mic</span><span class="p">:</span>
+        <span class="n">a_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mute_mic</span><span class="p">(</span><span class="n">via_proc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="metric_collector"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.metric_collector">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">metric_collector</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SumoLogic Metrics Collector fixture</span>
+
+<span class="sd">    .. note::</span>
+
+<span class="sd">        This metrics collector is specific to this test, therefore, the</span>
+<span class="sd">        corresponding fixture is located locally as opposed to conftest.py</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">WifiThroughputMetricsCollector</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="submit_throughput_metrics"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.submit_throughput_metrics">[docs]</a><span class="k">def</span> <span class="nf">submit_throughput_metrics</span><span class="p">(</span><span class="n">collector</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">iteration</span><span class="p">,</span> <span class="n">zone</span><span class="p">,</span> <span class="n">sta_info</span><span class="p">,</span>
+                              <span class="n">throughput_mbps</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Submit AP and client metrics to SumoLogic</span>
+
+<span class="sd">    :param collector: Wi-Fi metrics collector instance</span>
+<span class="sd">    :type collector: :class:`~metrics.metrics_wifi_throughput_collector.</span>
+<span class="sd">        WifiThroughputMetricsCollector`</span>
+<span class="sd">    :param test_name: Test name</span>
+<span class="sd">    :type test_name: :obj:`str`</span>
+<span class="sd">    :param iteration: Test iteration</span>
+<span class="sd">    :type iteration: :obj:`int`</span>
+<span class="sd">    :param zone: Sonos zone component</span>
+<span class="sd">    :type zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param: sta_info: client info parsed from iw wlanX station dump</span>
+<span class="sd">    :type: sta_info: :param:data:`StaInfo` :class:`collections.namedtuple`</span>
+<span class="sd">    :param: throughput_mbps: Results from throughput test</span>
+<span class="sd">    :type: throughput_mbps: :obj:`float`</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">metrics</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">metrics_writer</span> <span class="o">=</span> <span class="n">MetricsJsonFileWriter</span><span class="p">(</span><span class="s1">&#39;wifi_throughput.json&#39;</span><span class="p">)</span>
+
+    <span class="n">sta_info_parsers</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;rssi_ap&quot;</span><span class="p">:</span> <span class="p">(</span><span class="sa">r</span><span class="s1">&#39;^([\d\-\.]+)&#39;</span><span class="p">,</span> <span class="n">sta_info</span><span class="o">.</span><span class="n">signal_avg</span><span class="p">),</span>
+        <span class="s2">&quot;expected_mbps&quot;</span><span class="p">:</span> <span class="p">(</span><span class="sa">r</span><span class="s1">&#39;([\d\.]+)Mbps&#39;</span><span class="p">,</span> <span class="n">sta_info</span><span class="o">.</span><span class="n">expected_throughput</span><span class="p">),</span>
+        <span class="s2">&quot;tx_rate_mbps&quot;</span><span class="p">:</span> <span class="p">(</span><span class="sa">r</span><span class="s1">&#39;([\d\.]+) MBit/s&#39;</span><span class="p">,</span> <span class="n">sta_info</span><span class="o">.</span><span class="n">tx_bitrate</span><span class="p">),</span>
+        <span class="s2">&quot;rx_rate_mbps&quot;</span><span class="p">:</span> <span class="p">(</span><span class="sa">r</span><span class="s1">&#39;([\d\.]+) MBit/s&#39;</span><span class="p">,</span> <span class="n">sta_info</span><span class="o">.</span><span class="n">rx_bitrate</span><span class="p">)</span>
+    <span class="p">}</span>
+
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;test_iteration&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">iteration</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;throughput_mbps&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">throughput_mbps</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;channel&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">zone</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_ath_status</span><span class="p">()</span><span class="o">.</span><span class="n">operating_channel</span>
+    <span class="n">metrics</span><span class="p">[</span><span class="s1">&#39;model_number&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">zone</span><span class="o">.</span><span class="n">modelNumber</span>
+
+    <span class="c1"># Add metrics from AP station dump (iw wlanX station dump)</span>
+    <span class="k">for</span> <span class="n">metric_name</span><span class="p">,</span> <span class="n">parser</span> <span class="ow">in</span> <span class="n">sta_info_parsers</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+        <span class="n">regex</span><span class="p">,</span> <span class="n">str_val</span> <span class="o">=</span> <span class="n">parser</span>
+        <span class="n">m</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">regex</span><span class="p">,</span> <span class="n">str_val</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">m</span><span class="p">:</span>
+            <span class="n">metrics</span><span class="p">[</span><span class="n">metric_name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+
+    <span class="c1"># Clean up test name to make it more SumoLogic-friendly</span>
+    <span class="n">test_name</span> <span class="o">=</span> <span class="n">test_name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">,</span> <span class="s1">&#39;_&#39;</span><span class="p">)</span>
+    <span class="n">test_name</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;test_(.+)\[(.+)\]&#39;</span><span class="p">,</span> <span class="sa">r</span><span class="s1">&#39;wifi_tput_\1_\2&#39;</span><span class="p">,</span> <span class="n">test_name</span><span class="p">)</span>
+
+    <span class="n">collector</span><span class="o">.</span><span class="n">update_metrics</span><span class="p">(</span><span class="n">test_name</span><span class="p">,</span> <span class="n">metrics</span><span class="p">)</span>
+    <span class="n">collector</span><span class="o">.</span><span class="n">collect_metrics</span><span class="p">()</span>
+    <span class="n">metrics_writer</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">collector</span><span class="o">.</span><span class="n">metrics</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="get_bandwidth_passing_thrput"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.get_bandwidth_passing_thrput">[docs]</a><span class="k">def</span> <span class="nf">get_bandwidth_passing_thrput</span><span class="p">(</span><span class="n">ap</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">protocol</span><span class="o">=</span><span class="s1">&#39;tcp&#39;</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to get udp bandwidth and what the</span>
+<span class="sd">    pass/fail number should for the traffic test</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">stations</span> <span class="o">=</span> <span class="n">ap</span><span class="o">.</span><span class="n">get_connected_stations</span><span class="p">()</span>
+    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="s2">&quot;MCS&quot;</span> <span class="ow">in</span> <span class="n">field</span> <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">stations</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">field</span><span class="p">)</span> <span class="o">==</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        11n capable DUT</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">protocol</span> <span class="o">==</span> <span class="s1">&#39;udp&#39;</span><span class="p">:</span>
+            <span class="n">bandwidth</span> <span class="o">=</span> <span class="n">UDP_BANDWIDTH_11N</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">bandwidth</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        if traffic direction is RX (i.e. AP -&gt; DUT), then we want to get</span>
+<span class="sd">        what data rate the AP is Tx&#39;ing to DUT.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">if</span> <span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;rx&#39;</span><span class="p">:</span>
+            <span class="n">check_field</span> <span class="o">=</span> <span class="s1">&#39;tx_bitrate&#39;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">check_field</span> <span class="o">=</span> <span class="s1">&#39;rx_bitrate&#39;</span>
+        <span class="n">data_rate</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">stations</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">check_field</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> from AP for DUT: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">check_field</span><span class="p">,</span> <span class="n">data_rate</span><span class="p">))</span>
+        <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="s2">&quot;MCS [0-9]+&quot;</span><span class="p">,</span> <span class="n">data_rate</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
+            <span class="n">data_rate</span> <span class="o">=</span> <span class="n">match</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">thrput</span> <span class="o">=</span> <span class="n">MCS_RATE_VS_PASSING_THRPUT</span><span class="p">[</span><span class="n">data_rate</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="s2">&quot;[0-9.]+&quot;</span><span class="p">,</span> <span class="n">data_rate</span><span class="p">)</span>
+            <span class="n">thrput</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">match</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="mi">3</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">bandwidth</span><span class="p">,</span> <span class="n">thrput</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="c1"># 11g DUT</span>
+        <span class="k">if</span> <span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;rx&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">UDP_BANDWIDTH_11G_RX</span><span class="p">,</span> <span class="n">PASSING_MBPS_11G_RX</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">UDP_BANDWIDTH_11G_TX</span><span class="p">,</span> <span class="n">PASSING_MBPS_11G_TX</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="run_throughput_test"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.run_throughput_test">[docs]</a><span class="k">def</span> <span class="nf">run_throughput_test</span><span class="p">(</span><span class="n">protocol</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">ap</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span>
+                        <span class="n">metric_collector</span><span class="p">,</span> <span class="n">speedtest</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Run a multi-iteration throughput test and submit results to SumoLogic</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">WAIT_FOR_TX_RATE_STABLE</span><span class="p">)</span>
+    <span class="n">thrput_res</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">passing_thrput</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="p">(</span><span class="n">bandwidth</span><span class="p">,</span> <span class="n">passing_thrput_Mbps</span><span class="p">)</span> <span class="o">=</span> <span class="n">get_bandwidth_passing_thrput</span><span class="p">(</span>
+        <span class="n">ap</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">protocol</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">ITERATIONS</span><span class="p">):</span>
+        <span class="n">thrput_Mbps</span> <span class="o">=</span> <span class="n">speedtest</span><span class="o">.</span><span class="n">start</span><span class="p">(</span>
+            <span class="n">dut</span><span class="p">,</span>
+            <span class="n">upstream</span><span class="o">=</span><span class="p">(</span><span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;tx&#39;</span><span class="p">),</span>
+            <span class="n">udp_bw_mbps</span><span class="o">=</span><span class="n">bandwidth</span><span class="p">,</span>
+            <span class="n">tcp</span><span class="o">=</span><span class="p">(</span><span class="n">protocol</span> <span class="o">==</span> <span class="s1">&#39;tcp&#39;</span><span class="p">),</span>
+            <span class="n">sec</span><span class="o">=</span><span class="n">TRAFFIC_TIME_SEC</span><span class="p">)</span>
+
+        <span class="n">station_dump</span> <span class="o">=</span> <span class="n">ap</span><span class="o">.</span><span class="n">get_connected_stations</span><span class="p">()</span>
+
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Trial </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">: station dump: </span><span class="si">{}</span><span class="s2">, mbps </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">i</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">station_dump</span><span class="p">,</span> <span class="n">thrput_Mbps</span><span class="p">))</span>
+
+        <span class="n">passing_thrput</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">passing_thrput_Mbps</span><span class="p">)</span>
+        <span class="n">thrput_res</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">thrput_Mbps</span><span class="p">)</span>
+
+        <span class="n">submit_throughput_metrics</span><span class="p">(</span>
+            <span class="n">metric_collector</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">station_dump</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">thrput_Mbps</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+        <span class="s2">&quot;==&gt; Throughput results </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> (Mbps): </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">protocol</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">thrput_res</span><span class="p">))</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">ITERATIONS</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">thrput_res</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">passing_thrput</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> \
+            <span class="s2">&quot;Thrput for trial </span><span class="si">{}</span><span class="s2"> did not pass&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_udp"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.test_udp">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span>
+    <span class="s2">&quot;direction&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="s1">&#39;rx&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;tx&#39;</span><span class="p">)],</span> <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;DUT RX&#39;</span><span class="p">,</span> <span class="s1">&#39;DUT TX&#39;</span><span class="p">])</span>
+<span class="k">def</span> <span class="nf">test_udp</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">ap</span><span class="p">,</span> <span class="n">tput_dut</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">metric_collector</span><span class="p">,</span> <span class="n">speedtest</span><span class="p">):</span>
+    <span class="n">run_throughput_test</span><span class="p">(</span>
+        <span class="s1">&#39;udp&#39;</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">ap</span><span class="p">,</span> <span class="n">tput_dut</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">metric_collector</span><span class="p">,</span>
+        <span class="n">speedtest</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_tcp"><a class="viewcode-back" href="../../../pytest_automation.networking.html#pytest_automation.networking.test_station_mode_thrput_smoke.test_tcp">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span>
+    <span class="s2">&quot;direction&quot;</span><span class="p">,</span> <span class="p">[(</span><span class="s1">&#39;rx&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;tx&#39;</span><span class="p">)],</span> <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;DUT RX&#39;</span><span class="p">,</span> <span class="s1">&#39;DUT TX&#39;</span><span class="p">])</span>
+<span class="k">def</span> <span class="nf">test_tcp</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">ap</span><span class="p">,</span> <span class="n">tput_dut</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">metric_collector</span><span class="p">,</span> <span class="n">speedtest</span><span class="p">):</span>
+    <span class="n">run_throughput_test</span><span class="p">(</span>
+        <span class="s1">&#39;udp&#39;</span><span class="p">,</span> <span class="n">request</span><span class="o">.</span><span class="n">node</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="n">ap</span><span class="p">,</span> <span class="n">tput_dut</span><span class="p">,</span> <span class="n">direction</span><span class="p">,</span> <span class="n">metric_collector</span><span class="p">,</span>
+        <span class="n">speedtest</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,818 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.test_cloudqueue_event_usage_metrics &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.test_cloudqueue_event_usage_metrics</h1><div class="highlight"><pre>
+<span></span><span class="ch">#!/usr/bin/env python2</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This tests that the player correctly reports PlayToSonos event based usage metrics when</span>
+<span class="sd">playing a cloud queue. These tests utilize the cloud queue mock server (for analyzing the</span>
+<span class="sd">report contents), player system overrides (to redirect the reports), and player testpoints.</span>
+
+<span class="sd">Testpoint info can be found here: https://confluence.sonos.com/x/rwFb</span>
+<span class="sd">testpoint in use:</span>
+
+<span class="sd">Players must support the muse websocket endpoint.</span>
+
+<span class="sd">Last modified for SWPBL-48747: Fix test_cloudqueue_event_usage_metrics test suite</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">SessionState</span><span class="p">,</span> <span class="n">SessionSuccessResponse</span><span class="p">)</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="p">(</span><span class="n">BaseMuseFixture</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                                           <span class="n">PlaybackErrorEvent</span><span class="p">,</span> <span class="n">PlaybackState</span><span class="p">,</span> <span class="n">Success</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics">[docs]</a><span class="k">class</span> <span class="nc">CloudQueueEventUsageMetrics</span><span class="p">(</span><span class="n">BaseMuseFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This suite tests Play To Sonos usage metric reporting. The expected output</span>
+<span class="sd">    is defined on Confluence, at: https://confluence.sonos.com/x/pJgqAw</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">EVENTMETRICS_URL_OVERRIDE</span> <span class="o">=</span> <span class="s2">&quot;O_EVENTMETRICS_URL&quot;</span>
+    <span class="n">TQUEUE_REPORTING_INTERVAL</span> <span class="o">=</span> <span class="mi">60</span>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.override_eventmetrics_url"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.override_eventmetrics_url">[docs]</a>    <span class="k">def</span> <span class="nf">override_eventmetrics_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Override the Event Metrics url to the specified value. Restart anacapa for the changes</span>
+<span class="sd">        to take effect</span>
+<span class="sd">        :param zp: The device under test</span>
+<span class="sd">        :type zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">url</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">url</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">usageMetrics&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE</span><span class="p">,</span> <span class="n">url</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">GetString</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE</span><span class="p">)</span> <span class="o">==</span> <span class="n">url</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                                    <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span>
+                                                    <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">my_item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">useragent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_useragent</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">)</span>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueEventUsageMetrics</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;zonereportmgr&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;reporting&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="c1"># turn off output truncation in self.verifyDictEqualOrFailCase</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">maxDiff</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="c1"># Set the UMTracking string to Report so that the player sends TPM reporting data. Automated testbeds are</span>
+        <span class="c1"># all registered but not necessarily opted in for data collection.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="s2">&quot;UMTracking&quot;</span><span class="p">,</span> <span class="s2">&quot;Report&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_cloud_queue_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_cq</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">override_eventmetrics_url</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="c1"># Workaround for SWPBL-59369</span>
+        <span class="n">logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/usageMetrics&#39;</span> <span class="ow">and</span>
+                                                                                 <span class="s1">&#39;PlayerConfigReport&#39;</span> <span class="ow">in</span> <span class="n">l</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">]),</span>
+                                                                   <span class="n">timeout</span><span class="o">=</span><span class="mi">90</span><span class="p">,</span> <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                                   <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">logs</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span>
+                                      <span class="s2">&quot;Wait until a UsageMetric report comes out before starting the suite&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">(</span><span class="s1">&#39;api&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueEventUsageMetrics</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.tearDownTest"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueEventUsageMetrics</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span>
+        <span class="c1"># Set the version poll rate while paused/playing to 3 seconds on the player</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;set_cloudqueue_poll_timers needs builds with testpoint support&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_cloudqueue_poll_timers</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                       <span class="n">playing_timer</span><span class="o">=</span><span class="mi">600</span><span class="p">,</span>
+                                                       <span class="n">paused_timer</span><span class="o">=</span><span class="mi">300</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">flush_usage_metrics_events</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">(</span><span class="s1">&#39;api&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudQueueEventUsageMetrics</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;zonereportmgr&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;reporting&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_cloud_queue_server</span><span class="p">()</span>
+        <span class="c1"># Remove the UMTracking value set during setup.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="s2">&quot;UMTracking&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">EVENTMETRICS_URL_OVERRIDE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_invoke_transport_error</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;Cannot run testpoint tests against builds without testpoint support&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">testpoint</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s1">&#39;chsrc.transport-error&#39;</span><span class="p">,</span> <span class="s1">&#39;trigger&#39;</span><span class="p">,</span>
+                                                <span class="nb">type</span><span class="o">=</span><span class="mi">17</span><span class="p">,</span> <span class="n">recoverable</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                                <span class="n">verifier</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">_verify_http_ok</span><span class="p">)</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">last_status_code</span> <span class="o">==</span> <span class="mi">200</span>
+        <span class="k">return</span> <span class="kc">False</span>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.get_base_event"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.get_base_event">[docs]</a>    <span class="k">def</span> <span class="nf">get_base_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_proto</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;pqid&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">muse_proto</span><span class="o">.</span><span class="n">session_id</span><span class="p">),</span>
+                <span class="s1">&#39;pqapp&#39;</span><span class="p">:</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">),</span>
+                <span class="s1">&#39;ptsapp&#39;</span><span class="p">:</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_api_key</span><span class="p">(</span><span class="n">muse_proto</span><span class="p">))}</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.get_common_expected_event_content"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.get_common_expected_event_content">[docs]</a>    <span class="k">def</span> <span class="nf">get_common_expected_event_content</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">expectedEventContent</span> <span class="o">=</span> <span class="p">{</span> <span class="s1">&#39;hhid&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">),</span>
+                                 <span class="s1">&#39;customerNumber&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">customer_id</span><span class="p">),</span>
+                                 <span class="s1">&#39;serialNumber&#39;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_serial_number</span><span class="p">()),</span>
+                                 <span class="s1">&#39;modelNumber&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="k">if</span> <span class="s1">&#39;ZP&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="k">else</span> <span class="s1">&#39;ZP&#39;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="p">}</span>
+        <span class="k">return</span> <span class="n">expectedEventContent</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.del_event_content"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.del_event_content">[docs]</a>    <span class="k">def</span> <span class="nf">del_event_content</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">evt</span><span class="p">,</span> <span class="n">keys</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">keys</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">:</span>
+                <span class="k">del</span> <span class="n">evt</span><span class="p">[</span><span class="n">k</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">evt</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.collect_usage_metric_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.collect_usage_metric_events">[docs]</a>    <span class="k">def</span> <span class="nf">collect_usage_metric_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">envelopes</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">filt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This function collects all of the &#39;name&#39; events from a list of usage</span>
+<span class="sd">        metric envelopes into a single envelope. This normalizes comparison</span>
+<span class="sd">        of when events are split up into different envelopes by the player.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Inspecting </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">envelopes</span><span class="p">))</span>
+        <span class="n">my_event_envelope</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">del_event_content</span><span class="p">(</span><span class="n">envelopes</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">filt</span><span class="p">)</span>
+        <span class="n">all_control_events</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">evt</span> <span class="ow">in</span> <span class="n">envelopes</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Adding event: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">evt</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">:</span>
+                <span class="n">all_control_events</span> <span class="o">=</span> <span class="n">all_control_events</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">evt</span><span class="p">[</span><span class="n">name</span><span class="p">])</span>
+
+        <span class="n">my_event_envelope</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">all_control_events</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Combined envelope: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">my_event_envelope</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">my_event_envelope</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.wait_for_error_usage_metric"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.wait_for_error_usage_metric">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_error_usage_metric</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait until the player sends the expected usage metric event</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_paused</span><span class="p">()</span> <span class="ow">or</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_stopped</span><span class="p">()),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackErrorEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.get_actual_event_content"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.get_actual_event_content">[docs]</a>    <span class="k">def</span> <span class="nf">get_actual_event_content</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+                                 <span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,</span> <span class="s1">&#39;largeSyncError&#39;</span><span class="p">,</span> <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;control&#39;</span><span class="p">,</span> <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">),</span>
+                                 <span class="n">targetId_param</span><span class="o">=</span><span class="s1">&#39;pqid&#39;</span><span class="p">,</span> <span class="n">targetId</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Gets the expected events and formats it so that the test cases can use it for comparison</span>
+<span class="sd">        :param timeout:</span>
+<span class="sd">        :param event:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">logs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="s1">&#39;api&#39;</span><span class="p">,</span>
+                                                     <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/usageMetrics&#39;</span> <span class="ow">and</span>
+                                                                   <span class="s1">&#39;UsageMetrics&#39;</span> <span class="ow">in</span> <span class="n">l</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">]),</span>
+                                                     <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                                                     <span class="n">flush</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">all_content</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">logs</span><span class="p">:</span>
+            <span class="c1"># This entire section is to take the output from the api log and</span>
+            <span class="c1"># format it to match the expected structure of the tests.</span>
+            <span class="n">content</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="n">content</span><span class="p">[</span><span class="s1">&#39;customerNumber&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;cu&#39;</span><span class="p">])</span>
+            <span class="n">content</span><span class="p">[</span><span class="s1">&#39;hhid&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;hh&#39;</span><span class="p">])</span>
+            <span class="n">content</span><span class="p">[</span><span class="s1">&#39;modelNumber&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;md&#39;</span><span class="p">])</span>
+            <span class="n">content</span><span class="p">[</span><span class="s1">&#39;serialNumber&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;sn&#39;</span><span class="p">])</span>
+
+            <span class="c1"># check for lost events</span>
+            <span class="k">if</span> <span class="s1">&#39;LostEvents&#39;</span> <span class="ow">in</span> <span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">]:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;The player dropped </span><span class="si">{}</span><span class="s2"> events&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;LostEvents&#39;</span><span class="p">]))</span>
+
+            <span class="c1"># Loops through each &#39;event&#39; in the report</span>
+            <span class="n">current_event_list</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;events&#39;</span><span class="p">][</span><span class="s1">&#39;event&#39;</span><span class="p">],</span> <span class="nb">list</span><span class="p">):</span>
+                <span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;events&#39;</span><span class="p">][</span><span class="s1">&#39;event&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;events&#39;</span><span class="p">][</span><span class="s1">&#39;event&#39;</span><span class="p">]]</span>
+            <span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="n">p</span><span class="p">[</span><span class="s1">&#39;body&#39;</span><span class="p">][</span><span class="s1">&#39;UsageMetrics&#39;</span><span class="p">][</span><span class="s1">&#39;events&#39;</span><span class="p">][</span><span class="s1">&#39;event&#39;</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="p">(</span><span class="s1">&#39;name&#39;</span> <span class="ow">in</span> <span class="n">e</span><span class="p">):</span>
+                    <span class="n">current_event_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current_event_list</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Wrapping current event </span><span class="si">{}</span><span class="s2"> to a list: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">current_event_list</span><span class="p">),</span>
+                                                                                   <span class="n">current_event_list</span><span class="p">))</span>
+                <span class="n">current_event_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">current_event_list</span><span class="p">,</span> <span class="p">]</span>
+            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">current_event_list</span><span class="p">:</span>
+                <span class="n">event_found</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="n">name</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="k">for</span> <span class="n">en</span> <span class="ow">in</span> <span class="n">x</span><span class="p">[</span><span class="s1">&#39;entry&#39;</span><span class="p">]:</span>
+                        <span class="k">if</span> <span class="n">en</span><span class="p">[</span><span class="s1">&#39;key&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;type&#39;</span><span class="p">:</span>
+                            <span class="n">name</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">en</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">])</span>
+                <span class="k">except</span> <span class="ne">TypeError</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Unexpected type for name (</span><span class="si">{}</span><span class="s2">) in: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="p">))</span>
+                    <span class="k">continue</span>
+
+                <span class="k">if</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">event</span><span class="p">:</span>
+                    <span class="n">entry</span> <span class="o">=</span> <span class="p">{}</span>
+                    <span class="c1"># Loops through each &#39;entry&#39; under an &#39;event&#39;</span>
+                    <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">x</span><span class="p">[</span><span class="s1">&#39;entry&#39;</span><span class="p">]:</span>
+                        <span class="c1"># Discard if the key has no associated value</span>
+                        <span class="k">if</span> <span class="s1">&#39;value&#39;</span> <span class="ow">in</span> <span class="n">y</span><span class="p">:</span>
+                            <span class="n">key</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">y</span><span class="p">[</span><span class="s1">&#39;key&#39;</span><span class="p">])</span>
+                            <span class="n">value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">y</span><span class="p">[</span><span class="s1">&#39;value&#39;</span><span class="p">])</span>
+                            <span class="c1"># Convert string playtime value to float then integer and</span>
+                            <span class="c1"># back to str to make sure we have a whole number</span>
+                            <span class="k">if</span> <span class="n">key</span> <span class="o">==</span> <span class="s1">&#39;ps&#39;</span><span class="p">:</span>
+                                <span class="n">value</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">value</span><span class="p">)))</span>
+
+                            <span class="n">entry</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+
+                    <span class="c1"># If pqid is not None, check that the id of the event matches</span>
+                    <span class="k">if</span> <span class="n">targetId</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">targetId_param</span> <span class="ow">in</span> <span class="n">entry</span> <span class="ow">and</span> <span class="n">targetId</span> <span class="ow">in</span> <span class="n">entry</span><span class="p">[</span><span class="n">targetId_param</span><span class="p">]:</span>
+                            <span class="n">event_found</span> <span class="o">=</span> <span class="kc">True</span>
+                        <span class="k">else</span><span class="p">:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Dropping event that does not match &quot;</span>
+                                <span class="s2">&quot;expected </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">targetId_param</span><span class="p">,</span> <span class="n">targetId</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
+                    <span class="c1"># Otherwise assume the entry belongs in the event</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">event_found</span> <span class="o">=</span> <span class="kc">True</span>
+
+                    <span class="c1"># Add the entry to the event if a match was found</span>
+                    <span class="k">if</span> <span class="n">event_found</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">content</span><span class="p">:</span>
+                            <span class="n">content</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+
+                        <span class="n">content</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">entry</span><span class="p">)</span>
+
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Dropping unwanted event </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
+
+            <span class="c1"># converts each event list to tuples to match expectedEvent data type format</span>
+            <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">event</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">content</span><span class="p">:</span>
+                    <span class="n">content</span><span class="p">[</span><span class="n">item</span><span class="p">]</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">content</span><span class="p">[</span><span class="n">item</span><span class="p">])</span>
+
+            <span class="n">all_content</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;all_content: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">all_content</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="o">.</span><span class="n">intersection</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">event</span><span class="p">)))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="n">all_content</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_large_sync_error_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_large_sync_error_events">[docs]</a>    <span class="k">def</span> <span class="nf">test_large_sync_error_events</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player reports large sync errors.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;Cannot run testpoint tests against builds without testpoint support&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;chsnk&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="c1"># (/7/6/16) Moving away from using the slowStream option on the mock CQ server,</span>
+        <span class="c1"># its not just reliable enough currently.</span>
+        <span class="c1"># self.set_cloud_queue_option([{&#39;name&#39;:&#39;slow&#39;, &#39;value&#39;:&#39;on&#39;}])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                                    <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">my_item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">)</span>
+
+        <span class="c1"># Use the testpoint to triggr a LSE</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">testpoint_trigger_lse</span><span class="p">()</span>
+
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for Large Sync Error (largeSyncError)&#39;</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+
+        <span class="n">expectedEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_common_expected_event_content</span><span class="p">()</span>
+        <span class="n">lse_event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_base_event</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">)</span>
+        <span class="n">lse_event</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;largeSyncError&#39;</span>
+        <span class="n">expectedEventContent</span><span class="p">[</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">lse_event</span><span class="p">,</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect at least one largeSyncError event&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">del_event_content</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="p">(</span><span class="s1">&#39;control&#39;</span><span class="p">,</span> <span class="s1">&#39;playback&#39;</span><span class="p">,</span> <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyDictEqualOrFailCase</span><span class="p">(</span><span class="n">expectedEventContent</span><span class="p">,</span> <span class="n">actualEventContent</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_playback_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_playback_events">[docs]</a>    <span class="k">def</span> <span class="nf">test_playback_events</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player reports playback events.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_playback</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                               <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">,</span>
+                               <span class="n">position_millis</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">get_track_duration_s</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">*</span> <span class="mi">1000</span> <span class="o">*</span> <span class="mf">0.9</span><span class="p">),</span>
+                               <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for playback events (playback)&#39;</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+
+        <span class="c1"># Check that at least one event arrived. This is just checking that events</span>
+        <span class="c1"># are generated with the correct format.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect at least one playback event&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">actualEventContent</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Inspecting </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">group</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">evt</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s1">&#39;playback&#39;</span><span class="p">]:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;ps&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;playback time&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;pqapp&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;private queue app&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;pqid&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;private queue id&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;ptsapp&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;play to sonos app&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;type&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;event type&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_playback_events_with_cq_refresh"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_playback_events_with_cq_refresh">[docs]</a>    <span class="k">def</span> <span class="nf">test_playback_events_with_cq_refresh</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player reports playback events.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_playback</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                               <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">,</span>
+                               <span class="n">position_millis</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">get_track_duration_s</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">*</span> <span class="mi">1000</span> <span class="o">*</span> <span class="mf">0.9</span><span class="p">),</span>
+                               <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">refresh_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionSuccessResponse</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for playback events (playback)&#39;</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+
+        <span class="c1"># Check that at least one event arrived. This is just checking that events</span>
+        <span class="c1"># are generated with the correct format.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect at least one playback event&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">actualEventContent</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Inspecting </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">group</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">evt</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s1">&#39;playback&#39;</span><span class="p">]:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;ps&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;playback time&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;pqapp&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;private queue app&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;pqid&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;private queue id&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;ptsapp&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;play to sonos app&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="s1">&#39;type&#39;</span> <span class="ow">in</span> <span class="n">evt</span><span class="p">,</span> <span class="s2">&quot;event type&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_transport_error_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_transport_error_events">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s2">&quot;SKip until we fix SWPBL-42269&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_transport_error_events</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player reports transport errors.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;Cannot run suite against players without testpoint support&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_playback</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_invoke_transport_error</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_error_usage_metric</span><span class="p">()</span>
+
+        <span class="n">expectedEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_common_expected_event_content</span><span class="p">()</span>
+        <span class="n">error_event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_base_event</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">)</span>
+        <span class="n">error_event</span><span class="p">[</span><span class="s1">&#39;http&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;-1&#39;</span>
+        <span class="n">expectedEventContent</span><span class="p">[</span><span class="s1">&#39;transportError&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">error_event</span><span class="p">,</span>
+
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;transportError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">del_event_content</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">,</span> <span class="p">(</span><span class="s1">&#39;playback&#39;</span><span class="p">,</span> <span class="s1">&#39;control&#39;</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyDictEqualOrFailCase</span><span class="p">(</span><span class="n">expectedEventContent</span><span class="p">,</span> <span class="n">actualEventContent</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span></div>
+        <span class="c1"># Remove the session_id so that tearDownTest doesn&#39;t try to leave the session</span>
+        <span class="c1"># leaveSession *might* fail because of the item window error.</span>
+        <span class="c1">#self.muse.session_id = None</span>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_muse_basic_control_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_muse_basic_control_events">[docs]</a>    <span class="k">def</span> <span class="nf">test_muse_basic_control_events</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that the player sends control events for:</span>
+<span class="sd">        * createSession</span>
+<span class="sd">        * leaveSessionExplicitly</span>
+<span class="sd">        * loadCloudQueue</span>
+<span class="sd">        * skipToItem</span>
+
+<span class="sd">        The following were added with SWPBL-63941</span>
+<span class="sd">        * skipToNext</span>
+<span class="sd">        * skipToPrevious</span>
+<span class="sd">        * seek</span>
+<span class="sd">        * pause</span>
+<span class="sd">        * play</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_playback</span><span class="p">()</span>
+
+        <span class="n">zp_udp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span>
+        <span class="n">create_session_event</span> <span class="o">=</span> <span class="s1">&#39;createSession&#39;</span>
+        <span class="n">load_cloud_queue_event</span> <span class="o">=</span> <span class="s1">&#39;loadCloudQueue&#39;</span>
+        <span class="n">skip_to_next_event</span> <span class="o">=</span> <span class="s1">&#39;skipToNextTrack&#39;</span>
+        <span class="n">skip_to_previous_event</span> <span class="o">=</span> <span class="s1">&#39;skipToPreviousTrack&#39;</span>
+        <span class="n">pause_event</span> <span class="o">=</span> <span class="s1">&#39;pause&#39;</span>
+        <span class="n">play_event</span> <span class="o">=</span> <span class="s1">&#39;play&#39;</span>
+        <span class="n">seek_event</span> <span class="o">=</span> <span class="s1">&#39;seek&#39;</span>
+        <span class="n">skip_to_item_event</span> <span class="o">=</span> <span class="s1">&#39;skipToItem&#39;</span>
+        <span class="n">leave_session_event</span> <span class="o">=</span> <span class="s1">&#39;leaveSession&#39;</span>
+        <span class="n">museCommandHandler_events</span> <span class="o">=</span> <span class="p">(</span><span class="n">create_session_event</span><span class="p">,</span>
+                                     <span class="n">load_cloud_queue_event</span><span class="p">,</span>
+                                     <span class="n">skip_to_next_event</span><span class="p">,</span>
+                                     <span class="n">skip_to_previous_event</span><span class="p">,</span>
+                                     <span class="n">pause_event</span><span class="p">,</span>
+                                     <span class="n">play_event</span><span class="p">,</span>
+                                     <span class="n">seek_event</span><span class="p">,</span>
+                                     <span class="n">skip_to_item_event</span><span class="p">,</span>
+                                     <span class="n">leave_session_event</span><span class="p">)</span>
+        <span class="n">create_event</span> <span class="o">=</span> <span class="s1">&#39;create&#39;</span>
+        <span class="n">leave_event</span> <span class="o">=</span> <span class="s1">&#39;leave&#39;</span>
+        <span class="n">end_event</span> <span class="o">=</span> <span class="s1">&#39;evict&#39;</span>
+        <span class="n">museSessionChange_events</span> <span class="o">=</span> <span class="p">(</span><span class="n">create_event</span><span class="p">,</span>
+                                    <span class="n">leave_event</span><span class="p">,</span>
+                                    <span class="n">end_event</span><span class="p">)</span>
+        <span class="n">event_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="n">museSessionChange_events</span><span class="p">,</span>
+                       <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="n">museCommandHandler_events</span><span class="p">}</span>
+        <span class="n">command_action_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="s2">&quot;action&quot;</span><span class="p">,</span>
+                                <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="s2">&quot;command&quot;</span><span class="p">}</span>
+        <span class="n">id_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="s2">&quot;sessionId&quot;</span><span class="p">,</span>
+                    <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="s2">&quot;targetId&quot;</span><span class="p">}</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_next</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_previous</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">pause</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span><span class="o">==</span><span class="n">PlaybackState</span><span class="o">.</span><span class="n">PAUSED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span><span class="o">==</span><span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                       <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span> <span class="n">position_millis</span><span class="o">=</span><span class="mi">15000</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span><span class="o">==</span><span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">position_millis</span> <span class="o">&gt;=</span> <span class="mi">15000</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                               <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">queue_version</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;2&#39;</span><span class="p">,</span>
+                               <span class="n">position_millis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;2&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">remove_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                                     <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="nb">type</span> <span class="ow">in</span> <span class="n">event_types</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="nb">type</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="n">zp_udp</span><span class="p">,</span>
+                                                                      <span class="n">targetId_param</span><span class="o">=</span><span class="n">id_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for control events (</span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">))</span>
+            <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="nb">type</span><span class="p">,),</span>
+                                                               <span class="n">targetId</span><span class="o">=</span><span class="n">zp_udp</span><span class="p">,</span>
+                                                               <span class="n">targetId_param</span><span class="o">=</span><span class="n">id_types</span><span class="p">[</span><span class="nb">type</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                                         <span class="s2">&quot;Expect at least one control event&quot;</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">myEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collect_usage_metric_events</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span>
+                                                           <span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,</span> <span class="s1">&#39;playback&#39;</span><span class="p">,</span>
+                                                            <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">))</span>
+                <span class="k">for</span> <span class="n">expected_event</span> <span class="ow">in</span> <span class="n">event_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]:</span>
+                    <span class="k">for</span> <span class="n">actual_event</span> <span class="ow">in</span> <span class="n">myEvent</span><span class="p">[</span><span class="nb">type</span><span class="p">]:</span>
+                        <span class="k">if</span> <span class="n">expected_event</span> <span class="o">==</span> <span class="n">actual_event</span><span class="p">[</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]]:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_event</span><span class="p">,</span> <span class="n">actual_event</span><span class="p">[</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]],</span>
+                                                       <span class="s2">&quot;Expected and actual event command should match&quot;</span><span class="p">)</span>
+                            <span class="k">break</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Did not find expected usage metrics event &quot;</span>
+                                  <span class="s2">&quot;after issuing command (</span><span class="si">{}</span><span class="s2">: &lt;</span><span class="si">{}</span><span class="s2">&gt;)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">],</span>
+                                                                            <span class="n">expected_event</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_muse_secondary_control_events"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_muse_secondary_control_events">[docs]</a>    <span class="k">def</span> <span class="nf">test_muse_secondary_control_events</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that the player sends control events for:</span>
+<span class="sd">        * leaveSessionImplicitly</span>
+<span class="sd">        * joinSession</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;muse&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_playback</span><span class="p">()</span>
+        <span class="n">other_muse</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">other_muse</span><span class="o">.</span><span class="n">join_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">other_muse</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">session_id</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">))</span>
+        
+        <span class="n">zp_udp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span>
+        <span class="n">join_session_event</span> <span class="o">=</span> <span class="s1">&#39;joinSession&#39;</span>
+        <span class="n">museCommandHandler_events</span> <span class="o">=</span> <span class="p">(</span><span class="n">join_session_event</span><span class="p">,)</span>
+        <span class="n">join_event</span> <span class="o">=</span> <span class="s2">&quot;join&quot;</span>
+        <span class="n">leave_event</span> <span class="o">=</span> <span class="s1">&#39;disconnect&#39;</span>
+        <span class="n">museSessionChange_events</span> <span class="o">=</span> <span class="p">(</span><span class="n">join_event</span><span class="p">,</span>
+                                    <span class="n">leave_event</span><span class="p">)</span>
+        <span class="n">event_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="n">museSessionChange_events</span><span class="p">,</span>
+                       <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="n">museCommandHandler_events</span><span class="p">}</span>
+        <span class="n">command_action_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="s2">&quot;action&quot;</span><span class="p">,</span>
+                                <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="s2">&quot;command&quot;</span><span class="p">}</span>
+        <span class="n">id_types</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;museSessionChange&quot;</span><span class="p">:</span> <span class="s2">&quot;sessionId&quot;</span><span class="p">,</span>
+                    <span class="s2">&quot;museCommandHandler&quot;</span><span class="p">:</span> <span class="s2">&quot;targetId&quot;</span><span class="p">}</span>
+
+        <span class="n">other_muse</span><span class="o">.</span><span class="n">skip_to_item</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">other_muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">queue_version</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">item_id</span><span class="o">=</span><span class="s1">&#39;2&#39;</span><span class="p">,</span>
+                                <span class="n">position_millis</span><span class="o">=</span><span class="mi">25000</span><span class="p">,</span> <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;2&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="n">other_muse</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="nb">type</span> <span class="ow">in</span> <span class="n">event_types</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="nb">type</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="n">zp_udp</span><span class="p">,</span>
+                                                                      <span class="n">targetId_param</span><span class="o">=</span><span class="n">id_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for control events (</span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">))</span>
+            <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="nb">type</span><span class="p">,),</span>
+                                                               <span class="n">targetId</span><span class="o">=</span><span class="n">zp_udp</span><span class="p">,</span>
+                                                               <span class="n">targetId_param</span><span class="o">=</span><span class="n">id_types</span><span class="p">[</span><span class="nb">type</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                                         <span class="s2">&quot;Expect at least one </span><span class="si">{}</span><span class="s2"> event&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">))</span>
+
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">myEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collect_usage_metric_events</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span>
+                                                           <span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,</span> <span class="s1">&#39;playback&#39;</span><span class="p">,</span>
+                                                            <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">))</span>
+                <span class="k">for</span> <span class="n">expected_event</span> <span class="ow">in</span> <span class="n">event_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]:</span>
+                    <span class="k">for</span> <span class="n">actual_event</span> <span class="ow">in</span> <span class="n">myEvent</span><span class="p">[</span><span class="nb">type</span><span class="p">]:</span>
+                        <span class="k">if</span> <span class="n">expected_event</span> <span class="o">==</span> <span class="n">actual_event</span><span class="p">[</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]]:</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_event</span><span class="p">,</span> <span class="n">actual_event</span><span class="p">[</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">]],</span>
+                                                       <span class="s2">&quot;Expected and actual event command should match&quot;</span><span class="p">)</span>
+                            <span class="k">break</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Did not find expected usage metrics event &quot;</span>
+                                  <span class="s2">&quot;after issuing command (</span><span class="si">{}</span><span class="s2">: &lt;</span><span class="si">{}</span><span class="s2">&gt;)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command_action_types</span><span class="p">[</span><span class="nb">type</span><span class="p">],</span>
+                                                                            <span class="n">expected_event</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_cloud_queue_error_events_itemwindow"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_cloud_queue_error_events_itemwindow">[docs]</a>    <span class="k">def</span> <span class="nf">test_cloud_queue_error_events_itemwindow</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that the player reports cloud queue errors on CQ getItemWindow failures</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Set the version poll rate while paused/playing to 3 seconds on the player</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;set_cloudqueue_poll_timers needs builds with testpoint support&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_cloudqueue_poll_timers</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                       <span class="n">playing_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                                                       <span class="n">paused_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;tpm&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="s2">&quot;reporting&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+
+        <span class="n">my_session_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">arm_error_script</span><span class="p">(</span><span class="n">call</span><span class="o">=</span><span class="s2">&quot;itemWindow&quot;</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="mi">401</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                                    <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">my_item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_error_usage_metric</span><span class="p">()</span>
+
+        <span class="n">expectedEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_common_expected_event_content</span><span class="p">()</span>
+        <span class="n">cq_error_event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_base_event</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">)</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;http&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;401&#39;</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;pqid&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">my_session_id</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;cloudQueueError&#39;</span>
+        <span class="n">expectedEventContent</span><span class="p">[</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">cq_error_event</span><span class="p">,</span>
+
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,),</span>
+                                                                  <span class="n">targetId</span><span class="o">=</span><span class="n">my_session_id</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for control events (cloudQueueError)&#39;</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="n">my_session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect at least one cloudQueueError event&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">myEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collect_usage_metric_events</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">,</span>
+                                                       <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,</span>
+                                                       <span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,</span> <span class="s1">&#39;playback&#39;</span><span class="p">,</span> <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;control&#39;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyDictEqualOrFailCase</span><span class="p">(</span><span class="n">expectedEventContent</span><span class="p">,</span> <span class="n">myEvent</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_cloud_queue_error_events_version"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_cloud_queue_error_events_version">[docs]</a>    <span class="k">def</span> <span class="nf">test_cloud_queue_error_events_version</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that the player reports cloud queue errors on CQ getVersion failures</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Set the version poll rate while paused/playing to 3 seconds on the player</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;set_cloudqueue_poll_timers needs builds with testpoint support&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_cloudqueue_poll_timers</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                       <span class="n">playing_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                                                       <span class="n">paused_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+        <span class="n">my_session_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">arm_error_script</span><span class="p">(</span><span class="n">call</span><span class="o">=</span><span class="s2">&quot;version&quot;</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="mi">401</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">my_item_id</span><span class="o">=</span><span class="s1">&#39;0&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_error_usage_metric</span><span class="p">()</span>
+
+        <span class="n">expectedEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_common_expected_event_content</span><span class="p">()</span>
+        <span class="n">cq_error_event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_base_event</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">)</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;http&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;401&#39;</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;pqid&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">my_session_id</span>
+        <span class="n">cq_error_event</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;cloudQueueError&#39;</span>
+        <span class="n">expectedEventContent</span><span class="p">[</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">cq_error_event</span><span class="p">,</span>
+
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="n">my_session_id</span><span class="p">))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span> <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for control events (cloudQueueError)&#39;</span><span class="p">)</span>
+        <span class="n">actualEventContent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,),</span> <span class="n">targetId</span><span class="o">=</span><span class="n">my_session_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Expect at least one cloudQueueError event&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">myEvent</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collect_usage_metric_events</span><span class="p">(</span><span class="n">actualEventContent</span><span class="p">,</span>
+                                                       <span class="s1">&#39;cloudQueueError&#39;</span><span class="p">,</span>
+                                                       <span class="p">(</span><span class="s1">&#39;largeSyncError&#39;</span><span class="p">,</span> <span class="s1">&#39;playback&#39;</span><span class="p">,</span> <span class="s1">&#39;transportError&#39;</span><span class="p">,</span> <span class="s1">&#39;control&#39;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyDictEqualOrFailCase</span><span class="p">(</span><span class="n">expectedEventContent</span><span class="p">,</span> <span class="n">myEvent</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetrics.test_interval_tq_reporting"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetrics.test_interval_tq_reporting">[docs]</a>    <span class="k">def</span> <span class="nf">test_interval_tq_reporting</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the player only sends a track queue size event to the</span>
+<span class="sd">        report uploader no more than once per reporting interval</span>
+<span class="sd">        (default 1 minute).</span>
+
+<span class="sd">        Multiple queue edits within 60 seconds will be combined into</span>
+<span class="sd">        a single event, which will not be reported until another</span>
+<span class="sd">        queue event occurs after the 60 second period.</span>
+
+<span class="sd">        See https://confluence.sonos.com/display/PDSW/Reporting+track+queue+summary+event-based+metrics</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Set the version poll rate while paused/playing to 3 seconds on the player</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_testpoint_support</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;set_cloudqueue_poll_timers needs builds with testpoint support&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">set_cloudqueue_poll_timers</span><span class="p">(</span><span class="n">zp</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span>
+                                                       <span class="n">playing_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                                                       <span class="n">paused_timer</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+        <span class="c1"># cleanup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue</span><span class="p">()</span>
+
+        <span class="c1"># Clear the api log</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">clear_log</span><span class="p">(</span><span class="s1">&#39;api&#39;</span><span class="p">)</span>
+
+        <span class="c1"># Perform various edit operations on the track (add, delete)</span>
+        <span class="c1"># First enqueue five tracks. (ehw=5)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enqueue_five_tracks_in_shared</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">track_source</span><span class="p">)</span>
+        <span class="c1"># Delete the first two (3 tracks left)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">RemoveTrackRangeFromQueue</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="c1"># Add one, the total number in the queue should be 4 (eu=4)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">track_source</span><span class="o">.</span><span class="n">generator_uri</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">())</span>
+
+        <span class="c1"># Sleep for the tqueue reporting interval + 20 second leeway to</span>
+        <span class="c1"># avoid race</span>
+        <span class="n">sec</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">TQUEUE_REPORTING_INTERVAL</span> <span class="o">+</span> <span class="mi">10</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Sleeping </span><span class="si">{}</span><span class="s2"> seconds to wait for reporting &quot;</span>
+            <span class="s2">&quot;interval to pass...&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sec</span><span class="p">))</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">sec</span><span class="p">)</span>
+
+        <span class="c1"># Add one track so the previous report is sent out.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">track_source</span><span class="o">.</span><span class="n">generator_uri</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">())</span>
+
+        <span class="c1"># Find the event</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;trackQueueSummary&#39;</span><span class="p">,)))</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Waiting for track queue summary events (trackQueueSummary)&#39;</span><span class="p">)</span>
+        <span class="n">event_content</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_actual_event_content</span><span class="p">(</span><span class="n">event</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;trackQueueSummary&#39;</span><span class="p">,))</span>
+
+        <span class="c1"># Makes ure we got at least one event</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">event_content</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;Expected number of UsageMetrics reports generated? (at least 1)&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">event_content</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="c1"># Collect fields from all UM events and find the trackQueueSummary field</span>
+            <span class="n">event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collect_usage_metric_events</span><span class="p">(</span><span class="n">event_content</span><span class="p">,</span> <span class="s1">&#39;trackQueueSummary&#39;</span><span class="p">,</span>
+                <span class="p">(</span><span class="s1">&#39;ehw&#39;</span><span class="p">,</span> <span class="s1">&#39;eu&#39;</span><span class="p">,</span> <span class="s1">&#39;strhw&#39;</span><span class="p">,</span> <span class="s1">&#39;stru&#39;</span><span class="p">))[</span><span class="s1">&#39;trackQueueSummary&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="c1"># Convert string fields into integers</span>
+            <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">event</span><span class="p">:</span>
+                <span class="n">event</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">event</span><span class="p">[</span><span class="n">key</span><span class="p">])</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="n">event</span><span class="p">[</span><span class="s1">&#39;ehw&#39;</span><span class="p">],</span> <span class="s2">&quot;Queue entries high &quot;</span>
+            <span class="s2">&quot;watermark for trackQueueSummary is correct?&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">event</span><span class="p">[</span><span class="s1">&#39;eu&#39;</span><span class="p">],</span> <span class="s2">&quot;Number of queue entries &quot;</span>
+            <span class="s2">&quot;used correct?&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="n">event</span><span class="p">[</span><span class="s1">&#39;strhw&#39;</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;String table size &quot;</span>
+            <span class="s2">&quot;high watermark is non-zero?&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="n">event</span><span class="p">[</span><span class="s1">&#39;stru&#39;</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;String table size &quot;</span>
+            <span class="s2">&quot;used is non-zero?&quot;</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="CloudQueueEventUsageMetricsImpl"><a class="viewcode-back" href="../../webserver.html#webserver.test_cloudqueue_event_usage_metrics.CloudQueueEventUsageMetricsImpl">[docs]</a><span class="k">class</span> <span class="nc">CloudQueueEventUsageMetricsImpl</span><span class="p">(</span><span class="n">CloudQueueEventUsageMetrics</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;NIGHTLY_CLOUDQUEUE_TPM&quot;</span><span class="p">]</span></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;CloudQueue Event Usage Metric Tests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">CloudQueueEventUsageMetricsImpl</span><span class="p">()])</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span> <span class="k">if</span> <span class="n">suite</span><span class="o">.</span><span class="n">status</span><span class="o">.</span><span class="n">is_pass</span><span class="p">()</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

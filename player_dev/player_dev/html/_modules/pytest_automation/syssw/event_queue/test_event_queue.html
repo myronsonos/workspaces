@@ -1,0 +1,505 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.event_queue.test_event_queue &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.event_queue.test_event_queue</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test verifies that the event queue is functioning as expected</span>
+<span class="sd">and also doesn&#39;t break when abused in various ways.</span>
+
+<span class="sd">Additionally, this test pokes at every proc file that generates events</span>
+<span class="sd">as appropriate per platform and verifies that the events generated</span>
+<span class="sd">are correct.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">random</span> <span class="k">import</span> <span class="n">shuffle</span><span class="p">,</span> <span class="n">randint</span><span class="p">,</span> <span class="n">seed</span>
+<span class="kn">from</span> <span class="nn">event_sequence</span> <span class="k">import</span> <span class="n">Evt</span><span class="p">,</span> <span class="n">EventSequence</span><span class="p">,</span> <span class="n">VALID_ACTIONS</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.tools.event_test_utility</span> <span class="k">import</span> <span class="p">(</span><span class="n">ETOption</span><span class="p">,</span> <span class="n">Event</span><span class="p">,</span>
+                                                       <span class="n">EventTestUtility</span><span class="p">)</span>
+
+
+<span class="c1"># Dictionary of arguments to be used with the event-test app</span>
+<span class="c1"># in order to stress test a device&#39;s event queue</span>
+<span class="n">QUEUE_ABUSES</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;match_anacapa&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="s2">&quot;write_tests&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">write_tests</span><span class="p">,</span> <span class="kc">None</span><span class="p">)],</span>
+                <span class="s2">&quot;read_block&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">read_block</span><span class="p">,</span> <span class="kc">None</span><span class="p">)],</span>
+                <span class="s2">&quot;trash&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">trash</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">15</span><span class="p">))],</span>
+                <span class="s2">&quot;extreme_trash&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">trash</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">15</span><span class="p">)),</span>
+                                  <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">extreme_trash</span><span class="p">,</span> <span class="kc">None</span><span class="p">)],</span>
+                <span class="s2">&quot;sequencing&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">sequence</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">))],</span>
+                <span class="s2">&quot;seq_and_trash&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">sequence</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">10</span><span class="p">)),</span>
+                                  <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">trash</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">15</span><span class="p">)),</span>
+                                  <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">extreme_trash</span><span class="p">,</span> <span class="kc">None</span><span class="p">)],</span>
+                <span class="s2">&quot;seq_and_read_block&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">sequence</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)),</span>
+                                       <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">read_block</span><span class="p">,</span> <span class="kc">None</span><span class="p">)],</span>
+                <span class="s2">&quot;all_abuses&quot;</span><span class="p">:</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">sequence</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)),</span>
+                               <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">intelligent_delay</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>
+                               <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">read_block</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>
+                               <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">trash</span><span class="p">,</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">15</span><span class="p">)),</span>
+                               <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">extreme_trash</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>
+                               <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">write_tests</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span>
+                <span class="p">}</span>
+
+
+<span class="c1"># This test requires anacapa and power coordinator to be killed</span>
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s2">&quot;kill_anacapa_with_stopanacapa&quot;</span><span class="p">,</span> 
+                                     <span class="s2">&quot;kill_power_coordinator&quot;</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="event_test_device"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.event_test_device">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">event_test_device</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parameterized fixture which returns all devices that are</span>
+<span class="sd">    supported by this test. Support is based on whether or not the</span>
+<span class="sd">    device has been added to the VALID_ACTIONS list. Also sets devices</span>
+<span class="sd">    up by disabling amps and setting starting orientation.</span>
+
+<span class="sd">    :returns: A device that is supported by test_event_queue</span>
+<span class="sd">    :rtype: :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">VALID_ACTIONS</span><span class="p">:</span>
+        <span class="c1"># Amp power must start off on all devices</span>
+        <span class="c1"># for events to be generated as expected</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_off</span><span class="p">()</span>
+
+        <span class="c1"># Devices must start horizontally</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_encore</span><span class="p">()</span> <span class="ow">or</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_play3</span><span class="p">():</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_device_orientation</span><span class="p">(</span><span class="s1">&#39;horizontal&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_limelight</span><span class="p">():</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_device_orientation</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="p">)</span>
+        <span class="k">yield</span> <span class="n">device</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Testing on &#39;</span><span class="si">{}</span><span class="s2">&#39; is being skipped because the device &quot;</span>
+                    <span class="s2">&quot;does not have any valid actions defined.&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="install_event_test_app"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.install_event_test_app">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">install_event_test_app</span><span class="p">(</span><span class="n">event_test_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Sets up the event-test app to be installed on test devices and</span>
+<span class="sd">    removes it from the devices when testing is complete.</span>
+
+<span class="sd">    :returns: A device and the utility that was installed on the device</span>
+<span class="sd">    :rtype: :obj:`~sonos.client.internal.SonosZoneComponent`,</span>
+<span class="sd">            :obj:`EventTestUtility`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">event_test_utility</span> <span class="o">=</span> <span class="n">EventTestUtility</span><span class="p">(</span><span class="n">event_test_device</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">event_test_device</span><span class="p">,</span> <span class="n">event_test_utility</span>
+    <span class="n">event_test_utility</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="run_test_sequence"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.run_test_sequence">[docs]</a><span class="k">def</span> <span class="nf">run_test_sequence</span><span class="p">(</span><span class="n">test_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">,</span> <span class="n">utility_args</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Takes an event-test utility object and an event sequence object</span>
+<span class="sd">    based on the DUT. Runs the event-test app on the DUT and then</span>
+<span class="sd">    executes all actions listed in the given sequence on the DUT.</span>
+
+<span class="sd">    :param test_sequence: The test sequence of actions to execute on the DUT</span>
+<span class="sd">    :type test_sequence: :obj:`EventSequence`</span>
+<span class="sd">    :param event_test_utility: The DUT&#39;s event-test utility</span>
+<span class="sd">    :type event_test_utility: :obj:`EventTestUtility`</span>
+<span class="sd">    :param utility_args: The arguments to run the event-test app with</span>
+<span class="sd">    :type utility_args: :class:`ETOption.Arg` or `ETOption.NoArg` paired with</span>
+<span class="sd">                        :obj:`int` or :obj:`str` as appropriate for</span>
+<span class="sd">                        the ETOption.Arg</span>
+<span class="sd">    :raises: :obj:`sonos.exceptions.TimeoutError` if event_test_utility.run()</span>
+<span class="sd">             fails to start the utility</span>
+<span class="sd">    :raises: :obj:`sonos.exceptions.TimeoutError` if test_sequence.run()</span>
+<span class="sd">             fails to execute an action on the device</span>
+<span class="sd">    :raises: :obj:`EventTestUtilityError` if event_test_utility.stop()</span>
+<span class="sd">             fails to kill the utility process on the device</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">event_test_utility</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">utility_args</span><span class="p">)</span>
+    <span class="n">test_sequence</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+    <span class="n">event_test_utility</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="find_event_in_logs"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.find_event_in_logs">[docs]</a><span class="k">def</span> <span class="nf">find_event_in_logs</span><span class="p">(</span><span class="n">event_log</span><span class="p">,</span> <span class="n">event_source</span><span class="p">,</span> <span class="n">event_info</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Searches through a log generated by the event-test app for a</span>
+<span class="sd">    given event source + info. Returns True or False depending on</span>
+<span class="sd">    if the event was found in the log.</span>
+
+<span class="sd">    :param event_log: The event-test log to search through</span>
+<span class="sd">    :type event_log: :obj:`EventTestUtility.log`</span>
+<span class="sd">    :param event_source: The event source to search for</span>
+<span class="sd">    :type event_source: :obj:`Evt.Source`</span>
+<span class="sd">    :param event_info: The event info to search for - matches the source</span>
+<span class="sd">    :type event_info: :obj:`Evt.Info`</span>
+<span class="sd">    :return: True if the event was found, False if not</span>
+<span class="sd">    :rtype: :obj:`bool`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">event_log</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">event</span><span class="p">,</span> <span class="n">Event</span><span class="p">):</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">event</span><span class="o">.</span><span class="n">source</span> <span class="o">==</span> <span class="n">event_source</span><span class="o">.</span><span class="n">value</span> <span class="ow">and</span>
+                    <span class="n">event</span><span class="o">.</span><span class="n">info</span> <span class="o">==</span> <span class="n">event_info</span><span class="o">.</span><span class="n">value</span><span class="p">):</span>
+                <span class="k">return</span> <span class="kc">True</span>
+    <span class="k">return</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="shuffle_action_list"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.shuffle_action_list">[docs]</a><span class="k">def</span> <span class="nf">shuffle_action_list</span><span class="p">(</span><span class="n">action_list</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Shuffle an action list with a random seed that is logged</span>
+<span class="sd">    at the debug level so the seed can be reused to reproduce</span>
+<span class="sd">    any failed test cases.</span>
+
+<span class="sd">    :param action_list: the list of actions to shuffle</span>
+<span class="sd">    :type action_list: :obj:`list`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">random_seed</span> <span class="o">=</span> <span class="n">randint</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="n">seed</span><span class="p">(</span><span class="n">random_seed</span><span class="p">)</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Shuffling actions with the following seed: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">random_seed</span><span class="p">))</span>
+    <span class="n">shuffle</span><span class="p">(</span><span class="n">action_list</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="verify_overrun_occurred"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.verify_overrun_occurred">[docs]</a><span class="k">def</span> <span class="nf">verify_overrun_occurred</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies an event overflow/overrun occurred on a device by</span>
+<span class="sd">    searching for the &quot;queue full&quot; message in dmesg and a</span>
+<span class="sd">    QUEUE_OVERRUN event in the device&#39;s event-test app logs.</span>
+
+<span class="sd">    :param device: The DUT</span>
+<span class="sd">    :type device: :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param event_test_utility: The device&#39;s event-test app object</span>
+<span class="sd">    :type event_test_utility: :obj:`EventTestUtility`</span>
+<span class="sd">    :raises: :exc:AssertionError if dmesg does not contain a &quot;queue full&quot;</span>
+<span class="sd">                                 log or no QUEUE_OVERRUN event occurs in</span>
+<span class="sd">                                 the event-test app</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Verify the queue overrun showed up in the device&#39;s dmesg logs</span>
+    <span class="n">dmesg_overrun_log</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">find_all_in_dmesg</span><span class="p">(</span><span class="n">expr</span><span class="o">=</span><span class="s2">&quot;event dropped, &quot;</span>
+                                                          <span class="s2">&quot;button queue full&quot;</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">dmesg_overrun_log</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;Failed to find any indication of a queue &quot;</span>
+                               <span class="s2">&quot;overflow in the device&#39;s dmesg logs.&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Verify an overrun event showed up in the event-test logs</span>
+    <span class="n">overrun_event_occurred</span> <span class="o">=</span> <span class="n">find_event_in_logs</span><span class="p">(</span><span class="n">event_test_utility</span><span class="o">.</span><span class="n">log</span><span class="p">,</span>
+                                                <span class="n">Evt</span><span class="o">.</span><span class="n">Source</span><span class="o">.</span><span class="n">NO_SOURCE</span><span class="p">,</span>
+                                                <span class="n">Evt</span><span class="o">.</span><span class="n">Info</span><span class="o">.</span><span class="n">QUEUE_OVERRUN</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">overrun_event_occurred</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;No QUEUE_OVERRUN event occurred!&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_individual_events"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.test_individual_events">[docs]</a><span class="k">def</span> <span class="nf">test_individual_events</span><span class="p">(</span><span class="n">install_event_test_app</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Goes through all supported actions of a device and</span>
+<span class="sd">    verifies the correct events are generated for each actions.</span>
+
+<span class="sd">    :param install_event_test_app: module scoped fixture that installs/removes</span>
+<span class="sd">                                   the event-test app on a device. Yields the</span>
+<span class="sd">                                   device and utility object.</span>
+<span class="sd">    :type install_event_test_app: :obj:`pytest.fixture`</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Add action to the event sequence</span>
+<span class="sd">    2. Start the event-test app</span>
+<span class="sd">    3. Run/execute the action</span>
+<span class="sd">    3. Stop the event-test app</span>
+<span class="sd">    4. Verify the event-test app log contains the expected events</span>
+<span class="sd">       from the action executed</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span> <span class="o">=</span> <span class="n">install_event_test_app</span>
+    <span class="k">for</span> <span class="n">action</span> <span class="ow">in</span> <span class="n">VALID_ACTIONS</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]:</span>
+        <span class="n">test_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span>
+        <span class="n">test_sequence</span><span class="o">.</span><span class="n">add_events</span><span class="p">(</span><span class="n">action</span><span class="p">)</span>
+
+        <span class="c1"># Because this EventSequence was initialized without</span>
+        <span class="c1"># `run_as_fast_as_possible=True`, when the sequence is run events</span>
+        <span class="c1"># will be inherently verified because</span>
+        <span class="c1"># `Event.Sequence.wait_for_event_sequence` will be called after each</span>
+        <span class="c1"># action in the sequence is executed</span>
+        <span class="n">run_test_sequence</span><span class="p">(</span><span class="n">test_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_events_successively"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.test_events_successively">[docs]</a><span class="k">def</span> <span class="nf">test_events_successively</span><span class="p">(</span><span class="n">install_event_test_app</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that a random succession of all supported actions will cause the</span>
+<span class="sd">    correct events to be generated and in the correct order.</span>
+
+<span class="sd">    :param install_event_test_app: module scoped fixture that installs/removes</span>
+<span class="sd">                                   the event-test app on a device. Yields the</span>
+<span class="sd">                                   device and utility object.</span>
+<span class="sd">    :type install_event_test_app: :obj:`pytest.fixture`</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Add all supported actions to the event sequence in a random order</span>
+<span class="sd">    2. Run the event-test app</span>
+<span class="sd">    3. Run/execute all actions in the event_sequence</span>
+<span class="sd">    4. Stop the event-test app</span>
+<span class="sd">    5. Verify the event-test app log contains the expected events</span>
+<span class="sd">       in the expected order</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span> <span class="o">=</span> <span class="n">install_event_test_app</span>
+    <span class="n">test_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span>
+    <span class="n">actions</span> <span class="o">=</span> <span class="n">VALID_ACTIONS</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span>
+
+    <span class="c1"># Shuffle the list so we can test different action/event orders</span>
+    <span class="n">shuffle_action_list</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span>
+    <span class="n">test_sequence</span><span class="o">.</span><span class="n">add_events</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span>
+
+    <span class="c1"># Because this EventSequence was initialized without</span>
+    <span class="c1"># `run_as_fast_as_possible=True`, when the sequence is run events</span>
+    <span class="c1"># will be inherently verified because</span>
+    <span class="c1"># `Event.Sequence.wait_for_event_sequence` will be called after each</span>
+    <span class="c1"># action in the sequence is executed</span>
+    <span class="n">run_test_sequence</span><span class="p">(</span><span class="n">test_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_queue_abuses"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.test_queue_abuses">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s2">&quot;queue_abuse_args&quot;</span><span class="p">,</span> <span class="n">QUEUE_ABUSES</span><span class="o">.</span><span class="n">values</span><span class="p">(),</span>
+                         <span class="n">ids</span><span class="o">=</span><span class="n">QUEUE_ABUSES</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+<span class="k">def</span> <span class="nf">test_queue_abuses</span><span class="p">(</span><span class="n">install_event_test_app</span><span class="p">,</span> <span class="n">queue_abuse_args</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Make sure that even while using a queue in a ridiculous manner,</span>
+<span class="sd">    events still make it in and out in order and unaffected.</span>
+
+<span class="sd">    :param install_event_test_app: module scoped fixture that installs/removes</span>
+<span class="sd">                                   the event-test app on a device. Yields the</span>
+<span class="sd">                                   device and utility object.</span>
+<span class="sd">    :type install_event_test_app: :obj:`pytest.fixture`</span>
+<span class="sd">    :param queue_abuse_args: event-test arguments</span>
+<span class="sd">    :type queue_abuse_args: :class:`ETOption.Arg` or `ETOption.NoArg` paired</span>
+<span class="sd">                            with :obj:`int` or :obj:`str` as appropriate for</span>
+<span class="sd">                            the ETOption.Arg</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Add a number of button/cap touch presses to the event sequence -</span>
+<span class="sd">       the events don&#39;t matter so we just send a few different presses</span>
+<span class="sd">    2. Run the event-test app using an argument set from QUEUE_ABUSES</span>
+<span class="sd">    3. Execute all actions in the event sequence</span>
+<span class="sd">    4. Stop the event-test app</span>
+<span class="sd">    5. Verify the event-test app log contains the expected events</span>
+<span class="sd">       in the expected order</span>
+<span class="sd">    6. Repeat for remaining QUEUE_ABUSES event-test arguments</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span> <span class="o">=</span> <span class="n">install_event_test_app</span>
+    <span class="n">test_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">,</span>
+                                  <span class="n">run_as_fast_as_possible</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># On everything but sub, press all the buttons as fast as possible.</span>
+    <span class="c1"># Unfortunately on sub, there&#39;s only 1 button, so for diversity</span>
+    <span class="c1"># of events, we&#39;ll use press_button_playpause and</span>
+    <span class="c1"># hold_button_playpause, but that will, by necessity,</span>
+    <span class="c1"># make us not be able to run that test as fast.</span>
+    <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_cap_touch</span><span class="p">():</span>
+        <span class="n">actions</span> <span class="o">=</span> <span class="p">[</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">touch_capzone_a</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">touch_capzone_b</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">touch_capzone_c</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_join</span><span class="p">]</span>
+    <span class="c1"># Devices in this elif clause don&#39;t have any buttons aside from Join</span>
+    <span class="k">elif</span> <span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_sub</span><span class="p">()</span> <span class="ow">or</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_neptune</span><span class="p">()):</span>
+        <span class="n">actions</span> <span class="o">=</span> <span class="p">[</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_join</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">hold_button_join</span><span class="p">]</span>
+        <span class="c1"># We need delays for button holds so don&#39;t use run_as_fast_as_possible</span>
+        <span class="n">test_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">actions</span> <span class="o">=</span> <span class="p">[</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_vol_dn</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_vol_up</span><span class="p">,</span>
+                   <span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_playpause</span><span class="p">]</span>
+
+    <span class="c1"># Shuffle the actions list so we can test different action/event orders</span>
+    <span class="n">shuffle_action_list</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span>
+    <span class="n">test_sequence</span><span class="o">.</span><span class="n">add_events</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span>
+    <span class="n">run_test_sequence</span><span class="p">(</span><span class="n">test_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">,</span> <span class="n">queue_abuse_args</span><span class="p">)</span>
+
+    <span class="c1"># Verify all expected events were received.</span>
+    <span class="c1"># Need to call `wait_for_sequence` explicitly here because</span>
+    <span class="c1"># `test_sequence` was created with `run_as_fast_as_possible=True`</span>
+    <span class="n">expected_infos</span><span class="p">,</span> <span class="n">expected_sources</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">test_sequence</span><span class="o">.</span><span class="n">consolidate_expected_events</span><span class="p">())</span>
+    <span class="n">test_sequence</span><span class="o">.</span><span class="n">wait_for_event_sequence</span><span class="p">(</span><span class="n">expected_infos</span><span class="p">,</span>
+                                          <span class="n">expected_sources</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_queue_overflow"><a class="viewcode-back" href="../../../../pytest_automation.syssw.event_queue.html#pytest_automation.syssw.event_queue.test_event_queue.test_queue_overflow">[docs]</a><span class="k">def</span> <span class="nf">test_queue_overflow</span><span class="p">(</span><span class="n">install_event_test_app</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that after overflowing a queue, it still behaves okay</span>
+<span class="sd">    and will continue to pass events after the overflow occurence.</span>
+
+<span class="sd">    :param install_event_test_app: module scoped fixture that installs/removes</span>
+<span class="sd">                                   the event-test app on a device. Yields the</span>
+<span class="sd">                                   device and utility object.</span>
+<span class="sd">    :type install_event_test_app: :obj:`pytest.fixture`</span>
+
+<span class="sd">    Steps:</span>
+<span class="sd">    1. Run the event-test app with a combination of arguments to</span>
+<span class="sd">       make it easier to create an overflow</span>
+<span class="sd">    2. Overflow the event queue by sending a large number of button</span>
+<span class="sd">       press events as fast as possible</span>
+<span class="sd">    3. Verify an event overflow occurred by checking the event-test app</span>
+<span class="sd">       logs for an overrun event and dmesg for an overflow message</span>
+<span class="sd">    4. Stop and run the event-test app again with no arguments</span>
+<span class="sd">    5. Send a small number of hold events</span>
+<span class="sd">    6. Stop the event-test app</span>
+<span class="sd">    7. Verify the hold events are received as expected to make sure the event</span>
+<span class="sd">       queue has recovered</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span> <span class="o">=</span> <span class="n">install_event_test_app</span>
+
+    <span class="c1"># This configuration contains the arguments to use with the event-test</span>
+    <span class="c1"># app that makes the utility delay to overflow the queue</span>
+    <span class="n">overflow_utility_args</span> <span class="o">=</span> <span class="p">[(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">delay</span><span class="p">,</span> <span class="mi">15</span><span class="p">),</span>
+                             <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">Arg</span><span class="o">.</span><span class="n">sequence</span><span class="p">,</span> <span class="mi">100</span><span class="p">),</span>
+                             <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">intelligent_delay</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>
+                             <span class="p">(</span><span class="n">ETOption</span><span class="o">.</span><span class="n">NoArg</span><span class="o">.</span><span class="n">non_blocking</span><span class="p">,</span> <span class="kc">None</span><span class="p">)]</span>
+
+    <span class="c1"># Create two sequences, one used to overflow the event queue,</span>
+    <span class="c1"># and one to run afterwards to verify queue operation was unaffected</span>
+    <span class="n">overflow_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">,</span>
+                                      <span class="n">run_as_fast_as_possible</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">recover_sequence</span> <span class="o">=</span> <span class="n">EventSequence</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span>
+
+    <span class="c1"># Overflow the queue with a number of press/touch events and then</span>
+    <span class="c1"># send a different series of events after overflowing</span>
+    <span class="c1"># to verify recovery</span>
+    <span class="n">num_overflow_events</span> <span class="o">=</span> <span class="mi">200</span>
+    <span class="n">num_recovery_events</span> <span class="o">=</span> <span class="mi">10</span>
+    <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_cap_touch</span><span class="p">():</span>
+        <span class="n">overflow_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">touch_capzone_a</span><span class="p">]</span>
+                           <span class="o">*</span> <span class="n">num_overflow_events</span><span class="p">)</span>
+        <span class="n">recover_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">touch_capzone_c</span><span class="p">]</span>
+                          <span class="o">*</span> <span class="n">num_recovery_events</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_sub</span><span class="p">()</span> <span class="ow">or</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_neptune</span><span class="p">()):</span>
+        <span class="n">overflow_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_join</span><span class="p">]</span>
+                           <span class="o">*</span> <span class="n">num_overflow_events</span><span class="p">)</span>
+        <span class="n">recover_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">hold_button_join</span><span class="p">]</span>
+                          <span class="o">*</span> <span class="n">num_recovery_events</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">overflow_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">press_button_playpause</span><span class="p">]</span>
+                           <span class="o">*</span> <span class="n">num_overflow_events</span><span class="p">)</span>
+        <span class="n">recover_events</span> <span class="o">=</span> <span class="p">([</span><span class="n">EventSequence</span><span class="o">.</span><span class="n">actions</span><span class="o">.</span><span class="n">hold_button_playpause</span><span class="p">]</span>
+                          <span class="o">*</span> <span class="n">num_recovery_events</span><span class="p">)</span>
+
+    <span class="n">overflow_sequence</span><span class="o">.</span><span class="n">add_events</span><span class="p">(</span><span class="n">overflow_events</span><span class="p">)</span>
+    <span class="n">recover_sequence</span><span class="o">.</span><span class="n">add_events</span><span class="p">(</span><span class="n">recover_events</span><span class="p">)</span>
+
+    <span class="c1"># Verify a queue overflow occurred and an overrun event was sent</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_dmesg</span><span class="p">()</span>
+    <span class="n">run_test_sequence</span><span class="p">(</span><span class="n">overflow_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">,</span>
+                      <span class="n">overflow_utility_args</span><span class="p">)</span>
+    <span class="n">verify_overrun_occurred</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span>
+
+    <span class="c1"># Verify the queue recovers after an overflow.</span>
+    <span class="c1"># Because this EventSequence was initialized without</span>
+    <span class="c1"># `run_as_fast_as_possible=True`, when the sequence is run events</span>
+    <span class="c1"># will be inherently verified because</span>
+    <span class="c1"># `Event.Sequence.wait_for_event_sequence` will be called after each</span>
+    <span class="c1"># action in the sequence is executed</span>
+    <span class="n">run_test_sequence</span><span class="p">(</span><span class="n">recover_sequence</span><span class="p">,</span> <span class="n">event_test_utility</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

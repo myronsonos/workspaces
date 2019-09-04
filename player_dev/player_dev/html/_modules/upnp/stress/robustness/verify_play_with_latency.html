@@ -1,0 +1,321 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.stress.robustness.verify_play_with_latency &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.stress.robustness.verify_play_with_latency</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">inspect</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="k">import</span> <span class="n">Event</span>
+
+<span class="kn">from</span> <span class="nn">sonos.environment</span> <span class="k">import</span> <span class="p">(</span><span class="n">WorkflowExecutionConfigurationFactory</span><span class="p">,</span>
+                               <span class="n">load_workflow_execution_configuration_from_json</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">traffic_control.traffic_control</span> <span class="k">import</span> <span class="n">TrafficControl</span>
+<span class="n">HLS_CONFIG</span> <span class="o">=</span> <span class="s2">&quot;../../functional/hls/hls.json&quot;</span>
+<span class="n">WEB_PORT</span> <span class="o">=</span> <span class="mi">8080</span>
+<span class="n">WEB_PATH</span> <span class="o">=</span> <span class="s2">&quot;/srv/samba/Automation/cpu/MaggieFarm&quot;</span>
+<span class="n">DIAG_LEVEL_DICT</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;chsnk&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">}</span>
+<span class="n">TRACKS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;MaggieFarm.ogg&quot;</span><span class="p">,)</span>
+<span class="n">DIAGC_FAILED_MSG</span> <span class="o">=</span> <span class="s2">&quot;Channel Sink in stopped state&quot;</span>
+<span class="n">INITIAL_DELAY</span> <span class="o">=</span> <span class="mi">5000</span>
+
+
+<div class="viewcode-block" id="VerifyPlayWithLatency"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency">[docs]</a><span class="k">class</span> <span class="nc">VerifyPlayWithLatency</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Under high latency conditions during playback, it was observed that</span>
+<span class="sd">    the player would enter a state where audio playback was continuing</span>
+<span class="sd">    but no audio was coming out of the speakers.</span>
+<span class="sd">    The catastrophic message the player spits out should not be encountered</span>
+<span class="sd">    even with transient high latency.</span>
+<span class="sd">    This verifies SWPBL-57084 - no audio after high latency</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">_get_fixture_path</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the absolute path this module is executing from.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">inspect</span><span class="o">.</span><span class="n">getfile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">)))</span>
+
+    <span class="k">def</span> <span class="nf">_load_test_config</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Consume and make available the HLS_CONFIG file.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">current_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_fixture_path</span><span class="p">()</span>
+        <span class="n">config_fn</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">current_path</span><span class="p">,</span> <span class="n">HLS_CONFIG</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">config_fn</span><span class="p">),</span>
+            <span class="s2">&quot;expect test config file &#39;</span><span class="si">{}</span><span class="s2">&#39; to exist&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">config_fn</span><span class="p">))</span>
+        <span class="n">config</span> <span class="o">=</span> <span class="n">load_workflow_execution_configuration_from_json</span><span class="p">(</span><span class="n">config_fn</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyIsNotNoneOrStop</span><span class="p">(</span>
+            <span class="n">config</span><span class="p">,</span>
+            <span class="s2">&quot;expect WorkflowExecutionConfiguration from &#39;</span><span class="si">{}</span><span class="s2">&#39; &quot;</span>
+            <span class="s2">&quot;to contain content&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">config_fn</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">as_dict</span><span class="p">()</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">as_dict</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="p">,</span> <span class="s2">&quot;traffic_shaper&quot;</span><span class="p">),</span>
+            <span class="s2">&quot;expect &#39;traffic_shaper&#39; section to be specified &quot;</span>
+            <span class="s2">&quot;in test configuration after loading&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">traffic_shaper</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Traffic shaper </span><span class="si">{}</span><span class="s2"> iface </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">host</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">))</span>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.cleanup_avt"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.cleanup_avt">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup_avt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Resets the state of the AV on the zone player.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">           The zone component under test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.setUpFixture"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="n">WEB_PORT</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="n">WEB_PATH</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc_port</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_load_test_config</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span> <span class="o">=</span> <span class="n">TrafficControl</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">host</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">uris</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">track</span><span class="p">)</span>
+                     <span class="k">for</span> <span class="n">track</span> <span class="ow">in</span> <span class="n">TRACKS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_evt</span> <span class="o">=</span> <span class="n">Event</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.cleanup_player"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.cleanup_player">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup_player</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stops play, resets player&#39;s AV transport state, resets</span>
+<span class="sd">        diagnostic level.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagm</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagm</span> <span class="ow">in</span> <span class="n">DIAG_LEVEL_DICT</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">disable_netem</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.turnon_diagc"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.turnon_diagc">[docs]</a>    <span class="k">def</span> <span class="nf">turnon_diagc</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_evt</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">DIAGC_FAILED_MSG</span><span class="p">,</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">stop_evt</span><span class="o">.</span><span class="n">set</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.turnoff_diagc"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.turnoff_diagc">[docs]</a>    <span class="k">def</span> <span class="nf">turnoff_diagc</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">DIAGC_FAILED_MSG</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.setup_player"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.setup_player">[docs]</a>    <span class="k">def</span> <span class="nf">setup_player</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Resets player&#39;s AV transport state, sets up diagnostic level.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">diagm</span> <span class="ow">in</span> <span class="n">DIAG_LEVEL_DICT</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagm</span><span class="p">,</span> <span class="n">DIAG_LEVEL_DICT</span><span class="p">[</span><span class="n">diagm</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">disable_netem</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">turnon_diagc</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;tc&quot;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_tracks_to_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="p">)</span> <span class="k">for</span> <span class="n">uri</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">uris</span><span class="p">]</span>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.start_playback"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Beginning playback on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_add_tracks_to_queue</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">set_queue_position</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetCrossfadeMode</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;REPEAT_ALL&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_set_netem</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">disable_netem</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">enable_netem_delay</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">tc_port</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Setting netem initial delay to </span><span class="si">{}</span><span class="s2">ms&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">delay</span><span class="p">))</span>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.change_netem"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.change_netem">[docs]</a>    <span class="k">def</span> <span class="nf">change_netem</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting delay to </span><span class="si">{}</span><span class="s2">ms&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">delay</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tc</span><span class="o">.</span><span class="n">change_netem_delay</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">traffic_shaper</span><span class="o">.</span><span class="n">interface</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.wait_for_failure"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.wait_for_failure">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_failure</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">event</span><span class="o">.</span><span class="n">isSet</span><span class="p">(),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timed waiting for event&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="VerifyPlayWithLatency.test_playback_with_latency"><a class="viewcode-back" href="../../../../upnp.stress.robustness.html#upnp.stress.robustness.verify_play_with_latency.VerifyPlayWithLatency.test_playback_with_latency">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_playback_with_latency</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start playback, increase delay to a random value and</span>
+<span class="sd">        monitor for the diagnostic that indicates the CHSNK module</span>
+<span class="sd">        has stopped. If we ever get the diagnostic, fail the test.</span>
+<span class="sd">        In case the delay causes the player to stop playback, reduce</span>
+<span class="sd">        the delay and start playback again.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_player</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">delay</span> <span class="o">=</span> <span class="n">INITIAL_DELAY</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_set_netem</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">)</span>
+        <span class="n">now</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="n">end</span> <span class="o">=</span> <span class="n">now</span> <span class="o">+</span> <span class="mf">120.0</span>
+        <span class="k">while</span> <span class="n">now</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">:</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_failure</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stop_evt</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">res</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span>
+                    <span class="s2">&quot;CHSNK unexpectedly stopped with delay of </span><span class="si">{}</span><span class="s2">ms&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">delay</span><span class="p">))</span>
+                <span class="k">break</span>
+            <span class="c1"># check if we&#39;re still playing, if not reduce the delay</span>
+            <span class="c1"># to something more reasonable and confirm we&#39;re playing</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">change_netem</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;Kick starting AVT play after stop&quot;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+            <span class="n">delay</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">4500</span><span class="p">,</span> <span class="mi">5500</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">change_netem</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">delay</span><span class="p">)</span>
+            <span class="n">now</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">turnoff_diagc</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cleanup_player</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">VerifyPlayWithLatency</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">VerifyPlayWithLatency</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

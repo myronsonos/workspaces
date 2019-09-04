@@ -1,0 +1,420 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>syssw.cpu_freq_test &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for syssw.cpu_freq_test</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">BlackboxMask</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.anacapa_trace</span> <span class="k">import</span> <span class="n">AnacapaTraceLogInspector</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+
+<span class="n">REBOOT_SPEED_TIMEOUT</span> <span class="o">=</span> <span class="mi">90</span>
+<span class="n">IDLE_SPEED_TIMEOUT</span> <span class="o">=</span> <span class="mi">6</span>
+<span class="n">DEFAULT_AMP_OFF</span> <span class="o">=</span> <span class="mi">120</span>
+<span class="n">FAST_AMP_OFF</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">ITERATIONS</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">BLACKBOX_AMPCTL_MASK</span> <span class="o">=</span> <span class="p">(</span><span class="n">BlackboxMask</span><span class="o">.</span><span class="n">AMPCTL</span> <span class="o">|</span> <span class="n">BlackboxMask</span><span class="o">.</span><span class="n">ERR</span> <span class="o">|</span>
+                        <span class="n">BlackboxMask</span><span class="o">.</span><span class="n">DEBUG</span> <span class="o">|</span> <span class="n">BlackboxMask</span><span class="o">.</span><span class="n">WARNING</span> <span class="o">|</span>
+                        <span class="n">BlackboxMask</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
+<span class="n">DIAG_LEVELS</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">&quot;amp&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;power_ctl&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;dapst&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;rc_impl&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+               <span class="p">(</span><span class="s2">&quot;buttons&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;upnp&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;avt&quot;</span><span class="p">,</span> <span class="mi">5</span><span class="p">)]</span>
+
+
+<div class="viewcode-block" id="CPUFrequencyScaling"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling">[docs]</a><span class="k">class</span> <span class="nc">CPUFrequencyScaling</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Checks CPU freq transitions</span>
+<span class="sd">    Steps:</span>
+<span class="sd">    1) Reboot</span>
+<span class="sd">    2) Verify that freq goes to 996000 Hz shortly after boot</span>
+<span class="sd">    3) Let device idle</span>
+<span class="sd">    4) Verify that freq goes to 396000 Hz when idle</span>
+<span class="sd">    5) Play audio</span>
+<span class="sd">    6) Verify that the freq goes to 996000 Hz while playing</span>
+<span class="sd">    7) Mute the player</span>
+<span class="sd">    8) Stop audio</span>
+<span class="sd">    9) Immediately verify freq is 996000 Hz</span>
+<span class="sd">    10) Verify that freq drops to 396000 Hz shortly after audio stops.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="CPUFrequencyScaling.setUpFixture"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">devices_in_test</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_unique_cpu_scaling_devices</span><span class="p">()]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_devices</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">devices_in_test</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.tearDownFixture"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Turns the ampctl mute setting off, empties the queue, and clears the</span>
+<span class="sd">        play state (stops the buzzer)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">devices_in_test</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_amp_power_off</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clears the play queue, play state, unmutes the player, and removes any</span>
+<span class="sd">        ampctl overrides</span>
+
+<span class="sd">        :param zp: The zone player under test</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># clear the queue</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="c1"># set mute off</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">can_override_amp_interface</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_ampctl</span><span class="p">(</span><span class="s1">&#39;clear-override&#39;</span><span class="p">),</span>
+                                      <span class="s1">&#39;Ampctl settings should be &#39;</span>
+                                      <span class="s1">&#39;back to their default values&#39;</span><span class="p">)</span>
+        <span class="c1"># clear the play state - sets AVTransportURI = &quot;&quot;, previously</span>
+        <span class="c1"># self.BUZZER_URI</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">diag</span><span class="p">,</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">DIAG_LEVELS</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diag</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.wait_for_speed"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.wait_for_speed">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_speed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                       <span class="n">zp</span><span class="p">,</span>
+                       <span class="n">speed</span><span class="p">,</span>
+                       <span class="n">iteration</span><span class="p">,</span>
+                       <span class="n">wait_time</span><span class="p">,</span>
+                       <span class="n">msg</span><span class="p">,</span>
+                       <span class="n">ignore_timeout</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for the CPU to go to the given frequency</span>
+
+<span class="sd">        :param zp: The zone player under test</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param speed: The desired speed to wait for</span>
+<span class="sd">        :type speed: :obj:`int`</span>
+<span class="sd">        :param iteration: The current test iteration</span>
+<span class="sd">        :type iteration: :obj:`int`</span>
+<span class="sd">        :param wait_time: The amount of time to wait before timing out if the</span>
+<span class="sd">                            correct speed is not set.</span>
+<span class="sd">        :type wait_time: :obj:`int`</span>
+<span class="sd">        :param msg: Message to append to timeout reason. Usefull for logging</span>
+<span class="sd">                    fail location</span>
+<span class="sd">        :type msg: :obj:`str`</span>
+<span class="sd">        :param ignore_timeout: Whether or not to ignore timeout errors while</span>
+<span class="sd">                                waiting for the speed to be set.</span>
+<span class="sd">        :type ignore_timeout: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The following line reduces noise in the log by increasing the</span>
+<span class="sd">        iteration delay for checks that expect a long wait time</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">delay</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">wait_time</span> <span class="o">&lt;=</span> <span class="mi">10</span> <span class="k">else</span> <span class="mi">20</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">speed</span> <span class="o">==</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_cpu_frequency_hz</span><span class="p">()</span> \
+                <span class="ow">and</span> <span class="ow">not</span> <span class="n">ignore_timeout</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">delay</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">wait_time</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Timed out while waiting for </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                <span class="s1">&#39;on </span><span class="si">{}</span><span class="s1">: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">speed</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">ignore_timeout</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> did not set CPU to </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">speed</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+                <span class="n">expected</span> <span class="o">=</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">high_cpu_speed</span> <span class="k">if</span> <span class="n">speed</span> <span class="o">==</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span>
+                           <span class="k">else</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span>
+                                           <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_cpu_frequency_hz</span><span class="p">(),</span>
+                                           <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> cpu should be running at </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                           <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">expected</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">log_errors</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">iteration</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.log_errors"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.log_errors">[docs]</a>    <span class="k">def</span> <span class="nf">log_errors</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">iteration</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Method to log errors found while testing a re-raise exceptions captured</span>
+
+<span class="sd">        :param zp: The zone player under test</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param e: The exception that was caught</span>
+<span class="sd">        :type: :obj:`Exception`</span>
+<span class="sd">        :param iteration: The iteration number of the test</span>
+<span class="sd">        :type: :obj:`int`</span>
+<span class="sd">        :raises e: The exception passed in</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Exception hit on </span><span class="si">{}</span><span class="s2"> after </span><span class="si">{}</span><span class="s2"> iterations of test&quot;</span>
+                          <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">iteration</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="se">\n</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tup</span><span class="p">[</span><span class="s1">&#39;t_stamp&#39;</span><span class="p">],</span>
+                                    <span class="n">tup</span><span class="p">[</span><span class="s1">&#39;log&#39;</span><span class="p">])</span> <span class="k">for</span> <span class="n">tup</span> <span class="ow">in</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_dmesg</span><span class="p">()))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_anacapa_trace</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/blackbox/log&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat /proc/driver/micctl&#39;</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="n">e</span></div>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.perform_test"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.perform_test">[docs]</a>    <span class="k">def</span> <span class="nf">perform_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">voice_enabled</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks whether the appropriate CPU frequency is returned</span>
+<span class="sd">        Note: Devices without amps still change CPU frequency during playback.</span>
+<span class="sd">              Anacapa can still schedule to &quot;power off&quot; amps</span>
+<span class="sd">              on devices with no amps.</span>
+
+<span class="sd">            1. after reboot</span>
+<span class="sd">            2. when the player enters the idle state after reboot</span>
+<span class="sd">            3. while playing music</span>
+<span class="sd">            4. when the player is muted</span>
+<span class="sd">            5. after stopping the music</span>
+<span class="sd">            6. when the player enters the idle state after stopping the music</span>
+<span class="sd">            7. Repeats for the given number of iterations</span>
+
+<span class="sd">        :param zp: The zone player to run the test on</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param voice_enabled: Whether or not the test is running against a \</span>
+<span class="sd">        voice capable devices with voice enabled</span>
+<span class="sd">        :type voice_enabled: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_amp_power_off</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+            <span class="n">log</span> <span class="o">=</span> <span class="n">AnacapaTraceLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">ITERATIONS</span><span class="p">):</span>
+                <span class="n">wait_time</span> <span class="o">=</span> <span class="p">(</span><span class="n">DEFAULT_AMP_OFF</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_s12</span><span class="p">()</span> <span class="ow">or</span>
+                                <span class="n">zp</span><span class="o">.</span><span class="n">is_s13</span><span class="p">()</span> <span class="k">else</span> <span class="n">FAST_AMP_OFF</span><span class="p">)</span>
+                <span class="c1"># TODO: Reduce this buffer after SWPBL-86458</span>
+                <span class="n">wait_time</span> <span class="o">+=</span> <span class="mi">30</span>  <span class="c1"># add small buffer to threshold</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;*&#39;</span> <span class="o">*</span> <span class="mi">80</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting iteration </span><span class="si">{}</span><span class="s1"> on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+                                                                      <span class="n">zp</span><span class="p">))</span>
+
+                <span class="c1"># REBOOT --- 1GHz (HIGH)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_blackbox_mask</span><span class="p">(</span><span class="n">BLACKBOX_AMPCTL_MASK</span><span class="p">)</span>
+
+                <span class="c1"># WAITING FOR IDLE --- 400MHz (LOW)</span>
+                <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                Wait for anacapa to start and then attempt to turn the amps off.</span>
+<span class="sd">                Once the amps are off, speed should drop to IDLE</span>
+<span class="sd">                Devices without amps are idle when there&#39;s no playback.</span>
+<span class="sd">                &quot;&quot;&quot;</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_anacapa_running</span><span class="p">(),</span>
+                                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for anacapa to start&quot;</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">diag</span><span class="p">,</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">DIAG_LEVELS</span><span class="p">:</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diag</span><span class="p">,</span> <span class="n">level</span><span class="p">)</span>
+
+                <span class="k">if</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_devices</span><span class="p">:</span>
+                    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                    Assumes these devices have a voice accout enabled</span>
+<span class="sd">                    &quot;&quot;&quot;</span>
+                    <span class="k">if</span> <span class="ow">not</span> <span class="n">voice_enabled</span><span class="p">:</span>
+                        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                        Voice enabled devices only scale CPU</span>
+<span class="sd">                        when voice is disabled</span>
+<span class="sd">                        &quot;&quot;&quot;</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Pressing zone M to mute mic&quot;</span><span class="p">)</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mute_mic</span><span class="p">()</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Pressing zone M to unmute mic&quot;</span><span class="p">)</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">unmute_mic</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Waiting for first IDLE after boot&#39;</span><span class="p">)</span>
+                <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                Voice enabled players should not drop to IDLE speed so the</span>
+<span class="sd">                above listed call to wait_for_speed() should fail. We should,</span>
+<span class="sd">                therefore, catch this failure and move on.</span>
+<span class="sd">                &quot;&quot;&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">,</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">,</span>
+                                    <span class="s2">&quot;Waiting for first IDLE after boot&quot;</span><span class="p">,</span>
+                                    <span class="n">ignore_timeout</span><span class="o">=</span><span class="n">voice_enabled</span><span class="p">)</span>
+
+                <span class="c1"># MUTE + IDLE</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Mute </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting for return to &quot;</span>
+                                 <span class="s2">&quot;IDLE after being muted on&quot;</span>
+                                 <span class="s2">&quot; </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">,</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+                                    <span class="n">IDLE_SPEED_TIMEOUT</span><span class="p">,</span>
+                                    <span class="s2">&quot;Waiting for return to IDLE after mute&quot;</span><span class="p">,</span>
+                                    <span class="n">ignore_timeout</span><span class="o">=</span><span class="n">voice_enabled</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+                <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                Sol will jump to HIGH SPEED when unmuted so wait for speed to</span>
+<span class="sd">                settle back to IDLE</span>
+<span class="sd">                &quot;&quot;&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting for return to IDLE after unmute of </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="c1"># Testing revealed that it can take 5 secs from</span>
+                <span class="c1"># unmute to drop speed</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">,</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
+                                    <span class="n">IDLE_SPEED_TIMEOUT</span><span class="p">,</span>
+                                    <span class="s2">&quot;Waiting for return to IDLE after unmute&quot;</span><span class="p">,</span>
+                                    <span class="n">ignore_timeout</span><span class="o">=</span><span class="n">voice_enabled</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+                <span class="c1"># PLAY MUSIC --- 1GHz (HIGH)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Play Music on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span>
+                    <span class="s2">&quot;**************Starting Buzzer*************&quot;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_buzzer_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">high_cpu_speed</span><span class="p">,</span>
+                                           <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_cpu_frequency_hz</span><span class="p">(),</span>
+                                           <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> CPU frequency should be </span><span class="si">{}</span><span class="s2"> Hz&quot;</span>
+                                           <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">high_cpu_speed</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">,</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">,</span>
+                                    <span class="s2">&quot;CPU frequency should not be impacted by &quot;</span>
+                                    <span class="s2">&quot;muting player&quot;</span><span class="p">,</span> <span class="n">ignore_timeout</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">high_cpu_speed</span><span class="p">,</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">,</span>
+                                    <span class="s2">&quot;CPU frequency should not be impacted by &quot;</span>
+                                    <span class="s2">&quot;muting player&quot;</span><span class="p">)</span>
+
+                <span class="c1"># STOP MUSIC --- 1GHz (HIGH) still because just stopped</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Stop Music on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span>
+                    <span class="s2">&quot;**************Stopping Buzzer*************&quot;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">log</span><span class="o">.</span><span class="n">find_next</span><span class="p">(</span><span class="s2">&quot;.*[scheduling|amp\s+turn]\s+off.*&quot;</span><span class="p">),</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">IDLE_SPEED_TIMEOUT</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for anacapa to schedule amp off &quot;</span>
+                    <span class="s2">&quot;after stopping audio on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+                <span class="c1"># IDLE --- 4MHz</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Waiting for IDLE after stop on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_speed</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">idle_cpu_speed</span><span class="p">,</span> <span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">wait_time</span><span class="p">,</span>
+                                    <span class="s2">&quot;Waiting for IDLE after stopping audio&quot;</span><span class="p">,</span>
+                                    <span class="n">ignore_timeout</span><span class="o">=</span><span class="n">voice_enabled</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="c1"># Additional except block added for debugging jenkins failures</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> hit exception. Dumping anacapa.trace</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span>
+                             <span class="nb">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_anacapa_trace</span><span class="p">()))</span>
+            <span class="k">raise</span> <span class="n">e</span></div>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.test_frequency_scaling_no_voice_control"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.test_frequency_scaling_no_voice_control">[docs]</a>    <span class="k">def</span> <span class="nf">test_frequency_scaling_no_voice_control</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+                                 <span class="bp">self</span><span class="o">.</span><span class="n">devices_in_test</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CPUFrequencyScaling.test_frequency_scaling_voice_control"><a class="viewcode-back" href="../../syssw.html#syssw.cpu_freq_test.CPUFrequencyScaling.test_frequency_scaling_voice_control">[docs]</a>    <span class="k">def</span> <span class="nf">test_frequency_scaling_voice_control</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">perform_test</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">voice_enabled</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">voice_devices</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s1">&#39;CPUFrequencyScaling&#39;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">CPUFrequencyScaling</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

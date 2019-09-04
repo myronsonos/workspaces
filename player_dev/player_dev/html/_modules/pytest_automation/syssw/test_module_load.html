@@ -1,0 +1,446 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.test_module_load &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.test_module_load</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.log_errors.base</span> <span class="k">import</span> <span class="n">SearchMethod</span>
+<span class="kn">from</span> <span class="nn">sonos.log_errors.dmesg</span> <span class="k">import</span> <span class="n">DmesgLogErrors</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">KERNEL_MODULES</span>
+
+
+<div class="viewcode-block" id="TestModuleLoad"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_module_load.TestModuleLoad">[docs]</a><span class="k">class</span> <span class="nc">TestModuleLoad</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This is a suite of tests for stress testing module loading and unloading</span>
+<span class="sd">    on secure boot devices.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">errors</span> <span class="o">=</span> <span class="p">{}</span>  <span class="c1"># Dictionary of devices with errors found</span>
+    <span class="n">iteration</span> <span class="o">=</span> <span class="mi">1</span>  <span class="c1"># Module load/unload iteration count</span>
+    <span class="n">power_coordinator_stopped_devices</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">def</span> <span class="nf">_verify_free_mem</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">free_mem_before</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that the current free memory is greater than or equal to the</span>
+<span class="sd">        free memory before the test. If not, it checks that the memory usage</span>
+<span class="sd">        was less than the max allowed.</span>
+
+<span class="sd">        :param device: The DUT</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param free_mem_before: The free mem before the test, in bytes</span>
+<span class="sd">        :type free_mem_before: :obj:`int`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">one_kilo</span> <span class="o">=</span> <span class="mi">1024</span>
+        <span class="n">max_mem_usage_bytes</span> <span class="o">=</span> <span class="mi">100</span> <span class="o">*</span> <span class="n">one_kilo</span>
+
+        <span class="n">free_mem_after</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_free_mem</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">free_mem_after</span> <span class="o">&gt;=</span> <span class="n">free_mem_before</span><span class="p">:</span>
+            <span class="n">mem_used</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">mem_used</span> <span class="o">=</span> <span class="n">free_mem_before</span> <span class="o">-</span> <span class="n">free_mem_after</span>
+
+        <span class="k">assert</span> <span class="n">mem_used</span> <span class="o">&lt;=</span> <span class="n">max_mem_usage_bytes</span><span class="p">,</span> <span class="p">(</span><span class="s1">&#39;The memory used should be &#39;</span>
+                                                 <span class="s1">&#39;less than </span><span class="si">{}</span><span class="s1">kB. Occurred on &#39;</span>
+                                                 <span class="s1">&#39;iteration </span><span class="si">{}</span><span class="s1">.&#39;</span>
+                                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">max_mem_usage_bytes</span> <span class="o">/</span>
+                                                         <span class="n">one_kilo</span><span class="p">,</span>
+                                                         <span class="bp">self</span><span class="o">.</span><span class="n">iteration</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_verify_no_errors</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that there are no errors on the device.</span>
+
+<span class="sd">        :param device: The DUT</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param module: the module under test when error occurred.</span>
+<span class="sd">        :type module: :obj:`str`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">le</span> <span class="o">=</span> <span class="n">DmesgLogErrors</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">dmesg_errors</span> <span class="o">=</span> <span class="n">le</span><span class="o">.</span><span class="n">find_errors</span><span class="p">(</span><span class="n">SearchMethod</span><span class="o">.</span><span class="n">CLI</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">dmesg_errors</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">errors</span><span class="p">[</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Errors found on device for module </span><span class="si">{}</span><span class="s2"> during &quot;</span>
+                        <span class="s2">&quot;iteration </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">iteration</span><span class="p">,</span> <span class="n">dmesg_errors</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_get_used_by_modules</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a list of modules that depend on/use a given module.</span>
+<span class="sd">        This is the &quot;Used by&quot; column from lsmod.</span>
+
+<span class="sd">        :param device: The sonos zone component</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param module: The module to get dependents from</span>
+<span class="sd">        :type module: :obj:str:</span>
+<span class="sd">        :returns: A list of dependent modules</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">dependent_modules</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">regex</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\\</span><span class="s2">r</span><span class="se">\\</span><span class="s2">n(?:</span><span class="si">{}</span><span class="s2">) +\d+ +\d+ ((?:\[?\w\]?,?)+)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">module</span><span class="p">)</span>
+        <span class="n">lsmod_output</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;lsmod&#39;</span><span class="p">)</span>
+
+        <span class="c1"># If there is a match, create a list of dependent modules</span>
+        <span class="n">match_found</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">regex</span><span class="p">,</span> <span class="n">lsmod_output</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">match_found</span><span class="p">:</span>
+            <span class="n">dependent_modules</span> <span class="o">=</span> <span class="n">match_found</span><span class="o">.</span><span class="n">groups</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+
+            <span class="c1"># Older platforms may include brackets around each module, so</span>
+            <span class="c1"># remove those</span>
+            <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">dependent_modules</span><span class="p">)):</span>
+                <span class="n">dependent_modules</span><span class="p">[</span><span class="n">module</span><span class="p">]</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="s2">&quot;\[|\]&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                                   <span class="n">dependent_modules</span><span class="p">[</span><span class="n">module</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">dependent_modules</span>
+
+    <span class="k">def</span> <span class="nf">_skip_module_testing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">module_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        On some platforms it is necessary to skip</span>
+<span class="sd">        testing on certain modules due to restrictions around loading/</span>
+<span class="sd">        unloading them. This helper method will remove modules that</span>
+<span class="sd">        need to be skipped for each applicable platform along with the</span>
+<span class="sd">        modules these skipped modules depend on.</span>
+
+<span class="sd">        :param device: The sonos zone component</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param modules: The module list to remove modules from</span>
+<span class="sd">        :type modules: :obj:`list` of :obj:`str`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># FIXME SWPBL-90789: don&#39;t skip lla and dependencies on El Rey/Hideout</span>
+        <span class="c1"># FIXME SWPBL-102067: don&#39;t skip mtk_m4 on El Rey</span>
+        <span class="c1"># FIXME SWPBL-110827: don&#39;t skip lla and dependencies on Bootleg</span>
+        <span class="c1"># FIXME SWPBL-118750: don&#39;t skip sdd and dependencies</span>
+        <span class="c1"># FIXME SWPBL-97232: don&#39;t skip lla and dependencies on IMX6 platforms</span>
+        <span class="c1"># FIXME SWPBL-122730: don&#39;t skip unloading the ccg3 on Alpine</span>
+
+        <span class="c1"># Reloading the ccg3_swd driver on S17 will reset the USB ethernet</span>
+        <span class="c1"># connection and cause the device to lose ethernet, making it</span>
+        <span class="c1"># unreachable. Skipping ccg3_swd and its dependencies.</span>
+        <span class="n">modules_to_skip</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;S6&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;sdd&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S11&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;sdd&#39;</span><span class="p">,</span> <span class="s1">&#39;lla&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S13&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;lla&#39;</span><span class="p">,</span> <span class="s1">&#39;sdd&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S14&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;mtk_m4&#39;</span><span class="p">,</span> <span class="s1">&#39;dspic&#39;</span><span class="p">,</span> <span class="s1">&#39;lla&#39;</span><span class="p">,</span>
+                                   <span class="s1">&#39;qca_ddfa&#39;</span><span class="p">,</span> <span class="s1">&#39;lp5562_led&#39;</span><span class="p">,</span> <span class="s1">&#39;sdd&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S15&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;lla&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S16&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;ice40_fpga&#39;</span><span class="p">,</span> <span class="s1">&#39;lla&#39;</span><span class="p">,</span> <span class="s1">&#39;ice40_led&#39;</span><span class="p">,</span>
+                                   <span class="s1">&#39;micctl&#39;</span><span class="p">,</span> <span class="s1">&#39;sdd&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S17&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;ccg3_swd&#39;</span><span class="p">,</span> <span class="s1">&#39;sdd&#39;</span><span class="p">,</span> <span class="s1">&#39;ampctl&#39;</span><span class="p">,</span> <span class="s1">&#39;ccg3&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S18&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;sdd&#39;</span><span class="p">,</span> <span class="s1">&#39;amperctl&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S22&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;sdd&#39;</span><span class="p">],</span>
+                           <span class="s2">&quot;S23&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;sdd&#39;</span><span class="p">]}</span>
+
+        <span class="k">def</span> <span class="nf">safe_remove_from_list</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">item_list</span><span class="p">):</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Helper function for removing items from a list and ignoring</span>
+<span class="sd">            ValueErrors. A ValueError in the context of this function and test</span>
+<span class="sd">            is usually caused by attempting to remove an item that</span>
+<span class="sd">            has already been removed.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">item_list</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+                <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Skipping testing of &#39;</span><span class="si">{}</span><span class="s2">&#39; on &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span>
+                                   <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">device</span><span class="p">))</span>
+            <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+                <span class="k">pass</span>
+
+        <span class="n">untouched_module_list</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">module_list</span><span class="p">)</span>  <span class="c1"># maintain a copy</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">modules_to_skip</span><span class="p">:</span>
+            <span class="c1"># Remove the modules to skip and the modules they depend on</span>
+            <span class="k">for</span> <span class="n">module_to_skip</span> <span class="ow">in</span> <span class="n">modules_to_skip</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]:</span>
+                <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="n">untouched_module_list</span><span class="p">:</span>
+                    <span class="c1"># Go through all modules and if a module is being used by</span>
+                    <span class="c1"># the module to skip it will need to be skipped as well</span>
+                    <span class="k">if</span> <span class="n">module_to_skip</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_used_by_modules</span><span class="p">(</span><span class="n">device</span><span class="p">,</span>
+                                                                   <span class="n">module</span><span class="p">):</span>
+                        <span class="n">safe_remove_from_list</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">module_list</span><span class="p">)</span>
+                <span class="n">safe_remove_from_list</span><span class="p">(</span><span class="n">module_to_skip</span><span class="p">,</span> <span class="n">module_list</span><span class="p">)</span>
+
+<div class="viewcode-block" id="TestModuleLoad.device_modules"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_module_load.TestModuleLoad.device_modules">[docs]</a>    <span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">device_modules</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">secure_boot_device</span><span class="p">,</span> <span class="n">keep_devices_in_error_state</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        This fixture will perform setup and teardown needed for the</span>
+<span class="sd">        &#39;test_module_load&#39; test. This will yield a tuple containing the</span>
+<span class="sd">        device and device modules to test on.</span>
+
+<span class="sd">        :param secure_boot_device: The sonos zone component</span>
+<span class="sd">        :type secure_boot_device:</span>
+<span class="sd">            :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param keep_devices_in_error_state: Whether or not to reboot</span>
+<span class="sd">                                            devices that have errors in dmesg</span>
+<span class="sd">        :type keep_devices_in_error_state: :obj:`bool`</span>
+<span class="sd">        :returns: A tuple containing the device and its modules to test</span>
+<span class="sd">        :rtype: (:class:`~sonos.client.internal.SonosZoneComponent,</span>
+<span class="sd">                 :obj:`list` of :obj:`str`)</span>
+
+<span class="sd">        Setup:</span>
+<span class="sd">        1. Kill anacapad</span>
+<span class="sd">        2. Unload all modules in the correct order</span>
+<span class="sd">        3. Set cpu scaling devices to high speed - needed by the PSoC</span>
+
+<span class="sd">        Teardown:</span>
+<span class="sd">        1. Restart anacapa</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Setup</span>
+        <span class="n">device</span> <span class="o">=</span> <span class="n">secure_boot_device</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">errors</span><span class="p">[</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_anacapa_running</span><span class="p">():</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">()</span>
+        <span class="c1"># Stop sonospowercoordinator for power coordinator</span>
+        <span class="c1"># dependencies and errors</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_power_coordinator</span><span class="p">():</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_power_coordinator</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">power_coordinator_stopped_devices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_cpu_frequency_hz</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">high_cpu_speed</span><span class="p">)</span>
+
+        <span class="c1"># Get and reverse module list to unload in proper order</span>
+        <span class="n">modules</span> <span class="o">=</span> <span class="n">KERNEL_MODULES</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+        <span class="n">modules</span><span class="o">.</span><span class="n">reverse</span><span class="p">()</span>
+
+        <span class="c1"># Some modules cannot be removed or are not actually loaded</span>
+        <span class="c1"># on different platforms. Skip testing on those modules</span>
+        <span class="c1"># and modules they depend on.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_skip_module_testing</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">modules</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="n">modules</span><span class="p">:</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_module</span><span class="p">(</span><span class="n">module</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_verify_no_errors</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">TimeoutError</span><span class="p">,</span> <span class="ne">NameError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="c1"># Reboot error devices unless running with</span>
+            <span class="c1"># &#39;--keep_devices_in_error_state&#39;</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">keep_devices_in_error_state</span><span class="p">:</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+            <span class="k">raise</span> <span class="n">e</span>
+
+        <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_dmesg</span><span class="p">()</span>
+
+        <span class="c1"># Reverse module list again so it is ordered correctly</span>
+        <span class="c1"># and yield both the device and module list</span>
+        <span class="n">modules</span><span class="o">.</span><span class="n">reverse</span><span class="p">()</span>
+        <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">modules</span>
+
+        <span class="c1"># Teardown</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">errors</span><span class="p">[</span><span class="n">device</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">power_coordinator_stopped_devices</span><span class="p">:</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">start_power_coordinator</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">is_anacapa_running</span><span class="p">():</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="ow">not</span> <span class="n">keep_devices_in_error_state</span><span class="p">:</span>
+            <span class="c1"># Reboot error devices unless running with</span>
+            <span class="c1"># &#39;--keep_devices_in_error_state&#39;</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestModuleLoad.test_expected_modules"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_module_load.TestModuleLoad.test_expected_modules">[docs]</a>    <span class="k">def</span> <span class="nf">test_expected_modules</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">secure_boot_device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that all expected module files are populated in /modules.</span>
+
+<span class="sd">        :param secure_boot_device: The sonos zone component</span>
+<span class="sd">        :type secure_boot_device:</span>
+<span class="sd">            :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        1. ls /modules</span>
+<span class="sd">        2. Parse the list of modules in /modules</span>
+<span class="sd">        3. Compare the list to the modules defined in KERNEL_MODULES</span>
+<span class="sd">        4. Verify all expected module files are populated</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">device</span> <span class="o">=</span> <span class="n">secure_boot_device</span>
+        <span class="n">modules</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="s2">&quot;/modules&quot;</span><span class="p">)</span>
+        <span class="n">expected_modules</span> <span class="o">=</span> <span class="n">KERNEL_MODULES</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="nb">set</span><span class="p">(</span><span class="n">expected_modules</span><span class="p">)</span> <span class="o">==</span> <span class="nb">set</span><span class="p">(</span><span class="n">modules</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;All expected modules &#39;</span>
+                                                       <span class="s1">&#39;should be in /modules &#39;</span>
+                                                       <span class="s1">&#39;on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestModuleLoad.test_module_load"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_module_load.TestModuleLoad.test_module_load">[docs]</a>    <span class="k">def</span> <span class="nf">test_module_load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device_modules</span><span class="p">,</span> <span class="n">iterations</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Performs a module load/unload stress test and looks for memory leaks.</span>
+<span class="sd">        Run using --iterations=&lt;num_iterations (int)&gt; - see ./conftest.py</span>
+<span class="sd">        for more info.</span>
+
+<span class="sd">        :param secure_boot_device: The sonos zone component</span>
+<span class="sd">        :type secure_boot_device:</span>
+<span class="sd">            :obj:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param iterations: The number of iterations to load/unload</span>
+<span class="sd">        :type iterations: :obj:`int`</span>
+
+<span class="sd">        Test Steps:</span>
+<span class="sd">        1. Load the module under test</span>
+<span class="sd">        2. Verify the module under test is loaded</span>
+<span class="sd">        3. Check dmesg for errors</span>
+<span class="sd">        4. Check /proc/meminfo to get free memory</span>
+<span class="sd">        5. Clear dmesg</span>
+<span class="sd">        6. Unload the module under test</span>
+<span class="sd">        7. Verify the module under test has been unloaded</span>
+<span class="sd">        8. Check dmesg for errors</span>
+<span class="sd">        9. Load the module under test</span>
+<span class="sd">        10. Verify the module under test has been loaded</span>
+<span class="sd">        11. Check dmesg for errors</span>
+<span class="sd">        12. Get free memory, compare to step 4 and verify no leaks</span>
+<span class="sd">        13. Repeat steps 1 - 12 for a number of iterations</span>
+<span class="sd">        14. Repeat step 13 for all modules</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">device</span><span class="p">,</span> <span class="n">modules</span> <span class="o">=</span> <span class="n">device_modules</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="n">modules</span><span class="p">:</span>
+                <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting stress test of module: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                                   <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">module</span><span class="p">))</span>
+
+                <span class="c1"># Insert module under test</span>
+                <span class="n">module_path</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;/modules/&quot;</span> <span class="o">+</span>
+                               <span class="n">KERNEL_MODULES</span><span class="p">[</span><span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">][</span><span class="n">module</span><span class="p">])</span>
+                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">insert_module</span><span class="p">(</span><span class="n">module_path</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_verify_no_errors</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">)</span>
+
+                <span class="c1"># Repeat stress test for the given number of iterations</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">iterations</span><span class="o">+</span><span class="mi">1</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">iteration</span> <span class="o">=</span> <span class="n">i</span>
+                    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_dmesg</span><span class="p">()</span>
+                    <span class="n">free_mem_before</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_free_mem</span><span class="p">()</span>
+
+                    <span class="c1"># Verify module unload</span>
+                    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_module</span><span class="p">(</span><span class="n">module</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">module</span> <span class="o">==</span> <span class="s2">&quot;qca_ddfa&quot;</span><span class="p">:</span>
+                        <span class="c1"># qca_ddfa requires amperctl to be reloaded so amperctl</span>
+                        <span class="c1"># is in the correct state to load qca_ddfa module</span>
+                        <span class="c1"># without causing an AMPCTL assertion error message</span>
+                        <span class="c1"># &quot;amp status not in PWRDOWN state, instead =2&quot;</span>
+                        <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_module</span><span class="p">(</span><span class="s2">&quot;amperctl&quot;</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_verify_no_errors</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">)</span>
+
+                    <span class="c1"># Verify module load</span>
+                    <span class="k">if</span> <span class="n">module</span> <span class="o">==</span> <span class="s2">&quot;qca_ddfa&quot;</span><span class="p">:</span>
+                        <span class="c1"># qca_ddfa requires amperctl to be reloaded so amperctl</span>
+                        <span class="c1"># is in the correct state to load qca_ddfa module</span>
+                        <span class="c1"># without causing an AMPCTL assertion error message</span>
+                        <span class="c1"># &quot;amp status not in PWRDOWN state, instead =2&quot;</span>
+                        <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">insert_module</span><span class="p">(</span><span class="s2">&quot;/modules/amperctl.ko&quot;</span><span class="p">)</span>
+                    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">insert_module</span><span class="p">(</span><span class="n">module_path</span><span class="p">)</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_verify_no_errors</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">module</span><span class="p">)</span>
+
+                    <span class="c1"># Verify no memory leaks</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_verify_free_mem</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">free_mem_before</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">TimeoutError</span><span class="p">,</span> <span class="ne">NameError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">errors</span><span class="p">[</span><span class="n">device</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">raise</span> <span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">),</span> <span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&quot; - occurred on iteration </span><span class="si">{}</span><span class="s2">&quot;</span>
+                            <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">iteration</span><span class="p">))</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

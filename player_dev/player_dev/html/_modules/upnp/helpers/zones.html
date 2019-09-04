@@ -1,0 +1,580 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.helpers.zones &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.helpers.zones</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">collections</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="n">XMLAccessor</span>
+<span class="kn">import</span> <span class="nn">xml.etree.ElementTree</span> <span class="k">as</span> <span class="nn">ET</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span><span class="p">,</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.playback</span> <span class="k">import</span> <span class="n">PlaybackHelpers</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.exception</span> <span class="k">import</span> <span class="n">ExceptionHelpers</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.settings</span> <span class="k">import</span> <span class="n">ReplicatedSettingsHelpers</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.workflow</span> <span class="k">import</span> <span class="n">BaseWorkflowHelper</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.util</span> <span class="k">import</span> <span class="n">UtilityHelpers</span>
+<span class="kn">import</span> <span class="nn">requests.api</span>
+<span class="kn">import</span> <span class="nn">base64</span>
+<span class="kn">import</span> <span class="nn">sonos.subnet</span>
+
+<span class="n">DEVICE_DESCRIPTION_URL</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">%s</span><span class="s1">:1400/xml/device_description.xml&#39;</span>
+
+<div class="viewcode-block" id="ZonesHelpers"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers">[docs]</a><span class="k">class</span> <span class="nc">ZonesHelpers</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Common methods to work with SonosZoneComponent objects</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">logger</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">logger</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logger</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;ZonesHelpers&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exceptions</span> <span class="o">=</span> <span class="n">ExceptionHelpers</span><span class="p">(</span><span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback</span> <span class="o">=</span> <span class="n">PlaybackHelpers</span><span class="p">(</span><span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">settings</span> <span class="o">=</span> <span class="n">ReplicatedSettingsHelpers</span><span class="p">(</span><span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">util</span> <span class="o">=</span> <span class="n">UtilityHelpers</span><span class="p">(</span><span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ZonesHelpers.get_zones_with_service"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_zones_with_service">[docs]</a>    <span class="k">def</span> <span class="nf">get_zones_with_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">required_service</span><span class="p">,</span> <span class="n">zone_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return devices with specified service</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        required_service -- string, name of service required</span>
+<span class="sd">        zone_list -- list of SonosZoneComponents to search</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        list of SonosZoneComponents</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zones_with_service</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">required_service</span><span class="p">),</span> <span class="n">zone_list</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">zones_with_service</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_zone_with_service"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_zone_with_service">[docs]</a>    <span class="k">def</span> <span class="nf">get_zone_with_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">required_service</span><span class="p">,</span> <span class="n">zone_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return 1 device that has the specified service</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        required_service -- string, name of service required</span>
+<span class="sd">        zone_list -- list of SonosZoneComponents to search</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        SonosZoneComponent with required service</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zone_with_service</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">zones_with_service</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_zones_with_service</span><span class="p">(</span><span class="n">required_service</span><span class="p">,</span> <span class="n">zone_list</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zones_with_service</span><span class="p">:</span>
+            <span class="n">zone_with_service</span> <span class="o">=</span> <span class="n">zones_with_service</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">zone_with_service</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.remove_duplicate_models_from_list"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.remove_duplicate_models_from_list">[docs]</a>    <span class="k">def</span> <span class="nf">remove_duplicate_models_from_list</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list, list of SonosZoneComponent objects</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        list -- SonosZoneComponents with duplicate models removed</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">unique_device_collection</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">unique_device_collection</span><span class="p">:</span>
+                <span class="n">unique_device_collection</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">]</span> <span class="o">=</span> <span class="n">zp</span>
+                <span class="k">continue</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;found duplicate device: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">zp</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">unique_device_collection</span><span class="o">.</span><span class="n">values</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_zone_from_model"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_zone_from_model">[docs]</a>    <span class="k">def</span> <span class="nf">get_zone_from_model</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">omit_channel_map_devices</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return one SonosZoneComponent of the specified model from this list</span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        model -- string, model number of device to return</span>
+<span class="sd">        zone_list -- list, list of SonosZoneComponent objects to find device in</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        SonosZoneComponent -- device matching requested model</span>
+<span class="sd">        None -- no SonosZoneComponent found which matches requested model</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">zone</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">omit_channel_map_devices</span><span class="p">:</span>
+            <span class="n">matching_zones</span> <span class="o">=</span> <span class="p">[</span> <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">model</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_map_from_device</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="o">==</span> <span class="kc">None</span> <span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">matching_zones</span> <span class="o">=</span> <span class="p">[</span> <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">model</span> <span class="p">]</span>
+        <span class="k">if</span> <span class="n">matching_zones</span><span class="p">:</span>
+            <span class="n">zone</span> <span class="o">=</span> <span class="n">matching_zones</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;could not find model </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">model</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">zone</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_channel_map_from_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_channel_map_from_device">[docs]</a>    <span class="k">def</span> <span class="nf">get_channel_map_from_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">zp_localsettings</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span>
+        <span class="n">chmap</span> <span class="o">=</span> <span class="n">zp_localsettings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;HTSatelliteDefn&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="n">zp_localsettings</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;ChannelMapSet&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">chmap</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+            <span class="n">chmap</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">chmap</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_zones_from_channel_map"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_zones_from_channel_map">[docs]</a>    <span class="k">def</span> <span class="nf">get_zones_from_channel_map</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">channel_map</span><span class="p">,</span> <span class="n">zone_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return SonosZoneComponent objects specified in this channel map</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        channel_map -- string, channel map used by AddBondedZones</span>
+<span class="sd">                       list, channel map used by AddHTSatellite</span>
+
+<span class="sd">        zone_list -- list, list of SonosZoneComponents to search for devices from</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        list -- SonosZoneComponents found in the channel map</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">udn_list</span> <span class="o">=</span> <span class="p">[</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_list</span> <span class="p">]</span>
+        <span class="n">matching_zones</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># if our channnel map was created for a HTSatellite configuration, it&#39;s going</span>
+        <span class="c1"># to be a list. We&#39;ll turn it into a string below so we can search for UDN substrings</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">channel_map</span><span class="p">,</span> <span class="n">collections</span><span class="o">.</span><span class="n">Iterable</span><span class="p">):</span>
+            <span class="n">channel_map</span> <span class="o">=</span> <span class="nb">str</span><span class="p">()</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">channel_map</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">udn</span> <span class="ow">in</span> <span class="n">udn_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">udn</span> <span class="ow">in</span> <span class="n">channel_map</span><span class="p">:</span>
+                <span class="n">zone</span> <span class="o">=</span> <span class="p">[</span> <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zone_list</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">==</span> <span class="n">udn</span> <span class="ow">and</span> <span class="n">zp</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">matching_zones</span> <span class="p">]</span>
+                <span class="k">if</span> <span class="n">zone</span><span class="p">:</span>
+                    <span class="n">matching_zones</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zone</span><span class="o">.</span><span class="n">pop</span><span class="p">())</span>
+
+        <span class="k">return</span> <span class="n">matching_zones</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_subnet_handle_from_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_subnet_handle_from_device">[docs]</a>    <span class="k">def</span> <span class="nf">get_subnet_handle_from_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get a handle to the UPNP class from the specified device</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zp -- SonosZoneComponent</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">subnet</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;upnp&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">subnet</span></div>
+
+
+<div class="viewcode-block" id="ZonesHelpers.cleanup_device_configurations"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.cleanup_device_configurations">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup_device_configurations</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Cleanup bonded/satellite configurations on multiple devices</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list, SonosZoneComponents to cleanup bonded/satellite configurations on</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cleanup_device_configuration</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.cleanup_device_configuration"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.cleanup_device_configuration">[docs]</a>    <span class="k">def</span> <span class="nf">cleanup_device_configuration</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Cleanup bonded/satellite configurations for this device</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zp -- SonosZoneComponent</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">services</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%s</span><span class="s2"> (</span><span class="si">%s</span><span class="s2">) has 0 services - reconnecting...&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">))</span>
+        <span class="n">localsettings_dict</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;satellite/bonded cleanup for </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">)</span>
+        <span class="n">satellite_chmap</span> <span class="o">=</span> <span class="n">localsettings_dict</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;HTSatelliteDefn&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;satellite_chmap (</span><span class="si">%s</span><span class="s2">): </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="n">satellite_chmap</span><span class="p">))</span>
+        <span class="n">bonded_chmap</span> <span class="o">=</span> <span class="n">localsettings_dict</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;ChannelMapSet&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;bonded_chmap (</span><span class="si">%s</span><span class="s2">): </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="n">bonded_chmap</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">():</span>
+             <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;found no satellite/bonded configuration on </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.wait_for_addition_of_subnet_devices"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.wait_for_addition_of_subnet_devices">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_addition_of_subnet_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for the specified zones to be detected by the UPnP framework</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list of SonosZoneComponents</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        timeout_seconds -- integer, default=60, number of seconds to wait for removal of specified devices</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;waiting </span><span class="si">%d</span><span class="s2"> seconds for the addition of </span><span class="si">%d</span><span class="s2"> subnet devices&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">timeout_seconds</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">zones</span><span class="p">)))</span>
+        <span class="n">subnet_handle</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_subnet_handle_from_device</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>\
+                <span class="kc">False</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span> <span class="s1">&#39;uuid:&#39;</span> <span class="o">+</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">subnet_handle</span><span class="o">.</span><span class="n">device_udn_list</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="p">],</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%d</span><span class="s2"> devices added to subnet&quot;</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">zones</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.wait_for_removal_of_subnet_devices"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.wait_for_removal_of_subnet_devices">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_removal_of_subnet_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for the specified zones to be removed from the UPnP framework</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list of SonosZoneComponents</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        timeout_seconds -- integer, default=60, number of seconds to wait for removal of specified devices</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;waiting </span><span class="si">%d</span><span class="s2"> seconds for the removal of </span><span class="si">%d</span><span class="s2"> subnet devices&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">timeout_seconds</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">zones</span><span class="p">)))</span>
+        <span class="n">subnet_handle</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_subnet_handle_from_device</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>\
+                <span class="kc">True</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span> <span class="s1">&#39;uuid:&#39;</span> <span class="o">+</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">subnet_handle</span><span class="o">.</span><span class="n">device_udn_list</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="p">],</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%d</span><span class="s2"> devices removed from subnet&quot;</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">zones</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_all_devices_in_this_household"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_all_devices_in_this_household">[docs]</a>    <span class="k">def</span> <span class="nf">get_all_devices_in_this_household</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hhid_zp</span><span class="p">,</span> <span class="n">include_hhid_zp</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get all SonosZoneComponents with the HHID of this device</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        hhid_zp -- SonosZoneComponent, zone to get HHID from</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        list of SonosZoneComponents with same HHID as hhid_zp</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">hhid</span> <span class="o">=</span> <span class="n">hhid_zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_hhid</span><span class="p">()</span>
+        <span class="n">hhid_devices</span> <span class="o">=</span> <span class="p">[</span> <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">hhid_zp</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">sonos_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">!=</span> <span class="n">hhid_zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">and</span> \
+                                                                   <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_hhid</span><span class="p">()</span> <span class="o">==</span> <span class="n">hhid</span> <span class="p">]</span>
+        <span class="k">if</span> <span class="n">include_hhid_zp</span><span class="p">:</span>
+            <span class="n">hhid_devices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">hhid_zp</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">hhid_devices</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.build_device_channel_map"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.build_device_channel_map">[docs]</a>    <span class="k">def</span> <span class="nf">build_device_channel_map</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">chmap_config</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">chmap</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">chmap_strings</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">chmap_response</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">used_primary</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="c1"># don&#39;t consider the device available if it&#39;s already in a bonded/HT configuration</span>
+        <span class="n">available_zones</span> <span class="o">=</span> <span class="p">[</span> <span class="n">hhid_zp</span> <span class="k">for</span> <span class="n">hhid_zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_all_devices_in_this_household</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_channel_map_from_device</span><span class="p">(</span><span class="n">hhid_zp</span><span class="p">)</span> <span class="p">]</span>
+        <span class="n">used_satellites</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">chmap</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_soundbar</span><span class="p">():</span>
+            <span class="c1"># LL is always going to be these three channels in a satellite config</span>
+            <span class="n">chmap</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">:LF,RF;&quot;</span> <span class="o">%</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span>
+            <span class="n">used_primary</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">for</span> <span class="n">satellite_data</span> <span class="ow">in</span> <span class="n">chmap_config</span><span class="p">:</span>
+            <span class="n">satellite_channel</span><span class="p">,</span> <span class="n">satellite_model</span> <span class="o">=</span> <span class="n">satellite_data</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">used_primary</span> <span class="ow">and</span> <span class="n">satellite_model</span> <span class="o">==</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">:</span>
+                <span class="n">satellite_zone</span> <span class="o">=</span> <span class="n">zp</span>
+                <span class="n">used_satellites</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">satellite_zone</span><span class="p">)</span>
+                <span class="n">used_primary</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;using primary zp: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">candidate_zones</span> <span class="o">=</span> <span class="p">[</span> <span class="n">candidate</span> <span class="k">for</span> <span class="n">candidate</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">([</span><span class="n">satellite_model</span><span class="p">])</span> <span class="k">if</span> <span class="n">candidate</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">used_satellites</span> <span class="p">]</span>
+                <span class="n">satellite_zone</span> <span class="o">=</span> <span class="n">candidate_zones</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="n">used_satellites</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">satellite_zone</span><span class="p">)</span>
+            <span class="n">chmap_strings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%s</span><span class="s2">:</span><span class="si">%s</span><span class="s2">;&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">satellite_zone</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="n">satellite_channel</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">chmap_strings</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_soundbar</span><span class="p">():</span>
+                <span class="n">chmap_response</span> <span class="o">=</span> <span class="p">[</span> <span class="n">chmap</span> <span class="o">+</span> <span class="n">chmap_string</span> <span class="k">for</span> <span class="n">chmap_string</span> <span class="ow">in</span> <span class="n">chmap_strings</span> <span class="p">]</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">chmap_response</span> <span class="o">=</span> <span class="n">chmap</span> <span class="o">+</span> <span class="nb">str</span><span class="p">()</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">chmap_strings</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;produced channel map: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">chmap_response</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">chmap_response</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.get_num_devices_in_topology"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.get_num_devices_in_topology">[docs]</a>    <span class="k">def</span> <span class="nf">get_num_devices_in_topology</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the number of zones in this devices topology</span>
+
+<span class="sd">        zp -- SonosZoneComponent</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        integer -- number of devices in topology</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">topology</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_topology</span><span class="p">()</span>
+        <span class="n">num_devices</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="n">topology</span><span class="p">:</span>
+            <span class="n">num_devices</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">topology</span><span class="o">.</span><span class="n">ZonePlayer</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">num_devices</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.wait_for_num_topology_devices"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.wait_for_num_topology_devices">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_num_topology_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">num_expected_devices</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for the status/topology diag page to show the expected number of devices (or more)</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zp -- SonosZoneComponent</span>
+<span class="sd">        num_expected_devices -- integer, number of devices to wait for</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        boolean -- does status/topology page contain expected number of devices (or more)</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;waiting for </span><span class="si">%d</span><span class="s2"> devices to appear in topology for </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">num_expected_devices</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_num_devices_in_topology</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">num_expected_devices</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">topology</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_topology</span><span class="p">()</span>
+            <span class="n">topology_devices</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">ZonePlayer</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;caught TimeoutError waiting for </span><span class="si">%d</span><span class="s2"> devices to appear in topology for </span><span class="si">%s</span><span class="s2"> (found </span><span class="si">%d</span><span class="s2">)&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">num_expected_devices</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">topology_devices</span><span class="p">)))</span>
+            <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">topology_devices</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">d</span><span class="p">))</span>
+            <span class="k">raise</span> <span class="n">e</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.wait_for_devices_to_have_same_number_of_topology_devices"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.wait_for_devices_to_have_same_number_of_topology_devices">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_devices_to_have_same_number_of_topology_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for these devices to show the same number of devices in their</span>
+<span class="sd">        status/topology diag page</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list of SonosZoneComponents</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> \
+                        <span class="bp">self</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">are_sequence_elements_equal</span><span class="p">(</span>\
+                        <span class="p">[</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_num_devices_in_topology</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="p">]),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.setup_htsatellite_config"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.setup_htsatellite_config">[docs]</a>    <span class="k">def</span> <span class="nf">setup_htsatellite_config</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_device</span><span class="p">,</span> <span class="n">chmap_list</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;setup satellite configuration for </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">ht_device</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">)</span>
+        <span class="n">num_topology_devices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_num_devices_in_topology</span><span class="p">(</span><span class="n">ht_device</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">chmap</span> <span class="ow">in</span> <span class="n">chmap_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;calling AddHTSatellite(</span><span class="si">%s</span><span class="s2">)&quot;</span> <span class="o">%</span> <span class="n">chmap</span><span class="p">)</span>
+            <span class="n">chmap_devices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_zones_from_channel_map</span><span class="p">(</span><span class="n">chmap</span><span class="p">,</span> <span class="n">ht_device</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">sonos_devices</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_devices_to_have_same_number_of_topology_devices</span><span class="p">(</span><span class="n">chmap_devices</span> <span class="o">+</span> <span class="p">[</span><span class="n">ht_device</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">call_and_retry</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">ht_device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">AddHTSatellite</span><span class="p">(</span><span class="n">chmap</span><span class="p">),</span>
+                                     <span class="n">allowable_upnp_exceptions</span><span class="o">=</span><span class="p">[</span><span class="mi">1034</span><span class="p">],</span>
+                                     <span class="n">error_callable</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">15</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_num_topology_devices</span><span class="p">(</span><span class="n">ht_device</span><span class="p">,</span> <span class="n">num_topology_devices</span><span class="p">)</span></div>
+
+    <span class="c1"># TODO: verify that bonded_config has expected elements</span>
+<div class="viewcode-block" id="ZonesHelpers.parse_bonded_config"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.parse_bonded_config">[docs]</a>    <span class="k">def</span> <span class="nf">parse_bonded_config</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bonded_config</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">model_description</span> <span class="o">=</span> <span class="n">bonded_config</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">playback_model</span> <span class="o">=</span> <span class="n">bonded_config</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">monitor_model</span> <span class="o">=</span> <span class="n">bonded_config</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">satellite_data</span> <span class="o">=</span> <span class="n">bonded_config</span><span class="p">[</span><span class="mi">3</span><span class="p">:]</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">model_description</span><span class="p">,</span> <span class="n">playback_model</span><span class="p">,</span> <span class="n">monitor_model</span><span class="p">,</span>
+            <span class="n">satellite_data</span><span class="p">)</span></div>
+
+    <span class="c1"># TODO: define bonded config with map, not list</span>
+<div class="viewcode-block" id="ZonesHelpers.setup_device_configuration"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.setup_device_configuration">[docs]</a>    <span class="k">def</span> <span class="nf">setup_device_configuration</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">chmap_config</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup a satellite or bonded configuration for a test</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        chmap_config -- list specifying the satellite/bonded configuration</span>
+
+<span class="sd">                    list contents:</span>
+<span class="sd">                        string, &#39;model description&#39;: description of bonded/satellite configuration</span>
+<span class="sd">                        string, &#39;playback device&#39;: model number of device to playback from during test</span>
+<span class="sd">                        string, &#39;monitor device&#39;: model number of device to monitor during test</span>
+<span class="sd">                        list of tuples, &#39;channel map specification&#39;:</span>
+<span class="sd">                            string, &#39;channel&#39;: desired channel</span>
+<span class="sd">                            string, &#39;device model&#39;: model of device to use in this channel</span>
+
+<span class="sd">                    ex:</span>
+<span class="sd">                        [&quot;S9 + Sub + 2 S3s&quot;, &quot;S9&quot;,&quot;S9&quot;,[&quot;SW&quot;,&quot;Sub&quot;],[&quot;LR&quot;,&quot;S3&quot;],[&quot;RR&quot;,&quot;S3&quot;]] ]</span>
+<span class="sd">                        S9 in 5.1 config, S9 as both playback and monitoring device</span>
+
+<span class="sd">        zones -- list of SonosZoneComponents to create bonded/satellite configuration from</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        tuple --</span>
+<span class="sd">            string, model description</span>
+<span class="sd">            SonosZoneComponent, playback device</span>
+<span class="sd">            SonosZoneComponent, monitoring device</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">model_description</span><span class="p">,</span> <span class="n">playback_model</span><span class="p">,</span> <span class="n">monitor_model</span><span class="p">,</span> <span class="n">satellite_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">parse_bonded_config</span><span class="p">(</span><span class="n">chmap_config</span><span class="p">)</span>
+        <span class="n">playback_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_zone_from_model</span><span class="p">(</span><span class="n">playback_model</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">omit_channel_map_devices</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">monitor_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_zone_from_model</span><span class="p">(</span><span class="n">monitor_model</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">omit_channel_map_devices</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">playback_zp</span><span class="p">,</span> <span class="s2">&quot;DeviceProperties&quot;</span><span class="p">))</span>
+        <span class="n">chmap_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">build_device_channel_map</span><span class="p">(</span><span class="n">playback_zp</span><span class="p">,</span> <span class="n">satellite_data</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;got channel map: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">chmap_data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">chmap_data</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">setup_htsatellite_config</span><span class="p">(</span><span class="n">playback_zp</span><span class="p">,</span> <span class="n">chmap_data</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;calling AddBondedZones(</span><span class="si">%s</span><span class="s2">) on </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">chmap_data</span><span class="p">,</span> <span class="n">playback_zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_devices_to_have_same_number_of_topology_devices</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">call_and_retry</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">playback_zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">AddBondedZones</span><span class="p">(</span><span class="n">chmap_data</span><span class="p">),</span>
+                                        <span class="n">allowable_upnp_exceptions</span><span class="o">=</span><span class="p">[</span><span class="mi">1034</span><span class="p">],</span>
+                                        <span class="n">error_callable</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">15</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">model_description</span><span class="p">,</span> <span class="n">playback_zp</span><span class="p">,</span> <span class="n">monitor_zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ZonesHelpers.is_zone_in_topologies"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.is_zone_in_topologies">[docs]</a>    <span class="k">def</span> <span class="nf">is_zone_in_topologies</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">test_zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Is this zone UUID listed in the status/topology page of</span>
+<span class="sd">        the other specified zones?</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        test_zp -- SonosZoneComponent, zone whose UUID will be searched for</span>
+<span class="sd">        zones -- list of SonosZoneComponents, zones whose status/topology</span>
+<span class="sd">                 pages will be searched</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        boolean -- is test_zp in topology for all zones?</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;checking </span><span class="si">%d</span><span class="s2"> zones topology for </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span>
+                         <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">zones</span><span class="p">),</span> <span class="n">test_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span>
+        <span class="n">is_in_topology</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">topology_results</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">topology</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_topology</span><span class="p">()</span>
+            <span class="n">topology_data</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">ZonePlayer</span>
+            <span class="n">topology_results</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="kc">True</span> <span class="ow">in</span> \
+                <span class="p">[</span> <span class="n">test_zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="o">==</span> <span class="n">group</span><span class="o">.</span><span class="n">uuid</span> <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">topology_data</span> <span class="p">])</span>
+        <span class="n">is_in_topology</span> <span class="o">=</span> <span class="kc">False</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">topology_results</span>
+        <span class="k">return</span> <span class="n">is_in_topology</span></div>
+
+    <span class="c1"># TODO: move into AVTransport.link_zones()</span>
+<div class="viewcode-block" id="ZonesHelpers.wait_for_zones_to_be_ready_for_linking"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesHelpers.wait_for_zones_to_be_ready_for_linking">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_zones_to_be_ready_for_linking</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait for devices to appear ready for linking</span>
+
+<span class="sd">        Arguments:</span>
+<span class="sd">        zones -- list of SonosZoneComponents to link</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;WARNING - DO NOT USE THIS METHOD OR ANYOTHER LOCATED IN ZONES.PY&quot;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="kc">False</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;&#39;</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="p">])</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="kc">False</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span> <span class="n">zp</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">is_group_coordinator_local</span><span class="p">()</span> <span class="o">==</span> <span class="kc">True</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span> <span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_devices_to_have_same_number_of_topology_devices</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_zone_in_topologies</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="ZonesWorkflowHelpers"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.zones.ZonesWorkflowHelpers">[docs]</a><span class="k">class</span> <span class="nc">ZonesWorkflowHelpers</span><span class="p">(</span><span class="n">ZonesHelpers</span><span class="p">,</span> <span class="n">BaseWorkflowHelper</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">workflow_instance</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">workflow_instance</span><span class="o">.</span><span class="n">logger</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zones</span> <span class="o">=</span> <span class="n">workflow_instance</span><span class="o">.</span><span class="n">zones</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../helpers.html">upnp.helpers</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

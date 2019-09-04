@@ -1,0 +1,347 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.hls.hls_codecs_field &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.hls.hls_codecs_field</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">from</span> <span class="nn">twisted.web</span> <span class="k">import</span> <span class="n">static</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span><span class="p">,</span> <span class="n">get_random_web_port_to_use</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span><span class="p">,</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">UPNP_OK</span><span class="p">,</span> <span class="n">UPNP_ERROR_701_TRANSITION_UNAVAILABLE</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.hls.hls_negative_tests</span> <span class="k">import</span><span class="p">(</span>
+    <span class="n">BoolCallBackSetter</span><span class="p">,</span> <span class="n">StaticFileHandler</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="HLSCodecsField"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField">[docs]</a><span class="k">class</span> <span class="nc">HLSCodecsField</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify the player recovers on an attempt to parse the</span>
+<span class="sd">    EXT-X-STREAM-INF tag which contains a list of comma</span>
+<span class="sd">    seperated codecs in the CODECS attribute.</span>
+<span class="sd">    The list purposely exceeds the player&#39;s internal buffer</span>
+<span class="sd">    space when parsing the attributes of the EXT-X-STREAM-INF tag.</span>
+<span class="sd">    Addresses SWPBL-41443.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;HLS_REGRESSION&quot;</span><span class="p">]</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Name of the master HLS file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MASTER_HLS_NAME</span> <span class="o">=</span> <span class="s2">&quot;master.m3u8&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Name of media HLS file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MEDIA_HLS_NAME</span> <span class="o">=</span> <span class="s2">&quot;media.m3u8&quot;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Master playlist template, IP and port added dynamically.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MASTER_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-VERSION:2</span>
+<span class="s2">#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=50880,CODECS=mp4a.40.5,mp4a.40.5,mp4a.40.5,mp4a.40.5,mp4a.40.5,mp4a.40.5,mp4a.40.5</span>
+<span class="s2">media.m3u8</span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="n">MEDIA_TEMPLATE</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;#EXTM3U</span>
+<span class="s2">#EXT-X-TARGETDURATION:10</span>
+<span class="s2">#EXT-X-ALLOW-CACHE:YES</span>
+<span class="s2">#EXT-X-VERSION:3</span>
+<span class="s2">#EXT-X-MEDIA-SEQUENCE:143419997</span>
+<span class="s2">thisfiledoesnotexist.ts</span>
+<span class="s2">&quot;&quot;&quot;</span>
+    <span class="n">CORRUPT_FILE_DIAGC</span> <span class="o">=</span> <span class="s2">&quot;Transport error ERROR_CORRUPT_FILE&quot;</span>
+
+<div class="viewcode-block" id="HLSCodecsField.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create a list of audio data files used as input in the test.</span>
+<span class="sd">        Start web server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span> <span class="o">=</span> <span class="n">BoolCallBackSetter</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_websrv</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="HLSCodecsField.setup_websrv"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.setup_websrv">[docs]</a>    <span class="k">def</span> <span class="nf">setup_websrv</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up the local web server.</span>
+<span class="sd">        Creates a handler dictionary for the web server.</span>
+<span class="sd">        Starts web server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span>
+            <span class="n">port</span><span class="o">=</span><span class="n">get_random_web_port_to_use</span><span class="p">(),</span>
+            <span class="n">path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">abs_path</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span> <span class="o">=</span> <span class="s2">&quot;hls-aac://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">)</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">,</span> <span class="s1">&#39;wb+&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_TEMPLATE</span><span class="p">)</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">,</span> <span class="s1">&#39;wb+&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">fh</span><span class="p">:</span>
+            <span class="n">fh</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_TEMPLATE</span><span class="p">)</span>
+        <span class="c1"># Add handlers for the master, media - no audio</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">,</span>
+                                <span class="n">StaticFileHandler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">add_handler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">,</span>
+                                <span class="n">StaticFileHandler</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">))</span></div>
+
+    <span class="k">def</span> <span class="nf">_cleanup_avt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Resets the state of the AV on the zone player.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone component under test.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYMODE_NORMAL</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup_avt</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+
+<div class="viewcode-block" id="HLSCodecsField.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Shuts down the web server.</span>
+<span class="sd">        Removes all files used as web content.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MASTER_HLS_NAME</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">MEDIA_HLS_NAME</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="HLSCodecsField.start_playback"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+                       <span class="n">except_num</span><span class="o">=</span><span class="n">UPNP_OK</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param str uri: URI string</span>
+<span class="sd">        :param int timeout_seconds: Maximum time in seconds to wait</span>
+<span class="sd">        for playback to start.</span>
+<span class="sd">        :param int except_num: Expected UPnPError exception number</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI</span><span class="p">(</span>
+            <span class="n">uri</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">ret</span><span class="p">,</span>
+            <span class="s2">&quot;Set AV transport URI </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uri</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">except_num</span> <span class="o">&gt;</span> <span class="n">UPNP_OK</span> <span class="ow">and</span> <span class="n">except_num</span> <span class="o">==</span> <span class="n">e</span><span class="o">.</span><span class="n">upnp_error</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Caught expected exception </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">raise</span> <span class="n">e</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="HLSCodecsField.wait_on_diag"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.wait_on_diag">[docs]</a>    <span class="k">def</span> <span class="nf">wait_on_diag</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return: The state of the call back. True if the particular</span>
+<span class="sd">        watch string has been captured and the call back invoked</span>
+<span class="sd">        or False.</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param str watch_str: UDP watch string.</span>
+<span class="sd">        :param int timeout_seconds: Time in seconds to wait for diag.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">get_state</span><span class="p">(),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">watch_str</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">get_state</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="HLSCodecsField.test_codecs_field"><a class="viewcode-back" href="../../../../upnp.functional.hls.html#upnp.functional.hls.hls_codecs_field.HLSCodecsField.test_codecs_field">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_codecs_field</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The CODECS attribute is extended to contain more than</span>
+<span class="sd">        32 characters of types of codecs when the master playlist</span>
+<span class="sd">        was set up initially.</span>
+<span class="sd">        The test verifies that the player is able to parse the</span>
+<span class="sd">        EXT-X-STREAM-INF tag and attempt to open the audio file.</span>
+<span class="sd">        Since the audio file does not exist (purposely) the player</span>
+<span class="sd">        will give up and complain with the CORRUPT_FILE diagnostic.</span>
+<span class="sd">        The player without the fix will not respond to UPnP directives</span>
+<span class="sd">        and ultimately issue a watchdog after three minutes.</span>
+<span class="sd">        In that event, the player is recovered from that state by</span>
+<span class="sd">        rebooting, and the test is marked as failed.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">watch_str</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">CORRUPT_FILE_DIAGC</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch_str</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">True</span><span class="p">))</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+            <span class="n">except_num</span><span class="o">=</span><span class="n">UPNP_ERROR_701_TRANSITION_UNAVAILABLE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span>
+            <span class="n">ret</span><span class="p">,</span>
+            <span class="s2">&quot;Not expecting to play URI &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hls_uri</span><span class="p">))</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="n">ret</span><span class="p">,</span>
+            <span class="s2">&quot;Expecting player to generate diag &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">watch_str</span><span class="p">))</span>
+        <span class="c1"># Recovery mode when diag not received</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">ret</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+            <span class="n">watch_str</span> <span class="o">=</span> <span class="s2">&quot;WATCHDOG: chsrc unresponsive&quot;</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                <span class="n">watch_str</span><span class="p">,</span>
+                <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">monitor_diagc</span><span class="o">.</span><span class="n">set_state</span><span class="p">(</span><span class="kc">True</span><span class="p">))</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_on_diag</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">watch_str</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+            <span class="n">response</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_thread_info</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Thread Info: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">response</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">ret</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Detected unresponsive chsrc&quot;</span><span class="p">)</span>
+                <span class="c1"># None of the UPnP commands will work when the player is</span>
+                <span class="c1"># this state.</span>
+                <span class="c1"># Recover player by rebooting; anacapad does not</span>
+                <span class="c1"># pay attention to the termination signal at this point</span>
+                <span class="c1"># when this symptom manifests hence we can&#39;t use</span>
+                <span class="c1"># something like bounce_anacapa_and_wait()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failing test due to unresponsive player&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">STOPPED_STATE</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_transport_state</span><span class="p">(),</span>
+                <span class="s2">&quot;Player&#39;s AV transport state&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;HLSCodecsField&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">HLSCodecsField</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

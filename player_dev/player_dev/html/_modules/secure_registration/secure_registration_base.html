@@ -1,0 +1,592 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>secure_registration.secure_registration_base &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for secure_registration.secure_registration_base</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">signal</span>
+<span class="kn">import</span> <span class="nn">hashlib</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">import</span> <span class="nn">base64</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">socket</span> <span class="k">import</span> <span class="n">error</span> <span class="k">as</span> <span class="n">SocketError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="p">(</span><span class="n">run_concurrent_processes</span><span class="p">,</span>
+    <span class="n">run_concurrent_zone_player_processes</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">custom_dicts</span> <span class="k">import</span> <span class="n">FrozenAttributeDict</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">common.cloud.utils</span> <span class="k">import</span> <span class="n">CloudUtilsMixin</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="n">TRANSFER_MODE_CLEAR_TESTPOINT</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/testpoint?name=register.mode&amp;action=clear_transfer&quot;</span>
+<span class="n">VALIDATE_HEADERS</span> <span class="o">=</span> <span class="n">FrozenAttributeDict</span><span class="p">({</span><span class="s2">&quot;Content-Type&quot;</span> <span class="p">:</span> <span class="s2">&quot;application/json&quot;</span><span class="p">})</span>
+<span class="n">EP_SECURE_REG_BASE</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/device_account&quot;</span>
+<span class="n">EP_REGISTRATION</span> <span class="o">=</span> <span class="n">EP_SECURE_REG_BASE</span> <span class="o">+</span> <span class="s2">&quot;/registration&quot;</span>
+<span class="n">EP_ID</span> <span class="o">=</span> <span class="s2">&quot;/id&quot;</span>
+<span class="n">EP_STATE</span> <span class="o">=</span> <span class="s2">&quot;/state&quot;</span>
+<span class="n">DEFAULT_TIMEOUT</span> <span class="o">=</span> <span class="mi">30</span>
+<span class="n">PREP_MODE_STATE_CHANGE</span> <span class="o">=</span> <span class="s2">&quot;regState changed \d -&gt; (\d)$&quot;</span>
+<span class="n">ENTER_TRANSFER_MODE</span> <span class="o">=</span> <span class="s1">&#39;REGISTRATION_TRANSFER&#39;</span>
+<span class="c1"># 8 on the 5th from last position indicates transfer mode</span>
+<span class="c1"># example</span>
+<span class="c1"># [1970-01-01 20:52:26.403] &lt;leds_zp,2&gt; apply led mode mode:0x80080002</span>
+<span class="c1"># [1970-01-01 20:52:31.212] &lt;leds_zp,2&gt; apply led mode mode:0x80002</span>
+<span class="n">TRANSFER_MODE_LED</span> <span class="o">=</span> <span class="s1">&#39;apply led mode mode:0x\d{0,3}8\d</span><span class="si">{4}</span><span class="s1">$&#39;</span>
+<span class="n">LEGACY_REG_STATE</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">SEC_REG_STATE</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">SR_STATE_TRANSFER_STATE</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">PREP_SEC_REG_STATE</span> <span class="o">=</span> <span class="mi">6</span>
+<span class="n">DIAGCS</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;buttons&#39;</span><span class="p">,</span> <span class="s1">&#39;zp&#39;</span><span class="p">,</span> <span class="s1">&#39;mod_zp&#39;</span><span class="p">,</span> <span class="s1">&#39;dp_impl&#39;</span><span class="p">,</span> <span class="s1">&#39;upnp&#39;</span><span class="p">,</span> <span class="s1">&#39;leds_zp&#39;</span><span class="p">,</span> <span class="s1">&#39;register&#39;</span><span class="p">,</span>
+          <span class="s1">&#39;leds_zb&#39;</span><span class="p">]</span>
+<span class="n">DIAGC_LVL</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">TRACK_NAME</span> <span class="o">=</span> <span class="s1">&#39;MaggieFarm.mp3&#39;</span>
+<span class="n">NETWORK_ORDER</span> <span class="o">=</span> <span class="s1">&#39;&gt;&#39;</span>
+<span class="n">LITTLE_ENDIAN</span> <span class="o">=</span> <span class="s1">&#39;&lt;&#39;</span>
+<span class="n">PREP_TRANSFER_DATA_KEYS</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;regState&quot;</span><span class="p">,</span>
+                           <span class="s2">&quot;householdId&quot;</span><span class="p">,</span>
+                           <span class="s2">&quot;macAddr&quot;</span><span class="p">,</span>
+                           <span class="s2">&quot;timeout&quot;</span><span class="p">,</span>
+                           <span class="s2">&quot;hmacDigest&quot;</span>
+                           <span class="p">)</span>
+
+<span class="c1"># This is the secret key generate and HMAC</span>
+<span class="c1"># signature for the PrepTransfer, secure</span>
+<span class="c1"># registration command</span>
+<span class="n">KEY</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\x6a\xa6\x6d\x05\x86\x7e\x3c\xba\x1d\xf6\x3e\xf2\x9a\xf5\xe3\x23</span><span class="s2">&quot;</span>
+<span class="n">BRIDGE_TIMEOUT</span> <span class="o">=</span> <span class="mi">300</span>
+
+<div class="viewcode-block" id="generate_prep_transfer_hmac_digest"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.generate_prep_transfer_hmac_digest">[docs]</a><span class="k">def</span> <span class="nf">generate_prep_transfer_hmac_digest</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">DEFAULT_TIMEOUT</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generate base64 encoded hmac digest to go into prep transfer mode</span>
+<span class="sd">    :param zp: sonos zone player for which to generate hmac digest</span>
+<span class="sd">    :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">    :param int timeout: Prep tranfer timeout</span>
+<span class="sd">    return: hmac Digest</span>
+<span class="sd">    rtype: :`str`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">endian_type</span> <span class="o">=</span> <span class="n">NETWORK_ORDER</span>
+    <span class="n">data_format</span> <span class="o">=</span> <span class="s1">&#39;I&#39;</span>
+    <span class="n">packed_prep_state</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="n">endian_type</span><span class="o">+</span><span class="n">data_format</span><span class="p">,</span>
+                                    <span class="n">PREP_SEC_REG_STATE</span><span class="p">)</span>
+
+    <span class="n">packed_timeout</span> <span class="o">=</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="n">endian_type</span><span class="o">+</span><span class="n">data_format</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+    <span class="n">hmac</span> <span class="o">=</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">()</span>
+    <span class="n">hmac</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">packed_prep_state</span><span class="p">)</span>
+    <span class="n">hmac</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+    <span class="n">hmac</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">)</span>
+    <span class="n">hmac</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">packed_timeout</span><span class="p">)</span>
+    <span class="n">hmac</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">KEY</span><span class="p">)</span>
+    <span class="n">hmac_digest</span> <span class="o">=</span> <span class="n">base64</span><span class="o">.</span><span class="n">b64encode</span><span class="p">(</span><span class="n">hmac</span><span class="o">.</span><span class="n">digest</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">hmac_digest</span></div>
+
+<div class="viewcode-block" id="build_prep_transfer_data"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.build_prep_transfer_data">[docs]</a><span class="k">def</span> <span class="nf">build_prep_transfer_data</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">DEFAULT_TIMEOUT</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Build prep transfer data</span>
+<span class="sd">    :param zp: sonos zone player for which to build data</span>
+<span class="sd">    :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">    :param int timeout: Prep tranfer timeout</span>
+<span class="sd">    return: prep_transfer_data</span>
+<span class="sd">    rtype: :`dict`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">hmac_digest</span> <span class="o">=</span> <span class="n">generate_prep_transfer_hmac_digest</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="p">)</span>
+    <span class="n">prep_transfer_values</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">PREP_SEC_REG_STATE</span><span class="p">)</span>
+    <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">)</span>
+    <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+    <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+    <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">hmac_digest</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">PREP_TRANSFER_DATA_KEYS</span><span class="p">,</span> <span class="n">prep_transfer_values</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="PrepTransferTimeout"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.PrepTransferTimeout">[docs]</a><span class="k">class</span> <span class="nc">PrepTransferTimeout</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Raised when the job execution block under DeviceInPrepTransferMode</span>
+<span class="sd">    context manager takes longer to complete than the timeout value.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="DeviceInPrepTransferMode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.DeviceInPrepTransferMode">[docs]</a><span class="k">class</span> <span class="nc">DeviceInPrepTransferMode</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Context manager for putting device in PrepTransfer mode when performing</span>
+<span class="sd">    secure registration operations. Raises exception when prep transfer mode</span>
+<span class="sd">    timeout (30 seconds) expires</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">DEFAULT_TIMEOUT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param zp: Sonos zone component which is put in prep transfer mode</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int timeout: seconds enabled for processing the block under</span>
+<span class="sd">            our context manager. Defaul timeout = 30sec.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span> <span class="o">=</span> <span class="n">timeout</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_zp</span> <span class="o">=</span> <span class="n">zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prep_transfer_data</span> <span class="o">=</span> <span class="n">build_prep_transfer_data</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_zp</span><span class="p">,</span>
+                                                           <span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">url</span> <span class="o">=</span> <span class="n">EP_REGISTRATION</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s2">&quot;https&quot;</span><span class="p">,</span>
+                                          <span class="bp">self</span><span class="o">.</span><span class="n">_zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span>
+                                          <span class="bp">self</span><span class="o">.</span><span class="n">_zp</span><span class="o">.</span><span class="n">ssl_port</span>
+                                          <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Put the device in prep transfer mode and setup signaling on timeout</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">url</span><span class="p">,</span>
+                         <span class="n">data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">prep_transfer_data</span><span class="p">),</span>
+                         <span class="n">headers</span><span class="o">=</span><span class="n">VALIDATE_HEADERS</span><span class="p">,</span>
+                         <span class="n">verify</span><span class="o">=</span><span class="kc">False</span>
+                         <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_timeout</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">exc_type</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">traceback</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Raise exception if PrepTransfer timeout occurs before job execution else</span>
+<span class="sd">        cancel alarm signal on timeout</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">exc_type</span> <span class="ow">is</span> <span class="n">PrepTransferTimeout</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cancel_timeout</span><span class="p">()</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+<div class="viewcode-block" id="DeviceInPrepTransferMode.handle_timeout"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.DeviceInPrepTransferMode.handle_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">handle_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">signum</span><span class="p">,</span> <span class="n">frame</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="n">PrepTransferTimeout</span><span class="p">(</span><span class="s1">&#39;Job execution time exceeded PrepTransfer &#39;</span>
+                                  <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> seconds timeout&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="DeviceInPrepTransferMode.setup_timeout"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.DeviceInPrepTransferMode.setup_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">setup_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up an alarm signal and a signal handler that raises</span>
+<span class="sd">        a PrepTransferTimeout after the timeout amount.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">signal</span><span class="o">.</span><span class="n">signal</span><span class="p">(</span><span class="n">signal</span><span class="o">.</span><span class="n">SIGALRM</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle_timeout</span><span class="p">)</span>
+        <span class="n">signal</span><span class="o">.</span><span class="n">alarm</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_timeout</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DeviceInPrepTransferMode.cancel_timeout"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.DeviceInPrepTransferMode.cancel_timeout">[docs]</a>    <span class="k">def</span> <span class="nf">cancel_timeout</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes signaling handling setup previously if job execution completes</span>
+<span class="sd">        before PrepTransfer timeout is hit.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">signal</span><span class="o">.</span><span class="n">alarm</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">signal</span><span class="o">.</span><span class="n">signal</span><span class="p">(</span><span class="n">signal</span><span class="o">.</span><span class="n">SIGALRM</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIG_DFL</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="SecureRegistrationBase"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase">[docs]</a><span class="k">class</span> <span class="nc">SecureRegistrationBase</span><span class="p">(</span><span class="n">CloudUtilsMixin</span><span class="p">,</span> <span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base fixture for Secure registration tests</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="SecureRegistrationBase.generate_non_boost_bridge_or_dock_devices"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.generate_non_boost_bridge_or_dock_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_non_boost_bridge_or_dock_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate non_boost_bridge_or_dock_devices</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_unique_devices</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;BR200&#39;</span><span class="p">,</span> <span class="s1">&#39;ZB100&#39;</span><span class="p">,</span> <span class="s1">&#39;WD100&#39;</span><span class="p">]:</span>
+                <span class="k">yield</span> <span class="n">zp</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.setUpFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup upd logger on all devices in testbed and diagcs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Setup Fixture.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">playback_device</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;BR200&quot;</span><span class="p">,</span> <span class="s2">&quot;ZB100&quot;</span><span class="p">,</span> <span class="s2">&quot;WD100&quot;</span><span class="p">]]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">boost_bridge_dock_devices</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;BR200&quot;</span><span class="p">,</span> <span class="s2">&quot;ZB100&quot;</span><span class="p">,</span> <span class="s2">&quot;WD100&quot;</span><span class="p">]]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_add_test_share</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_prep_mode</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exit_prep_mode</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_transfer_mode</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transfer_mode_led_pattern</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_account_transfer_mode</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_clear_transfer_state_in_hh</span><span class="p">()</span>
+                <span class="k">break</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_secure_registered</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">secure_deregister</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_setup_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;AVTransport&#39;</span><span class="p">):</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_prep_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">exit_prep_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_transfer_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">transfer_mode_led_pattern</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.tearDownFixture"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down fixture. Stop udp logger and restore diagc&#39;s</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">:Tear down Fixture.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">,</span> <span class="s1">&#39;ContentDirectory&#39;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_shares</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">non_boost_bridge_dock_devices</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">diagc</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">diagc</span> <span class="ow">in</span> <span class="n">DIAGCS</span><span class="p">]</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;AVTransport&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_dock</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_setup_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup udp logger and pass in callbacks for strings we are looking for</span>
+<span class="sd">        :param zp: sonos zone player for which to setup udp logger</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up udp logger on : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="k">except</span> <span class="n">SocketError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger port error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">PREP_MODE_STATE_CHANGE</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_prep_mode_state_change</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">ENTER_TRANSFER_MODE</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_enter_transfer_mode</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">TRANSFER_MODE_LED</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_transfer_mode_led</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_prep_mode_state_change"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_prep_mode_state_change">[docs]</a>    <span class="k">def</span> <span class="nf">cb_prep_mode_state_change</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting enter prep transfer mode string</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="n">prep_state_pattern</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">compile</span><span class="p">(</span><span class="s1">&#39;(\d)$&#39;</span><span class="p">)</span>
+        <span class="n">match</span> <span class="o">=</span> <span class="n">prep_state_pattern</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
+            <span class="n">reg_state</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">reg_state</span> <span class="o">==</span> <span class="mi">6</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">enter_prep_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">exit_prep_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_enter_diag_mode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_enter_diag_mode">[docs]</a>    <span class="k">def</span> <span class="nf">cb_enter_diag_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting start of diag mode</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_diag_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_exit_diag_mode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_exit_diag_mode">[docs]</a>    <span class="k">def</span> <span class="nf">cb_exit_diag_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting end of diag mode</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exit_diag_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_enter_transfer_mode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_enter_transfer_mode">[docs]</a>    <span class="k">def</span> <span class="nf">cb_enter_transfer_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting exit prep transfer mode string</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enter_transfer_mode</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_transfer_mode_led"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_transfer_mode_led">[docs]</a>    <span class="k">def</span> <span class="nf">cb_transfer_mode_led</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting transfer mode LED</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transfer_mode_led_pattern</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_audio_fb_disabled"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_audio_fb_disabled">[docs]</a>    <span class="k">def</span> <span class="nf">cb_audio_fb_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting transfer mode LED</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_fb_disabled</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.cb_audio_fb_enabled"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.cb_audio_fb_enabled">[docs]</a>    <span class="k">def</span> <span class="nf">cb_audio_fb_enabled</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Call back when detecting transfer mode LED</span>
+<span class="sd">        :param str msg: Line containing watch string</span>
+<span class="sd">        :param zp: sonos zone player for which search string found</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Detected on </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_fb_enabled</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+    <span class="k">def</span> <span class="nf">_add_test_share</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add test share</span>
+<span class="sd">        :param zp: Sonos zone component on which to perform share action</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">(</span><span class="n">test_share</span><span class="p">,</span> <span class="n">test_share_credentials</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span>
+                                                <span class="o">.</span><span class="n">get_share_by_key</span><span class="p">(</span><span class="s2">&quot;cpu&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_shares</span><span class="p">()</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">add_share</span><span class="p">(</span><span class="n">test_share</span><span class="p">,</span>
+                                                        <span class="o">*</span><span class="n">test_share_credentials</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">res</span><span class="p">,</span> <span class="s2">&quot;Expects the test share to be added&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="SecureRegistrationBase.start_playback"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start playback on zp</span>
+<span class="sd">        :param zp: sonos zone player on which to start playback</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">uri</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">get_track_uri_for_filename</span><span class="p">(</span><span class="n">TRACK_NAME</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.stop_playback"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.stop_playback">[docs]</a>    <span class="k">def</span> <span class="nf">stop_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop playback on zp and clear queue</span>
+<span class="sd">        :param zp: sonos zone player on which to stop playback and clear queue</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_is_hh_zps_in_transfer_state</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Is HH zps in transfer mode. Return True on success, false on failure</span>
+<span class="sd">        :return: Is the hh zps in account transfer mode ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_account_transfer_mode</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: not yet in transfer state&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">_clear_transfer_state_in_hh</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear account transfer mode individually on players in HH</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Clearing tranfer mode from household devices.&quot;</span><span class="p">)</span>
+        <span class="n">zps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">[:]</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">stop_anacapa_nicely</span><span class="p">(),</span> <span class="n">zps</span><span class="p">)</span>
+        <span class="n">run_concurrent_processes</span><span class="p">(</span><span class="k">lambda</span> <span class="n">zp</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_transfer_mode</span><span class="p">(),</span> <span class="n">zps</span><span class="p">)</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">,</span>
+            <span class="n">zps</span><span class="p">)</span>
+
+<div class="viewcode-block" id="SecureRegistrationBase.put_device_in_account_transfer_mode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.put_device_in_account_transfer_mode">[docs]</a>    <span class="k">def</span> <span class="nf">put_device_in_account_transfer_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span>
+                                             <span class="n">button_action</span><span class="o">=</span><span class="s1">&#39;button_press&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Put device in account transfer mode</span>
+<span class="sd">        :param zp: sonos zone player under test</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param str button_action: Type of button press to be done on device</span>
+<span class="sd">        :return: Is the device in account transfer mode ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">DeviceInPrepTransferMode</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_prep_transfer_mode</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Did not enter prep mode. Current state: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                    <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_secure_registration_state</span><span class="p">()))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Entered prep mode&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="n">attr</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="p">,</span> <span class="n">button_action</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">attr</span><span class="p">:</span>
+                <span class="n">attr</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Button action </span><span class="si">{}</span><span class="s2"> not available&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">button_action</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span>
+                        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">is_device_in_account_transfer_mode</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Did not enter transfer mode&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">return</span> <span class="kc">False</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.get_prep_transfer_data"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.get_prep_transfer_data">[docs]</a>    <span class="k">def</span> <span class="nf">get_prep_transfer_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">DEFAULT_TIMEOUT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate prep transfer data to be input to the player</span>
+<span class="sd">        :param zp: sonos zone player</span>
+<span class="sd">        :type zp: :class:``~sonos.client.internal.SonosZoneComponent</span>
+<span class="sd">        :param int timeout: Timeout for prep transfer to set.</span>
+<span class="sd">        :return prep_transfer_data: prep transfer data</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">hmac_digest</span> <span class="o">=</span> <span class="n">generate_prep_transfer_hmac_digest</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="n">prep_transfer_values</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">PREP_SEC_REG_STATE</span><span class="p">)</span>
+        <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">hhid</span><span class="p">)</span>
+        <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="n">prep_transfer_values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">hmac_digest</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">PREP_TRANSFER_DATA_KEYS</span><span class="p">,</span> <span class="n">prep_transfer_values</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.put_device_in_prep_transfer"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.put_device_in_prep_transfer">[docs]</a>    <span class="k">def</span> <span class="nf">put_device_in_prep_transfer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">DEFAULT_TIMEOUT</span><span class="p">):</span>
+        <span class="n">prep_transfer_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_prep_transfer_data</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="n">EP_REGISTRATION</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;https&#39;</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">ssl_port</span><span class="p">)</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">url</span><span class="p">,</span>
+                           <span class="n">data</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">prep_transfer_data</span><span class="p">),</span>
+                           <span class="n">headers</span><span class="o">=</span><span class="n">VALIDATE_HEADERS</span><span class="p">,</span>
+                           <span class="n">verify</span><span class="o">=</span><span class="kc">False</span>
+                           <span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span><span class="o">.</span><span class="n">ok</span></div>
+
+<div class="viewcode-block" id="SecureRegistrationBase.put_hh_in_transfer_mode"><a class="viewcode-back" href="../../secure_registration.html#secure_registration.secure_registration_base.SecureRegistrationBase.put_hh_in_transfer_mode">[docs]</a>    <span class="k">def</span> <span class="nf">put_hh_in_transfer_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Put HH in transfer mode. Return True on success, false on failure</span>
+<span class="sd">        :return: Is the hh in account transfer mode ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">put_device_in_account_transfer_mode</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_zone</span><span class="p">,</span>
+                                                  <span class="s1">&#39;button_press&#39;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="bp">self</span><span class="o">.</span><span class="n">_is_hh_zps_in_transfer_state</span><span class="p">(),</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;HH not in transfer mode&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

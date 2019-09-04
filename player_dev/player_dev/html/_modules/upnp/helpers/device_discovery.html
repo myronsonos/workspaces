@@ -1,0 +1,442 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.helpers.device_discovery &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.helpers.device_discovery</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot; List devices on a subnet for the device discovery test &quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="vm">__name__</span><span class="p">]))</span>
+
+<span class="kn">from</span> <span class="nn">copy</span> <span class="k">import</span> <span class="n">deepcopy</span>
+
+<span class="kn">import</span> <span class="nn">sonos.config</span>
+<span class="kn">import</span> <span class="nn">sonos.upnp</span>
+
+<span class="kn">import</span> <span class="nn">coherence.extern.louie</span> <span class="k">as</span> <span class="nn">louie</span>
+<span class="kn">import</span> <span class="nn">coherence.upnp.core</span>
+
+<span class="kn">from</span> <span class="nn">coherence.upnp.core</span> <span class="k">import</span> <span class="n">utils</span>
+
+<span class="n">COHERENCE_SSDP_PACKET_RECEIVED</span>      <span class="o">=</span> <span class="s2">&quot;UPnP.SSDP.datagram_received&quot;</span>
+<span class="n">COHERENCE_SSDP_NEW_DEVICE</span>           <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.SSDP.new_device&quot;</span>
+<span class="n">COHERENCE_DEVICE_DETECTED</span>           <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.Device.detection_completed&quot;</span>
+<span class="n">COHERENCE_SERVICE_DETECTED</span>          <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.Service.detection_completed&quot;</span>
+<span class="n">COHERENCE_SERVICE_DETECTED_FAILED</span>   <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.Service.detection_failed&quot;</span>
+<span class="n">COHERENCE_GROUP_COORDINATOR_CHANGED</span> <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.StateVariable.GroupCoordinatorIsLocal.changed&quot;</span>
+<span class="n">COHERENCE_INVISIBLE_CHANGED</span>         <span class="o">=</span> <span class="s2">&quot;Coherence.UPnP.StateVariable.Invisible.changed&quot;</span>
+    
+<span class="n">ENVIRONMENT_USE_ALL_DEVICES</span> <span class="o">=</span> <span class="s1">&#39;all&#39;</span>
+<span class="n">ENVIRONMENT_USE_NO_DEVICES</span>  <span class="o">=</span> <span class="s1">&#39;none&#39;</span>
+
+<div class="viewcode-block" id="DevDiscMessage"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscMessage">[docs]</a><span class="k">class</span> <span class="nc">DevDiscMessage</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This class contains a single device discovery message </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">host</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">port</span> <span class="o">=</span> <span class="n">port</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data</span> <span class="o">=</span> <span class="n">data</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">isParsed</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_cachectl</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_ext</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_location</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_server</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_st</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span> <span class="o">=</span> <span class="kc">None</span>
+    
+    <span class="k">def</span> <span class="nf">_parse</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">isParsed</span><span class="p">:</span>
+            <span class="k">return</span>
+        
+        <span class="c1"># HTTP response fields for a given host in the test</span>
+        <span class="n">cmd</span><span class="p">,</span> <span class="n">headers</span> <span class="o">=</span> <span class="n">utils</span><span class="o">.</span><span class="n">parse_http_response</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s1">&#39;cache-control&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_cachectl</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;cache-control&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;ext&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_ext</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;ext&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;location&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_location</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;location&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;server&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_server</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;server&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;st&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_st</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;st&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="s1">&#39;usn&#39;</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;usn&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">isParsed</span> <span class="o">=</span> <span class="kc">True</span>
+
+        <span class="c1"># clone the header response for later processing</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">allHeaders</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">headers</span><span class="p">)</span>
+        
+<div class="viewcode-block" id="DevDiscMessage.from_udn"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscMessage.from_udn">[docs]</a>    <span class="k">def</span> <span class="nf">from_udn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_parse</span><span class="p">()</span> <span class="c1"># parses only if not yet parsed</span>
+        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span><span class="p">:</span>
+            <span class="c1"># All messages from the given UUID start with the UUID</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+        
+<div class="viewcode-block" id="DevDiscMessage.from_root_udn"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscMessage.from_root_udn">[docs]</a>    <span class="k">def</span> <span class="nf">from_root_udn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_parse</span><span class="p">()</span> <span class="c1"># parses only if not yet parsed</span>
+        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span> <span class="o">==</span> <span class="n">udn</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span> <span class="o">==</span> <span class="p">(</span><span class="s2">&quot;</span><span class="si">%s</span><span class="s2">::upnp:rootdevice&quot;</span> <span class="o">%</span> <span class="n">udn</span><span class="p">))</span> <span class="ow">or</span> \
+                    <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">%s</span><span class="s2">::urn:schemas-upnp-org:device:ZonePlayer:&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+        
+<div class="viewcode-block" id="DevDiscMessage.from_root_udn_exactly"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscMessage.from_root_udn_exactly">[docs]</a>    <span class="k">def</span> <span class="nf">from_root_udn_exactly</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_parse</span><span class="p">()</span> <span class="c1"># parses only if not yet parsed</span>
+        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_usn</span> <span class="o">==</span> <span class="n">udn</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div></div>
+        
+
+<div class="viewcode-block" id="DevDiscResults"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults">[docs]</a><span class="k">class</span> <span class="nc">DevDiscResults</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This class contains the test results data for Device Discovery test fixtures.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Root devices hosts discovered given UDN</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_discovered_devices</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># Unknown root devices </span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">res_unknown_root_devices</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># SSDP responses received</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span> <span class="o">=</span> <span class="p">{}</span>
+        
+<div class="viewcode-block" id="DevDiscResults.get_msgs"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.get_msgs">[docs]</a>    <span class="k">def</span> <span class="nf">get_msgs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">udn</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_discovered_devices</span><span class="p">:</span> 
+            <span class="n">host</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">res_discovered_devices</span><span class="p">[</span><span class="n">udn</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">host</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">:</span>
+                <span class="c1"># filter out all messages from the given UDN</span>
+                <span class="k">return</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">from_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">[</span><span class="n">host</span><span class="p">])</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+    
+<div class="viewcode-block" id="DevDiscResults.get_first_msg"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.get_first_msg">[docs]</a>    <span class="k">def</span> <span class="nf">get_first_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">msgs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_msgs</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">msgs</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">msgs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span></div>
+    
+<div class="viewcode-block" id="DevDiscResults.get_root_device_msg"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.get_root_device_msg">[docs]</a>    <span class="k">def</span> <span class="nf">get_root_device_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">msgs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_msgs</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+        <span class="n">rootmsgs</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">from_root_udn_exactly</span><span class="p">(</span><span class="n">udn</span><span class="p">),</span> <span class="n">msgs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">rootmsgs</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">rootmsgs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_first_root_device_msg</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span></div>
+    
+<div class="viewcode-block" id="DevDiscResults.get_all_root_device_msgs"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.get_all_root_device_msgs">[docs]</a>    <span class="k">def</span> <span class="nf">get_all_root_device_msgs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">msgs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_msgs</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">from_root_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">),</span> <span class="n">msgs</span><span class="p">)</span></div>
+    
+<div class="viewcode-block" id="DevDiscResults.get_first_root_device_msg"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.get_first_root_device_msg">[docs]</a>    <span class="k">def</span> <span class="nf">get_first_root_device_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">rootmsgs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_all_root_device_msgs</span><span class="p">(</span><span class="n">udn</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">rootmsgs</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">rootmsgs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+        
+
+<div class="viewcode-block" id="DevDiscResults.report_data"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.report_data">[docs]</a>    <span class="k">def</span> <span class="nf">report_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">host</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">[</span><span class="n">host</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># add new device discovery response from this host        </span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">[</span><span class="n">host</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">DevDiscMessage</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">data</span><span class="p">))</span>    </div>
+        
+<div class="viewcode-block" id="DevDiscResults.report_root_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DevDiscResults.report_root_device">[docs]</a>    <span class="k">def</span> <span class="nf">report_root_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">isUnknown</span> <span class="o">=</span> <span class="kc">True</span> 
+        <span class="k">if</span> <span class="n">host</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">msg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">msgs</span><span class="p">[</span><span class="n">host</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">from_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">):</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">res_discovered_devices</span><span class="p">[</span><span class="n">udn</span><span class="p">]</span> <span class="o">=</span> <span class="n">host</span>
+                    <span class="n">isUnknown</span> <span class="o">=</span> <span class="kc">False</span>
+                    <span class="k">break</span>
+                
+        <span class="k">if</span> <span class="n">isUnknown</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">res_unknown_root_devices</span><span class="p">[</span><span class="n">host</span><span class="p">]</span> <span class="o">=</span> <span class="n">udn</span></div></div>
+            
+<span class="c1">#    def remove_unknown_devices(self):</span>
+<span class="c1">#        for host in self.msgs:</span>
+<span class="c1">#            if host not in self.res_discovered_devices.values():</span>
+<span class="c1">#                del(self.msgs[host])</span>
+
+
+<div class="viewcode-block" id="DeviceDiscovery"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery">[docs]</a><span class="k">class</span> <span class="nc">DeviceDiscovery</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This class provides a way to listen to Coherence messages and collect data for</span>
+<span class="sd">    device discovery test fixtures.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="DeviceDiscovery.create_object"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.create_object">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">create_object</span><span class="p">(</span><span class="n">environment_config</span><span class="p">,</span> <span class="n">execution_configuration</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">DeviceDiscovery</span><span class="p">(</span><span class="n">environment_config</span><span class="p">,</span> <span class="n">execution_configuration</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">test_serials</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span>  <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">isListening</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_serials</span> <span class="o">=</span> <span class="n">test_serials</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">origParams</span> <span class="o">=</span> <span class="kc">None</span>
+        
+        <span class="bp">self</span><span class="o">.</span><span class="n">results</span> <span class="o">=</span> <span class="n">DevDiscResults</span><span class="p">()</span>
+            
+    <span class="k">def</span> <span class="nf">__del__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_disconnect</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">results</span> <span class="o">=</span> <span class="kc">None</span>
+        
+    <span class="k">def</span> <span class="nf">_disconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;DeviceDiscovery._disconnect&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">isListening</span><span class="p">:</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_root_device</span><span class="p">,</span> 
+                             <span class="n">sonos</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">COHERENCE_ADD_DEVICE_SIGNAL</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">remove_root_device</span><span class="p">,</span> 
+                             <span class="n">sonos</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">COHERENCE_REMOVE_DEVICE_SIGNAL</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ssdp_packet_received</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_SSDP_PACKET_RECEIVED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ssdp_new_device</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_SSDP_NEW_DEVICE</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_device</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_DEVICE_DETECTED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_service</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_SERVICE_DETECTED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_service_failed</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_SERVICE_DETECTED_FAILED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">group_coordinator_changed</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_GROUP_COORDINATOR_CHANGED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span> <span class="c1"># TODO: just GroupManagement</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">invisible_changed</span><span class="p">,</span> 
+                             <span class="n">COHERENCE_INVISIBLE_CHANGED</span><span class="p">,</span> 
+                             <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span> <span class="c1"># TODO: just DeviceProperties</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">isListening</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># reset M-SEARCH params</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">origParams</span><span class="p">:</span>
+            <span class="n">coherence</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">core</span><span class="o">.</span><span class="n">msearch</span><span class="o">.</span><span class="n">MSearch</span><span class="o">.</span><span class="n">setParameters</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">origParams</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">origParams</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="DeviceDiscovery.setup"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.setup">[docs]</a>    <span class="k">def</span> <span class="nf">setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">searchTarget</span><span class="p">,</span> <span class="n">extraHeaders</span><span class="o">=</span><span class="p">[]):</span>
+        <span class="sd">&#39;&#39;&#39; </span>
+<span class="sd">        Configures M-SEARCH and starts listening to Coherence signals</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        
+        <span class="c1"># save original M-SEARCH parameters</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">origParams</span> <span class="o">=</span> <span class="n">coherence</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">core</span><span class="o">.</span><span class="n">msearch</span><span class="o">.</span><span class="n">MSearch</span><span class="o">.</span><span class="n">getParameters</span><span class="p">()</span>
+
+        <span class="c1"># set up M-SEARCH to mimic Sonos controllers</span>
+        <span class="n">coherence</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">core</span><span class="o">.</span><span class="n">msearch</span><span class="o">.</span><span class="n">MSearch</span><span class="o">.</span><span class="n">setParameters</span><span class="p">(</span><span class="n">searchTarget</span><span class="p">,</span> <span class="n">maximumWaitTimeInSecs</span><span class="o">=</span><span class="s2">&quot;1&quot;</span><span class="p">,</span>
+                                                          <span class="n">extraHeaders</span><span class="o">=</span><span class="n">extraHeaders</span><span class="p">)</span>
+        
+        <span class="c1"># set up our callbacks before starting Coherence</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">isListening</span><span class="p">:</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_root_device</span><span class="p">,</span> 
+                          <span class="n">sonos</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">COHERENCE_ADD_DEVICE_SIGNAL</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">remove_root_device</span><span class="p">,</span> 
+                          <span class="n">sonos</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">COHERENCE_REMOVE_DEVICE_SIGNAL</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ssdp_packet_received</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_SSDP_PACKET_RECEIVED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ssdp_new_device</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_SSDP_NEW_DEVICE</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_device</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_DEVICE_DETECTED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_service</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_SERVICE_DETECTED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">add_service_failed</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_SERVICE_DETECTED_FAILED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">group_coordinator_changed</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_GROUP_COORDINATOR_CHANGED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span> <span class="c1"># TODO: just GroupManagement</span>
+            <span class="n">louie</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">invisible_changed</span><span class="p">,</span> 
+                          <span class="n">COHERENCE_INVISIBLE_CHANGED</span><span class="p">,</span> 
+                          <span class="n">louie</span><span class="o">.</span><span class="n">Any</span><span class="p">)</span> <span class="c1"># TODO: just DeviceProperties</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">isListening</span> <span class="o">=</span> <span class="kc">True</span></div>
+    
+<div class="viewcode-block" id="DeviceDiscovery.format_serial_from_udn"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.format_serial_from_udn">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">format_serial_from_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">):</span>
+        <span class="n">sn</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">udn</span> <span class="ow">and</span> <span class="n">udn</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;uuid:RINCON_&quot;</span><span class="p">):</span>
+            <span class="n">sn</span> <span class="o">=</span> <span class="n">udn</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;uuid:RINCON_&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">][:</span><span class="o">-</span><span class="mi">5</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">sn</span></div>
+    
+    <span class="k">def</span> <span class="nf">__is_udn_in_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">udn</span><span class="p">):</span>
+        <span class="n">found</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">format_serial_from_udn</span><span class="p">(</span><span class="n">udn</span><span class="p">),</span> 
+                       <span class="bp">self</span><span class="o">.</span><span class="n">test_serials</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">found</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span>
+    
+<div class="viewcode-block" id="DeviceDiscovery.disconnect_and_get_results"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.disconnect_and_get_results">[docs]</a>    <span class="k">def</span> <span class="nf">disconnect_and_get_results</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_disconnect</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="p">),</span> <span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_serials</span><span class="p">)</span> </div>
+    
+<span class="c1">###############################################################################</span>
+
+<div class="viewcode-block" id="DeviceDiscovery.add_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.add_device">[docs]</a>    <span class="k">def</span> <span class="nf">add_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework adds a device &quot;&quot;&quot;</span>          </div>
+
+<div class="viewcode-block" id="DeviceDiscovery.add_root_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.add_root_device">[docs]</a>    <span class="k">def</span> <span class="nf">add_root_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework adds a root device &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">manufacturer</span> <span class="o">==</span> <span class="n">sonos</span><span class="o">.</span><span class="n">upnp</span><span class="o">.</span><span class="n">SONOS_MANUFACTURER_ID</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">__is_udn_in_test</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">udn</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="o">.</span><span class="n">report_root_device</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">host</span><span class="p">,</span> <span class="n">device</span><span class="o">.</span><span class="n">udn</span><span class="p">)</span></div>
+            
+<div class="viewcode-block" id="DeviceDiscovery.remove_root_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.remove_root_device">[docs]</a>    <span class="k">def</span> <span class="nf">remove_root_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device_type</span><span class="p">,</span> <span class="n">infos</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework removes a root device &quot;&quot;&quot;</span></div>
+            
+<div class="viewcode-block" id="DeviceDiscovery.ssdp_packet_received"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.ssdp_packet_received">[docs]</a>    <span class="k">def</span> <span class="nf">ssdp_packet_received</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when an SSDP multicast packet is received &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">results</span><span class="o">.</span><span class="n">report_data</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">port</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span></div>
+        
+<div class="viewcode-block" id="DeviceDiscovery.ssdp_new_device"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.ssdp_new_device">[docs]</a>    <span class="k">def</span> <span class="nf">ssdp_new_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device_type</span><span class="p">,</span> <span class="n">infos</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework detects a new device through SSDP  &quot;&quot;&quot;</span></div>
+        
+<div class="viewcode-block" id="DeviceDiscovery.add_service"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.add_service">[docs]</a>    <span class="k">def</span> <span class="nf">add_service</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework adds a new service &quot;&quot;&quot;</span></div>
+        
+<div class="viewcode-block" id="DeviceDiscovery.add_service_failed"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.add_service_failed">[docs]</a>    <span class="k">def</span> <span class="nf">add_service_failed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework detects a failure adding a new service &quot;&quot;&quot;</span></div>
+                    
+<div class="viewcode-block" id="DeviceDiscovery.group_coordinator_changed"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.group_coordinator_changed">[docs]</a>    <span class="k">def</span> <span class="nf">group_coordinator_changed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">variable</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework detects a change in the GroupCoordinatorIsLocal variable &quot;&quot;&quot;</span></div>
+
+<div class="viewcode-block" id="DeviceDiscovery.invisible_changed"><a class="viewcode-back" href="../../../upnp.helpers.html#upnp.helpers.device_discovery.DeviceDiscovery.invisible_changed">[docs]</a>    <span class="k">def</span> <span class="nf">invisible_changed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">variable</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; called when UPnP framework detects a change in the Invisible variable &quot;&quot;&quot;</span></div></div>
+
+            
+<span class="c1">###############################################################################   </span>
+
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../helpers.html">upnp.helpers</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

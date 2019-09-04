@@ -1,0 +1,1042 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.longpress.longpress_base &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.longpress.longpress_base</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">threading</span> <span class="k">import</span> <span class="n">Event</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">custom_enums</span> <span class="k">import</span> <span class="n">StringEnum</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">import</span> <span class="nn">sonos.subnet</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.avtransport</span> <span class="k">import</span> <span class="n">AVTransportStateTransitionTimer</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sftp.sonosSFTP</span> <span class="k">import</span> <span class="n">SonosAutomationSFTP</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">NEPTUNE</span><span class="p">,</span>
+    <span class="n">UPNP_ERROR_701_TRANSITION_UNAVAILABLE</span><span class="p">,</span>
+    <span class="n">CAP_TOUCH_DEVICES</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="n">EXPECTED_STREAM_INFO</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;Dolby&quot;</span><span class="p">,</span> <span class="s2">&quot;Stereo&quot;</span><span class="p">,</span> <span class="s2">&quot;AC-3&quot;</span><span class="p">)</span>
+<span class="n">DIAG_LEVEL_DICT</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s1">&#39;chsrc&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+    <span class="s1">&#39;chsnk&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s1">&#39;buttons&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s1">&#39;avt_impl&#39;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="s1">&#39;htap&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s1">&#39;topology&#39;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
+    <span class="s1">&#39;longpress&#39;</span><span class="p">:</span> <span class="mi">3</span>
+    <span class="p">}</span>
+<span class="n">DEFAULT_MOD_LOG_LEVELS</span> <span class="o">=</span> <span class="n">DIAG_LEVEL_DICT</span>
+<span class="n">DEFAULT_WEB_PORT</span> <span class="o">=</span> <span class="mi">8090</span>
+<span class="n">NAS_TRACKS_PATH</span> <span class="o">=</span> <span class="s1">&#39;/Automation/cpu/MaggieFarm/&#39;</span>
+<span class="n">DEFAULT_AUDIO_SOURCES</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">DEFAULT_NUM_MEMBERS</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">HT_AUTOSTOP_THRESHOLD</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="c1"># Maximum time to wait in seconds for auto stop to engage</span>
+<span class="n">HT_AUTOSTOP_ENGAGE_TIMEOUT</span> <span class="o">=</span> <span class="n">HT_AUTOSTOP_THRESHOLD</span> <span class="o">+</span> <span class="mi">30</span>
+<span class="n">TEST_TRACKS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s1">&#39;MaggieFarm.flac&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm.ogg&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm.wav&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm.aiff&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm.mp3&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm.wma&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm_AAC.mp4&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm_HEAAC.mp4&#39;</span><span class="p">,</span>
+    <span class="s1">&#39;MaggieFarm_ALAC.m4a&#39;</span><span class="p">)</span>
+<span class="n">LONGPRESS_CYCLING_REGEX</span> <span class="o">=</span> <span class="s2">&quot;cycling to (?:.*):(\S+)&quot;</span>
+<span class="n">LONGPRESS_ENDOF_LIST_REGEX</span> <span class="o">=</span> <span class="s2">&quot;end of list reached&quot;</span>
+<span class="n">LONGPRESS_STEAL_AVT_REGEX</span> <span class="o">=</span> <span class="s2">&quot;Attempting to steal AVT state from \[(\S+):(?:\S+)\]&quot;</span>
+<span class="n">LONGPRESS_CYCLING_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">LONGPRESS_CYCLING_REGEX</span><span class="p">,)</span>
+<span class="n">LONGPRESS_ENDOF_LIST_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">LONGPRESS_ENDOF_LIST_REGEX</span><span class="p">,)</span>
+<span class="n">LONGPRESS_STEAL_AVT_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">LONGPRESS_STEAL_AVT_REGEX</span><span class="p">,)</span>
+<span class="n">LONGPRESS_DETECTION_TIMEOUT</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="c1"># These are the flavor of last played messages the player</span>
+<span class="c1"># will report</span>
+<span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Last GC in HH to change playback state is no longer cloneable - \[(\S+)\]:\[(?:.*)\]&quot;</span><span class="p">,)</span>
+<span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Updating existing entry for \[(\S+)\]:\[(?:.*)\] to \[PAUSED_PLAYBACK\]&quot;</span><span class="p">,)</span>
+<span class="n">LAST_PLAYED_REGEX_MSGS</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;Updating existing entry for \[(\S+)\]:\[(?:.*)\] to \[PLAYING\]&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;Adding new GC \[(\S+)\]:\[(?:.*)\] to list as \[PLAYING\]&quot;</span><span class="p">)</span>
+<span class="n">EXPECTED_VOLUME_AFTER_UNMUTE</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">CONTINUOUS_PLAYING_SEC</span> <span class="o">=</span> <span class="mf">5.0</span>
+<span class="n">TRANSITION_TO_PLAYING_SEC</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="n">LAST_PLAYED_TIMEOUT_SEC</span> <span class="o">=</span> <span class="mi">75</span>
+<span class="c1"># Don&#39;t test long press on following platforms</span>
+<span class="c1"># Neptune amp does not support buttons</span>
+<span class="n">PLAYER_WITHOUT_BUTTONS</span> <span class="o">=</span> <span class="p">[</span><span class="n">NEPTUNE</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="LongPressAction"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressAction">[docs]</a><span class="k">class</span> <span class="nc">LongPressAction</span><span class="p">(</span><span class="n">StringEnum</span><span class="p">):</span>
+    <span class="n">CYCLE</span> <span class="o">=</span> <span class="s2">&quot;Cycle&quot;</span>
+    <span class="n">END_OF_LIST</span> <span class="o">=</span> <span class="s2">&quot;EndOfList&quot;</span>
+    <span class="n">STEAL_AVT</span> <span class="o">=</span> <span class="s2">&quot;StealAVT&quot;</span></div>
+
+
+<div class="viewcode-block" id="LongPressBase"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase">[docs]</a><span class="k">class</span> <span class="nc">LongPressBase</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base class for long press functionality</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">mod_log_levels</span><span class="o">=</span><span class="n">DEFAULT_MOD_LOG_LEVELS</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LongPressBase</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span>
+            <span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span> <span class="o">=</span> <span class="n">mod_log_levels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">longpress_event</span> <span class="o">=</span> <span class="n">Event</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">udn</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_audio_sources</span> <span class="o">=</span> <span class="n">DEFAULT_AUDIO_SOURCES</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span> <span class="o">=</span> <span class="n">DEFAULT_NUM_MEMBERS</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">random_tracks</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">TEST_TRACKS</span><span class="p">)</span>
+        <span class="n">random</span><span class="o">.</span><span class="n">shuffle</span><span class="p">(</span><span class="n">random_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">available_tracks</span> <span class="o">=</span> <span class="n">deque</span><span class="p">(</span><span class="n">random_tracks</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_parse_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">()</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--num_audio_sources&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_AUDIO_SOURCES</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Number of audio sources, default </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">DEFAULT_AUDIO_SOURCES</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--num_group_members&quot;</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_NUM_MEMBERS</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Number of members in group, default </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">DEFAULT_NUM_MEMBERS</span><span class="p">))</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">unknown_args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span> <span class="o">=</span> <span class="n">unknown_args</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_audio_sources</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">num_audio_sources</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_group_members</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">num_group_members</span>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">retry_clear_play_state</span> <span class="o">=</span> <span class="n">retry</span><span class="p">(</span>
+            <span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">expected_exception</span><span class="o">=</span><span class="ne">TimeoutError</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">retry_use_queue</span> <span class="o">=</span> <span class="n">retry</span><span class="p">(</span>
+            <span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">expected_exception</span><span class="o">=</span><span class="ne">TimeoutError</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="nd">@retry_clear_play_state</span>
+        <span class="k">def</span> <span class="nf">retry_clear_play_state_on_timeout</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+
+        <span class="nd">@retry_use_queue</span>
+        <span class="k">def</span> <span class="nf">retry_use_queue_on_timeout</span><span class="p">(</span><span class="n">zp</span><span class="p">):</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">retry_clear_play_state_on_timeout</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s2">&quot;NORMAL&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="LongPressBase.setup_websrv"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.setup_websrv">[docs]</a>    <span class="k">def</span> <span class="nf">setup_websrv</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up and starts a local web server</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="o">=</span><span class="n">DEFAULT_WEB_PORT</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">getcwd</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fetch_audio_files</span><span class="p">(</span><span class="n">NAS_TRACKS_PATH</span><span class="p">,</span> <span class="n">TEST_TRACKS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.unbond_and_auto_play_none"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.unbond_and_auto_play_none">[docs]</a>    <span class="k">def</span> <span class="nf">unbond_and_auto_play_none</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;DeviceProperties&#39;</span><span class="p">):</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;AVTransport&#39;</span><span class="p">):</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.fetch_audio_files"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.fetch_audio_files">[docs]</a>    <span class="k">def</span> <span class="nf">fetch_audio_files</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">remote_path</span><span class="p">,</span> <span class="n">files</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Retrieves test files from NAS.</span>
+<span class="sd">        :param str remote_path: NAS directory</span>
+<span class="sd">        :param list files: Files for retrieve</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">SonosAutomationSFTP</span><span class="p">()</span> <span class="k">as</span> <span class="n">sftp</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">test_file</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+                <span class="n">sftp</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">remote_path</span> <span class="o">+</span> <span class="n">test_file</span><span class="p">,</span> <span class="n">test_file</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">test_file</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_speaker_audio</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unbond_and_auto_play_none</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">os</span><span class="o">.</span><span class="n">unlink</span><span class="p">(</span><span class="n">audio_file</span><span class="p">)</span> <span class="k">for</span> <span class="n">audio_file</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">audio_files</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.disable_speaker_audio"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.disable_speaker_audio">[docs]</a>    <span class="k">def</span> <span class="nf">disable_speaker_audio</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disables speaker audio on test players</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">disable_speaker_audio</span><span class="p">()</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">can_override_amp_interface</span><span class="p">()]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.enable_speaker_audio"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.enable_speaker_audio">[docs]</a>    <span class="k">def</span> <span class="nf">enable_speaker_audio</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enables speaker audio on test players</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">enable_speaker_audio</span><span class="p">()</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">can_override_amp_interface</span><span class="p">()]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup web server</span>
+<span class="sd">        Fetch audio content from NAS</span>
+<span class="sd">        Unbond player zones</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_parse_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">playback_device</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_websrv</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unbond_and_auto_play_none</span><span class="p">(</span><span class="n">sonos</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">Devices</span><span class="p">()</span><span class="o">.</span><span class="n">allDevices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_speaker_audio</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">build_long_press_dispatcher</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.set_auto_stop"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.set_auto_stop">[docs]</a>    <span class="k">def</span> <span class="nf">set_auto_stop</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="n">HT_AUTOSTOP_THRESHOLD</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Activates/De-activates auto stop on HT master</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` master:</span>
+<span class="sd">        The HT master the auto stop will be configured</span>
+<span class="sd">        :param int threshold: The number of seconds to configure auto stop</span>
+<span class="sd">        to &quot;kick&quot;.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Setting auto stop to </span><span class="si">{}</span><span class="s2"> on HT master device &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">threshold</span><span class="p">,</span> <span class="n">master</span><span class="p">))</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_ht_autostop_threshold</span><span class="p">(</span><span class="n">threshold</span><span class="o">=</span><span class="n">threshold</span><span class="p">)</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">wait_for_upnp_alive</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.start_persistent_log"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.start_persistent_log">[docs]</a>    <span class="k">def</span> <span class="nf">start_persistent_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">zp_log</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">_playback.log&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%H_%M_%S&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Starting persistent log </span><span class="si">{}</span><span class="s2"> on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp_log</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log_to_file</span><span class="p">(</span><span class="n">zp_log</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">[</span><span class="n">mod</span><span class="p">])</span>
+         <span class="k">for</span> <span class="n">mod</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.stop_persistent_log"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.stop_persistent_log">[docs]</a>    <span class="k">def</span> <span class="nf">stop_persistent_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">mod</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="k">for</span> <span class="n">mod</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">mod_log_levels</span><span class="p">]</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log_to_file</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_long_press_cycle"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_long_press_cycle">[docs]</a>    <span class="k">def</span> <span class="nf">cb_long_press_cycle</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the event and extracts the reported UDN from the message</span>
+<span class="sd">        :param str msg: The UDP message</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param :class:`threading.Event`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">udn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">extract_udn_from_msg</span><span class="p">(</span>
+            <span class="n">msg</span><span class="p">,</span> <span class="n">LONGPRESS_CYCLING_REGEX_MSGS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_long_press_steal_avt"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_long_press_steal_avt">[docs]</a>    <span class="k">def</span> <span class="nf">cb_long_press_steal_avt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the event and extracts the reported UDN from the message</span>
+<span class="sd">        :param str msg: The UDP message</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param :class:`threading.Event`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">udn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">extract_udn_from_msg</span><span class="p">(</span>
+            <span class="n">msg</span><span class="p">,</span> <span class="n">LONGPRESS_STEAL_AVT_REGEX_MSGS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_endof_list_reached"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_endof_list_reached">[docs]</a>    <span class="k">def</span> <span class="nf">cb_endof_list_reached</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the event when the end of long press rotation list is reached</span>
+<span class="sd">        :param str msg: The UDP message</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param :class:`threading.Event`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">event</span><span class="o">.</span><span class="n">set</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.extract_udn_from_msg"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.extract_udn_from_msg">[docs]</a>    <span class="k">def</span> <span class="nf">extract_udn_from_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">regexs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the first match on a search for the UDN in the</span>
+<span class="sd">        message.</span>
+<span class="sd">        :param str msg: The UDP message</span>
+<span class="sd">        :param tuple regexs: A tuple of regular expressions</span>
+<span class="sd">        to search</span>
+<span class="sd">        :return: The UDN from the message</span>
+<span class="sd">        :rtype :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">regex</span> <span class="ow">in</span> <span class="n">regexs</span><span class="p">:</span>
+            <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">regex</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_confirm_generic"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_confirm_generic">[docs]</a>    <span class="k">def</span> <span class="nf">cb_confirm_generic</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">sn_to_udn_dict</span><span class="p">,</span> <span class="n">regexs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes the zone player from the dictionary when the player</span>
+<span class="sd">        reports the expected UDN transition.</span>
+<span class="sd">        :param str msg: The UDP message from the player</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param dict sn_to_udn_dict: The dictionary of serials&#39; to</span>
+<span class="sd">        expected UDN</span>
+<span class="sd">        :param tuple regexs: A tuple consisting of regular expressions</span>
+<span class="sd">        to search for the matching UDN</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Report from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">))</span>
+        <span class="n">actual_udn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">extract_udn_from_msg</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">regexs</span><span class="p">)</span>
+        <span class="n">expected_udn</span> <span class="o">=</span> <span class="n">sn_to_udn_dict</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">actual_udn</span> <span class="o">!=</span> <span class="n">expected_udn</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;Unexpected last played event &quot;</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> from &lt;</span><span class="si">{}</span><span class="s2">&gt; received </span><span class="si">{}</span><span class="s2"> expected </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">actual_udn</span><span class="p">,</span> <span class="n">expected_udn</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">_</span> <span class="o">=</span> <span class="n">sn_to_udn_dict</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_confirm_last_played"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_confirm_last_played">[docs]</a>    <span class="k">def</span> <span class="nf">cb_confirm_last_played</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">last_played</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        When the player reports last played state, update</span>
+<span class="sd">        the last_played dictionary if the reported UDN matches</span>
+<span class="sd">        the expected player&#39;s UDN which has started playing.</span>
+<span class="sd">        :param str msg: The UDP message from the player</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param dict last_played: The dictionary of zones&#39; serial</span>
+<span class="sd">        with the expected UDN of the last played player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_generic</span><span class="p">(</span>
+            <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">last_played</span><span class="p">,</span> <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_confirm_last_paused"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_confirm_last_paused">[docs]</a>    <span class="k">def</span> <span class="nf">cb_confirm_last_paused</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">last_paused</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        When the player reports last paused state, update</span>
+<span class="sd">        the last_paused dictionary if the reported UDN matches</span>
+<span class="sd">        the expected player&#39;s UDN which has paused.</span>
+<span class="sd">        :param str msg: The UDP message from the player</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param dict last_paused: The dictionary of zones&#39; serial</span>
+<span class="sd">        with the expected UDN of the last paused player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_generic</span><span class="p">(</span>
+            <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">last_paused</span><span class="p">,</span> <span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.cb_confirm_last_clear_avt"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.cb_confirm_last_clear_avt">[docs]</a>    <span class="k">def</span> <span class="nf">cb_confirm_last_clear_avt</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">clear_avt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        When the player reports the URI has been cleared, update</span>
+<span class="sd">        the clear_avt dictionary if the reported UDN matches</span>
+<span class="sd">        the expected player&#39;s UDN which has cleared its AVT URI.</span>
+<span class="sd">        :param str msg: The UDP message from the player</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone player sending this message</span>
+<span class="sd">        :param dict clear_avt: The dictionary of zones&#39; serial</span>
+<span class="sd">        with the expected UDN of the player which cleared its AVT URI</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_generic</span><span class="p">(</span>
+            <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">clear_avt</span><span class="p">,</span> <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.build_long_press_dispatcher"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.build_long_press_dispatcher">[docs]</a>    <span class="k">def</span> <span class="nf">build_long_press_dispatcher</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Builds a dictionary of parameters on a long press action.</span>
+<span class="sd">        The key is the action the long press will induce and the</span>
+<span class="sd">        parameters are the regular expression that will be used</span>
+<span class="sd">        to confirm the action, the call back that will handle the</span>
+<span class="sd">        regular expression and the timeout value associated with</span>
+<span class="sd">        this action.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">LongPressAction</span><span class="o">.</span><span class="n">CYCLE</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s1">&#39;regex&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_CYCLING_REGEX</span><span class="p">,</span>
+            <span class="s1">&#39;callback&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_long_press_cycle</span><span class="p">,</span>
+            <span class="s1">&#39;timeout&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_DETECTION_TIMEOUT</span><span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">LongPressAction</span><span class="o">.</span><span class="n">END_OF_LIST</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s1">&#39;regex&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_ENDOF_LIST_REGEX</span><span class="p">,</span>
+            <span class="s1">&#39;callback&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_endof_list_reached</span><span class="p">,</span>
+            <span class="s1">&#39;timeout&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_DETECTION_TIMEOUT</span><span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">LongPressAction</span><span class="o">.</span><span class="n">STEAL_AVT</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s1">&#39;regex&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_STEAL_AVT_REGEX</span><span class="p">,</span>
+            <span class="s1">&#39;callback&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_long_press_steal_avt</span><span class="p">,</span>
+            <span class="s1">&#39;timeout&#39;</span><span class="p">:</span> <span class="n">LONGPRESS_DETECTION_TIMEOUT</span><span class="p">}</span></div>
+
+<div class="viewcode-block" id="LongPressBase.long_press_action"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.long_press_action">[docs]</a>    <span class="k">def</span> <span class="nf">long_press_action</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">exp_action</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        zone player which is expected to generate the event</span>
+<span class="sd">        :param :class:`LongPressAction` exp_action: The expected action that</span>
+<span class="sd">        will be induced by a long press</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">watch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">exp_action</span><span class="p">][</span><span class="s1">&#39;regex&#39;</span><span class="p">]</span>
+        <span class="n">timeout</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">exp_action</span><span class="p">][</span><span class="s1">&#39;timeout&#39;</span><span class="p">]</span>
+        <span class="n">callback</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">long_press_dispatcher</span><span class="p">[</span><span class="n">exp_action</span><span class="p">][</span><span class="s1">&#39;callback&#39;</span><span class="p">]</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">long_press</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">watch</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">timeout_sec</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.long_press"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.long_press">[docs]</a>    <span class="k">def</span> <span class="nf">long_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">watch</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">timeout_sec</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Spoofs a button long press event using the cli interface</span>
+<span class="sd">        and waits for the event to be posted by the callback</span>
+<span class="sd">        which has been registered to watch for the given regular</span>
+<span class="sd">        expression</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone player the spoofed long press will be performed</span>
+<span class="sd">        :param str watch: The regular expression to watch in UDP log</span>
+<span class="sd">        :param callback: The callback method when the regular expression</span>
+<span class="sd">        is matched</span>
+<span class="sd">        :param int timeout_sec: Maximum seconds to wait before giving</span>
+<span class="sd">        up on the long press action.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">event</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">longpress_event</span>
+        <span class="n">event</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">udn</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="n">watch</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span> <span class="n">callback</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">),</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">event</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">spoof_long_press</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">longpress_event</span><span class="o">.</span><span class="n">isSet</span><span class="p">(),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_sec</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to not detecting expected long press on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">watch</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; cycling to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">udn</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="LongPressBase.is_expected_ht_stream"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.is_expected_ht_stream">[docs]</a>    <span class="k">def</span> <span class="nf">is_expected_ht_stream</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return: Is the TOS link status one of the expected HT streams ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">actual_stream</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">expected_stream</span> <span class="ow">in</span> <span class="n">EXPECTED_STREAM_INFO</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">expected_stream</span> <span class="ow">in</span> <span class="n">actual_stream</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="LongPressBase.verify_ht_master_playing"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.verify_ht_master_playing">[docs]</a>    <span class="k">def</span> <span class="nf">verify_ht_master_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Samples the TOS link state on the HT master until the Dolby</span>
+<span class="sd">        content is played.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` ht_master:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_expected_ht_stream</span><span class="p">(</span><span class="n">ht_master</span><span class="p">),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;DiagnosticID: </span><span class="si">{}</span><span class="s2"> due to failure to start Dolby stream&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">()))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to start Dolby stream on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Started </span><span class="si">{}</span><span class="s2"> stream on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span> <span class="n">ht_master</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="LongPressBase.pause_playback"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.pause_playback">[docs]</a>    <span class="k">def</span> <span class="nf">pause_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Pauses playback on the zone player and confirms the list of specified</span>
+<span class="sd">        zones have noticed the last paused event.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        :return: Has the zone player paused and the event noticed on all</span>
+<span class="sd">        specified zones ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">last_paused</span><span class="p">,</span> <span class="n">serial_num_to_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">,</span>
+            <span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_paused</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Last paused dictionary </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_paused</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Pause_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to pause playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_paused</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">serial_num</span> <span class="ow">in</span> <span class="n">last_paused</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Player &lt;</span><span class="si">{}</span><span class="s2">&gt; did not receive expected event&quot;</span>
+                                  <span class="s2">&quot;of pause playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                      <span class="n">serial_num_to_zp</span><span class="p">[</span><span class="n">serial_num</span><span class="p">],</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to receive expected pause event&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.unregister_watch"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.unregister_watch">[docs]</a>    <span class="k">def</span> <span class="nf">unregister_watch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">regexs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Removes the UDP watch specified in the regular expressions</span>
+<span class="sd">        from the given zones</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        The zones to remove the UDP watch string</span>
+<span class="sd">        :param tuple regexs: A tuple of regular expressions to set up UDP</span>
+<span class="sd">        watch</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">regex</span> <span class="ow">in</span> <span class="n">regexs</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_watching_udp_log_for_string</span><span class="p">(</span><span class="n">regex</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.register_watch"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.register_watch">[docs]</a>    <span class="k">def</span> <span class="nf">register_watch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">regexs</span><span class="p">,</span> <span class="n">callback</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up a call back when a player recognizes a last played event</span>
+<span class="sd">        Returns a dictionary of the expected zones (serial number as key)</span>
+<span class="sd">        which are expected to receive the last played event.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        zone player which is expected to generate the event</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        The zones which are expected to receive the event</span>
+<span class="sd">        :param tuple regexs: A tuple of regular expressions to set up UDP</span>
+<span class="sd">        watch</span>
+<span class="sd">        :return: A tuple of dictionaries.</span>
+<span class="sd">        A dictionary of zones&#39; serial number with the expected zone</span>
+<span class="sd">        A dictionary of zones&#39; serial number with the corresponding zone object</span>
+<span class="sd">        raw UDN</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># a dictionary of zone keys with expected UDN of player</span>
+        <span class="c1"># playback commences</span>
+        <span class="n">last_played</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="p">[</span><span class="n">last_played</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="n">zone</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">})</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">]</span>
+        <span class="n">serial_num_to_zp</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="p">[</span><span class="n">serial_num_to_zp</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="n">zone</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">:</span> <span class="n">zone</span><span class="p">})</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Last played dictionary </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_played</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">regex</span> <span class="ow">in</span> <span class="n">regexs</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+                    <span class="n">regex</span><span class="p">,</span>
+                    <span class="k">lambda</span> <span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">last_played</span><span class="p">):</span> <span class="n">callback</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">last_played</span><span class="p">),</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">last_played</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">last_played</span><span class="p">,</span> <span class="n">serial_num_to_zp</span></div>
+
+<div class="viewcode-block" id="LongPressBase.start_playback"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.start_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">uri</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Starts playback on the zone and confirms the zones</span>
+<span class="sd">        have received the event the zone is playing.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        :param str uri: Set the AVT URI when non-empty</span>
+<span class="sd">        :return: True on success else stop.</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">uri</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Setting URI </span><span class="si">{}</span><span class="s2"> on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">uri</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI</span><span class="p">(</span>
+                <span class="n">uri</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">generate_didl_lite</span><span class="p">())</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="n">last_played</span><span class="p">,</span> <span class="n">serial_num_to_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span> <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_played</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Expecting to receive PLAYING/RESUME &quot;</span>
+                          <span class="s2">&quot;event on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_played</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+        <span class="n">play_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span>
+                <span class="s2">&quot;Stopping due to failure to start playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># Increased timeout from 10 seconds to over a minute.</span>
+            <span class="c1"># Some players take close to a minute on some test runners.</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_played</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">LAST_PLAYED_TIMEOUT_SEC</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">serial_num</span> <span class="ow">in</span> <span class="n">last_played</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Player &lt;</span><span class="si">{}</span><span class="s2">&gt; did not receive expected event&quot;</span>
+                                  <span class="s2">&quot;of start playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                      <span class="n">serial_num_to_zp</span><span class="p">[</span><span class="n">serial_num</span><span class="p">],</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to receive expected start play event&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;All players received the &quot;</span>
+            <span class="s2">&quot;PLAYING/RESUME event in </span><span class="si">{}</span><span class="s2"> sec&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">play_time</span><span class="p">))</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+    <span class="n">resume_playback</span> <span class="o">=</span> <span class="n">start_playback</span>
+
+<div class="viewcode-block" id="LongPressBase.is_playing"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.is_playing">[docs]</a>    <span class="k">def</span> <span class="nf">is_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits until the AVT state on the zone player</span>
+<span class="sd">        becomes PLAYING.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param int timeout_seconds: How long to wait for the state</span>
+<span class="sd">        to transition to PLAYING</span>
+<span class="sd">        :return: Is the AVT state PLAYING ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.is_udn_in_mediainfo"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.is_udn_in_mediainfo">[docs]</a>    <span class="k">def</span> <span class="nf">is_udn_in_mediainfo</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">exp_udn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Does the CurrentURI of the zone player point to the expected UDN ?</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        :param str exp_udn: The expected player UDN</span>
+<span class="sd">        :return: CurrentURI points to expected UDN ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Expected player UDN </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">exp_udn</span><span class="p">))</span>
+        <span class="n">media_info</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetMediaInfo</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;media info </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">media_info</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">exp_udn</span> <span class="ow">in</span> <span class="n">media_info</span><span class="p">[</span><span class="s1">&#39;CurrentURI&#39;</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.wait_for_ramp_down_volume_zero_using_button"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.wait_for_ramp_down_volume_zero_using_button">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_ramp_down_volume_zero_using_button</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Ramps down the rendering control volume to zero on the</span>
+<span class="sd">        specified zone player. Returns True on success else False on failure</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        zone player the volume is to be ramped down to zero.</span>
+<span class="sd">        :return: Does the zone player have the volume to zero ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># The constant is derived from all/oc/zone/zoneplayer/buttons.cxx</span>
+        <span class="c1"># VOLUME_DOWN_RAMP_TO_ZERO_DURATION_MS 2200</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_down</span><span class="p">(</span><span class="n">hold_time</span><span class="o">=</span><span class="mi">2200</span><span class="p">)</span>
+        <span class="c1"># Need to at least wait 2200ms since we&#39;re spoofing the button hold</span>
+        <span class="c1"># therefore we use start delay here</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_volume_change</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                           <span class="mi">0</span><span class="p">,</span>
+                                           <span class="n">start_delay</span><span class="o">=</span><span class="mf">3.0</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.wait_for_volume_change"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.wait_for_volume_change">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_volume_change</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">desired_volume</span><span class="p">,</span>
+                               <span class="n">set_volume</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">start_delay</span><span class="o">=</span><span class="mf">0.0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for the desired volume level on the zone player to be reached.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        zone player the volume is to be changed</span>
+<span class="sd">        :param int desired_volume: The rendering control desired volume level</span>
+<span class="sd">        :param bool set_volume: Should the rendering control volume be set ?</span>
+<span class="sd">        :return: Does the zone player have the desired volume ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; applying desired volume </span><span class="si">{}</span><span class="s2"> (set </span><span class="si">{}</span><span class="s2">)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span> <span class="n">desired_volume</span><span class="p">,</span> <span class="n">set_volume</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">set_volume</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">desired_volume</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">()</span> <span class="o">==</span> <span class="n">desired_volume</span><span class="p">,</span>
+                <span class="n">start_delay</span><span class="o">=</span><span class="n">start_delay</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; failed to apply desired volume </span><span class="si">{}</span><span class="s2"> - JIRA SWPBL-92248&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">desired_volume</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; applied desired volume </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">desired_volume</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.wait_for_uri_change"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.wait_for_uri_change">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_uri_change</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">exp_udn</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits for the CurrentURI on the zone player to match</span>
+<span class="sd">        the expected URI</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp: The</span>
+<span class="sd">        zone player which is expected to switch to expected UDN</span>
+<span class="sd">        :param str exp_udn: The expected player UDN</span>
+<span class="sd">        :return: Is the zone player pointing to expected UDN ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Waiting to point to player UDN </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">exp_udn</span><span class="p">))</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_udn_in_mediainfo</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">exp_udn</span><span class="p">),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Current URI on &lt;</span><span class="si">{}</span><span class="s2">&gt; </span><span class="si">{}</span><span class="s2"> expected </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetMediaInfo</span><span class="p">()[</span><span class="s1">&#39;CurrentURI&#39;</span><span class="p">],</span>
+                <span class="n">exp_udn</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.wait_for_any_uri_change"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.wait_for_any_uri_change">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_any_uri_change</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">current_uri</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits until the zone player&#39;s current URI changes from the</span>
+<span class="sd">        current URI it is using.</span>
+<span class="sd">        Returns the changed URI string on success else it stops the test</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone player to sample current URI pointer</span>
+<span class="sd">        :param str current_uri: The zone player&#39;s current URI pointer</span>
+<span class="sd">        :return: Current URI</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetMediaInfo</span><span class="p">()[</span><span class="s1">&#39;CurrentURI&#39;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">current_uri</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span>
+                <span class="s2">&quot;Current URI &#39;</span><span class="si">{}</span><span class="s2">&#39; on &lt;</span><span class="si">{}</span><span class="s2">&gt; did not change as expected&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">current_uri</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetMediaInfo</span><span class="p">()[</span><span class="s1">&#39;CurrentURI&#39;</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LongPressBase.assign_uri_to_players"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.assign_uri_to_players">[docs]</a>    <span class="k">def</span> <span class="nf">assign_uri_to_players</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given a list of zone players, assign local audio framer to</span>
+<span class="sd">        each player compiling a dictionary of URIs.</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        The zone players to assign local play content</span>
+<span class="sd">        :return: A dictionary of players with corresponding play URI</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">player_to_uri</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="n">player_to_uri</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">available_tracks</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">available_tracks</span><span class="o">.</span><span class="n">rotate</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">player_to_uri</span></div>
+
+<div class="viewcode-block" id="LongPressBase.players_to_source_music"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.players_to_source_music">[docs]</a>    <span class="k">def</span> <span class="nf">players_to_source_music</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">exclude</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Excludes the players from a known set.</span>
+<span class="sd">        We could use set(self.test_players) - set(ht_config)</span>
+<span class="sd">        but that doesn&#39;t work 100% of the time</span>
+<span class="sd">        Requires investigation later</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` exclude:</span>
+<span class="sd">        The players to remove from known set</span>
+<span class="sd">        :return: A list of :class:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">excluded_players</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="p">[</span><span class="n">excluded_players</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">:</span> <span class="n">zp</span><span class="p">})</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">PLAYER_WITHOUT_BUTTONS</span><span class="p">]</span>
+        <span class="p">[</span><span class="n">excluded_players</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">exclude</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span> <span class="ow">in</span> <span class="n">excluded_players</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">excluded_players</span><span class="o">.</span><span class="n">values</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.verify_long_press"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.verify_long_press">[docs]</a>    <span class="k">def</span> <span class="nf">verify_long_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">test_player</span><span class="p">,</span> <span class="n">longpress_rotation</span><span class="p">,</span>
+                          <span class="n">master</span><span class="p">,</span> <span class="n">exp_uri</span><span class="p">,</span> <span class="n">invoke_play</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform long press on the test player cycling through the expected</span>
+<span class="sd">        playable content.</span>
+<span class="sd">        The master is the AVTransport controlling player, for HT it&#39;s the</span>
+<span class="sd">        master, for stand alone it&#39;s the test player.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` test_player:</span>
+<span class="sd">        :param list longpress_rotation:</span>
+<span class="sd">        :class:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` master:</span>
+<span class="sd">        :param str exp_uri: Expected URI when test player exhausts rotation</span>
+<span class="sd">        :param bool invoke_play: Should an AVTransport Play be invoked when</span>
+<span class="sd">        player exhausts rotation</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Long press player under test &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">test_player</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Long press master &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Long press rotation list </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">longpress_rotation</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Long press expected URI when stand alone </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">exp_uri</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">longpress_rotation</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span> <span class="o">==</span> <span class="n">test_player</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Skipping self &lt;</span><span class="si">{}</span><span class="s2">&gt; in rotation&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">continue</span>
+            <span class="c1"># If we&#39;re playing content AND the test player is a legacy</span>
+            <span class="c1"># device, do fast ramp down to volume 0 using button press.</span>
+            <span class="c1"># A spoofed fast ramp down to volume 0 increases the code</span>
+            <span class="c1"># coverage on the player under test</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(</span><span class="n">master</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verify_continuous_playing_state</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">test_player</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">CAP_TOUCH_DEVICES</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                        <span class="s2">&quot;Issuing fast ramp down on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">test_player</span><span class="p">))</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_ramp_down_volume_zero_using_button</span><span class="p">(</span><span class="n">test_player</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_volume_change</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">set_volume</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_volume_change</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">set_volume</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Long press to switch to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">long_press_action</span><span class="p">(</span><span class="n">test_player</span><span class="p">,</span> <span class="n">LongPressAction</span><span class="o">.</span><span class="n">CYCLE</span><span class="p">)</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">udn</span><span class="p">,</span>
+                <span class="s2">&quot;Expect player under test to cycle to next playing content&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(</span><span class="n">master</span><span class="p">),</span>
+                <span class="s2">&quot;Player under test &lt;</span><span class="si">{}</span><span class="s2">&gt; playing&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">test_player</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_volume_change</span><span class="p">(</span>
+                <span class="n">test_player</span><span class="p">,</span> <span class="n">EXPECTED_VOLUME_AFTER_UNMUTE</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_volume_change</span><span class="p">(</span>
+                <span class="n">test_player</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="n">set_volume</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_uri_change</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">),</span>
+                <span class="s2">&quot;Expect &lt;</span><span class="si">{}</span><span class="s2">&gt; CurrentURI to point to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span>
+        <span class="c1"># When the long press rotation is exhausted a subsequent</span>
+        <span class="c1"># long press renders the player stand alone</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Long press to become stand alone&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_action</span><span class="p">(</span><span class="n">test_player</span><span class="p">,</span> <span class="n">LongPressAction</span><span class="o">.</span><span class="n">END_OF_LIST</span><span class="p">)</span>
+        <span class="c1"># On stand alone players that were playing at the time</span>
+        <span class="c1"># long press commenced, the current URI.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_uri_change</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">exp_uri</span><span class="p">),</span>
+            <span class="s2">&quot;Expect player to standalone </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">exp_uri</span><span class="p">))</span>
+        <span class="c1"># Confirm an attempt to play will generate</span>
+        <span class="c1"># UPNP_ERROR_701_TRANSITION_UNAVAILABLE</span>
+        <span class="c1"># A successful Play modifies the rotation list!!!</span>
+        <span class="k">if</span> <span class="n">invoke_play</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play</span><span class="p">()</span>
+            <span class="k">except</span> <span class="n">UPnPError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                    <span class="n">UPNP_ERROR_701_TRANSITION_UNAVAILABLE</span><span class="p">,</span>
+                    <span class="n">e</span><span class="o">.</span><span class="n">upnp_error</span><span class="p">,</span>
+                    <span class="s2">&quot;Expect UPnP error on play attempt&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Unexpected play on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Expected URI &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">exp_uri</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Actual URI &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to unexpected play&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Long press test ended&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressBase.verify_continuous_playing_state"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.verify_continuous_playing_state">[docs]</a>    <span class="k">def</span> <span class="nf">verify_continuous_playing_state</span><span class="p">(</span>
+            <span class="bp">self</span><span class="p">,</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="n">continuous_playing_sec</span><span class="o">=</span><span class="n">CONTINUOUS_PLAYING_SEC</span><span class="p">,</span>
+            <span class="n">transition_to_playing_sec</span><span class="o">=</span><span class="n">TRANSITION_TO_PLAYING_SEC</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Confirm the play state remains PLAYING on zone player during the</span>
+<span class="sd">        required continuous playing interval. Fails test when zone player</span>
+<span class="sd">        transitions out of the PLAYING_STATE during the sampling period.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        The zone player under test</span>
+<span class="sd">        :param float continuous_playing_sec: The number of continuous seconds</span>
+<span class="sd">        to remain in PLAYING_STATE</span>
+<span class="sd">        :param float transition_to_playing_sec: The number of seconds before</span>
+<span class="sd">        sampling the state</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">avts</span> <span class="o">=</span> <span class="n">AVTransportStateTransitionTimer</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="p">)</span>
+        <span class="n">avts</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">continuous_playing_sec</span><span class="p">,</span>
+                   <span class="n">transition_to_playing_sec</span><span class="p">,</span>
+                   <span class="n">user_defined_start_states</span><span class="o">=</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">PLAYING_STATE</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="ow">not</span> <span class="n">avts</span><span class="o">.</span><span class="n">state_changed</span><span class="p">,</span>
+            <span class="s2">&quot;Expect AVT state to remain playing for </span><span class="si">{}</span><span class="s2"> seconds of &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">continuous_playing_sec</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()))</span></div>
+
+<div class="viewcode-block" id="LongPressBase.pause_with_button_press_or_upnp"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.pause_with_button_press_or_upnp">[docs]</a>    <span class="k">def</span> <span class="nf">pause_with_button_press_or_upnp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Use UPnP for devices which don&#39;t support buttons else pause</span>
+<span class="sd">        the play state using a spoofed button press.</span>
+
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">PLAYER_WITHOUT_BUTTONS</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Pause</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_mute</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LongPressBase.pause_buzzer_using_button_press"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.pause_buzzer_using_button_press">[docs]</a>    <span class="k">def</span> <span class="nf">pause_buzzer_using_button_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Uses a spoofed button press to acknowledge a buzzer alarm.</span>
+<span class="sd">        Confirms the specified zones have received the stop event.</span>
+<span class="sd">        Returns True when all zones have received the stop event</span>
+<span class="sd">        else the test stops.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        :return: Have all zones received the pause event ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">last_stopped</span><span class="p">,</span> <span class="n">serial_num_to_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">,</span>
+            <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_clear_avt</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pause_with_button_press_or_upnp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_stopped</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">serial_num</span> <span class="ow">in</span> <span class="n">last_stopped</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Player &lt;</span><span class="si">{}</span><span class="s2">&gt; did not receive expected stop event&quot;</span>
+                                  <span class="s2">&quot;on buzzer alarm &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                      <span class="n">serial_num_to_zp</span><span class="p">[</span><span class="n">serial_num</span><span class="p">],</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;DiagnosticID: </span><span class="si">{}</span><span class="s2"> due to not receiving expected stop event&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">(</span><span class="n">include_controller</span><span class="o">=</span><span class="kc">False</span><span class="p">)))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to receive expected stop event&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.pause_alarm_using_button_press"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.pause_alarm_using_button_press">[docs]</a>    <span class="k">def</span> <span class="nf">pause_alarm_using_button_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Uses a spoofed button press to pause a player.</span>
+<span class="sd">        Confirms the specified zones have received the pause event.</span>
+<span class="sd">        Returns True when all zones have received the pause event</span>
+<span class="sd">        else the test stops.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        :return: Have all zones received the pause event ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">last_paused</span><span class="p">,</span> <span class="n">serial_num_to_zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span>
+            <span class="n">zp</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">,</span>
+            <span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_paused</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pause_with_button_press_or_upnp</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_paused</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">serial_num</span> <span class="ow">in</span> <span class="n">last_paused</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Player &lt;</span><span class="si">{}</span><span class="s2">&gt; did not receive expected event&quot;</span>
+                                  <span class="s2">&quot;of pause playback on &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                      <span class="n">serial_num_to_zp</span><span class="p">[</span><span class="n">serial_num</span><span class="p">],</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;DiagnosticID: </span><span class="si">{}</span><span class="s2"> due to not receiving expected pause event&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">SubmitDiagnostics</span><span class="p">(</span><span class="n">include_controller</span><span class="o">=</span><span class="kc">False</span><span class="p">)))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Stopping due to failure to receive expected pause event&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_PAUSED_STOPPED_REGEX_MSGS</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="LongPressBase.skip_or_continue_with_test"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_base.LongPressBase.skip_or_continue_with_test">[docs]</a>    <span class="k">def</span> <span class="nf">skip_or_continue_with_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The Neptune platform does not not support buttons.</span>
+<span class="sd">        Skip the test if the device under test is part of the long press players</span>
+<span class="sd">	either as device under test or a potential group member.</span>
+<span class="sd">        :param list of :class:`~sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">PLAYER_WITHOUT_BUTTONS</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Excluding player model </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                          <span class="s2">&quot;from test&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,357 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.crash_uploads.test_sentry_uploads &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.crash_uploads.test_sentry_uploads</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timedelta</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">common</span> <span class="k">import</span> <span class="n">cause_anacapad_crash</span><span class="p">,</span> <span class="n">cause_sonospowercoordinator_crash</span><span class="p">,</span> \
+    <span class="n">schedule_automatic_update</span><span class="p">,</span> <span class="n">get_player_local_time</span><span class="p">,</span> <span class="n">add_seconds_to_current_time</span><span class="p">,</span> \
+        <span class="n">clear_crash_dump_files</span><span class="p">,</span> <span class="n">crash_files_exist</span>
+
+<span class="n">UUID_REGEX</span> <span class="o">=</span> <span class="s1">&#39;([a-fA-F0-9]</span><span class="si">{8}</span><span class="s1">-[a-fA-F0-9]</span><span class="si">{4}</span><span class="s1">-[a-fA-F0-9]</span><span class="si">{4}</span><span class="s1">-[a-fA-F0-9]</span><span class="si">{4}</span><span class="s1">-[a-fA-F0-9]</span><span class="si">{12}</span><span class="s1">)</span><span class="si">{1}</span><span class="s1">&#39;</span>
+
+<span class="n">HEALTHCHECK_ATTEMPT_MESSAGE</span> <span class="o">=</span> <span class="s2">&quot;Now attempting crashdump submissions&quot;</span>
+<span class="n">COREDUMP_FILE_SIZE</span> <span class="o">=</span> <span class="s2">&quot;anacapa coredump file size: \d+&quot;</span>
+<span class="n">COREDUMP_FILE_DOESNT_EXIST</span> <span class="o">=</span> <span class="s2">&quot;Anacapa crash file doesn&#39;t exist&quot;</span>
+<span class="n">COREDUMP_UPLOAD_SUCCESS</span> <span class="o">=</span> <span class="s2">&quot;(coredump uploaded\?: true; http resp: 200)&quot;</span>
+<span class="n">COREDUMP_UPLOAD_FAILURE</span> <span class="o">=</span> <span class="s2">&quot;(coredump uploaded</span><span class="se">\\</span><span class="s2">?: false; http resp: 0)&quot;</span>
+<span class="n">COREDUMP_UPLOAD_RESULTS</span> <span class="o">=</span> <span class="s2">&quot;coredump uploaded</span><span class="se">\\</span><span class="s2">?: (true|false); http resp: \d+&quot;</span>
+
+<span class="n">WR_STREAM_FAILED</span> <span class="o">=</span> <span class="s2">&quot;writeStream failed&quot;</span>
+<span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span> <span class="o">=</span> <span class="s2">&quot;Anacapa minidump file doesn&#39;t exist&quot;</span>
+<span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span> <span class="o">=</span> <span class="s2">&quot;Powercoordinator minidump file doesn&#39;t exist&quot;</span>
+<span class="n">MINIDUMP_UPLOAD_SUCCESS</span> <span class="o">=</span> <span class="s2">&quot;Minidump uploaded to sentry.io. UUID: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">UUID_REGEX</span><span class="p">)</span>
+<span class="n">MINIDUMP_UPLOAD_FAILURE</span> <span class="o">=</span> <span class="s2">&quot;A minidump was found, but was not uploaded to sentry.io&quot;</span>
+
+<span class="n">MINS_TO_SECS</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="n">SECS_TO_TIMEDJOB_START</span> <span class="o">=</span> <span class="mf">1.45</span> <span class="o">*</span> <span class="n">MINS_TO_SECS</span>
+<span class="n">SECS_TO_UPDATE_TIME</span> <span class="o">=</span> <span class="mi">31</span> <span class="o">*</span> <span class="n">MINS_TO_SECS</span>
+<span class="n">AUTODIAG_SUBMISSION_TIME</span> <span class="o">=</span> <span class="mi">30</span> <span class="o">*</span> <span class="n">MINS_TO_SECS</span>
+<span class="n">AUTODIAG_POLL_RATE_SECS</span> <span class="o">=</span> <span class="mi">5</span> <span class="o">*</span> <span class="n">MINS_TO_SECS</span>
+<span class="n">UPLOAD_TIME_OFFSET</span> <span class="o">=</span> <span class="mi">30</span>
+
+<div class="viewcode-block" id="capture_anacapa_watch_strings"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.capture_anacapa_watch_strings">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">capture_anacapa_watch_strings</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Override pytest capture_anacapa_watch_strings fixture</span>
+
+<span class="sd">    :return: :list: Anacapa messages to watch for</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">WR_STREAM_FAILED</span><span class="p">,</span>
+            <span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span><span class="p">,</span>
+            <span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span><span class="p">,</span>
+            <span class="n">MINIDUMP_UPLOAD_SUCCESS</span><span class="p">,</span>
+            <span class="n">MINIDUMP_UPLOAD_FAILURE</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="capture_anacapa_devices"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.capture_anacapa_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">capture_anacapa_devices</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">getfixturevalue</span><span class="p">(</span><span class="s2">&quot;all_minidump_enabled_devices&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="diag_levels"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.diag_levels">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">diag_levels</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Override pytest diag_levels fixture</span>
+
+<span class="sd">    :return: :list: Anacapa diag_levels to change</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">[(</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;crashdump&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;healthcheck&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)]</span></div>
+
+<div class="viewcode-block" id="diag_level_devices"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.diag_level_devices">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">diag_level_devices</span><span class="p">(</span><span class="n">request</span><span class="p">):</span>
+
+    <span class="k">return</span> <span class="n">request</span><span class="o">.</span><span class="n">getfixturevalue</span><span class="p">(</span><span class="s2">&quot;all_minidump_enabled_devices&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="watch_player_for_log_result"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.watch_player_for_log_result">[docs]</a><span class="k">def</span> <span class="nf">watch_player_for_log_result</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">expected_result</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Wait until the scheduled upload time and then check to see if we</span>
+<span class="sd">    log the expected log signifying success</span>
+
+<span class="sd">    If the expected log isn&#39;t found return the log that is found</span>
+
+<span class="sd">    :param zp: SonosZoneComponenet</span>
+<span class="sd">    :param upload_time: Datetime object</span>
+<span class="sd">    :param expected_result: str</span>
+
+<span class="sd">    :return: str</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">completion_status</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">seconds_to_wait</span> <span class="o">=</span> <span class="p">(</span><span class="n">upload_time</span> <span class="o">-</span> <span class="n">get_player_local_time</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting </span><span class="si">{}</span><span class="s2"> seconds for upload to start on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">seconds_to_wait</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">seconds_to_wait</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">seconds_to_wait</span><span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_search_results</span><span class="p">(</span><span class="n">expected_result</span><span class="p">),</span>
+            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Upgrade status message not found&quot;</span><span class="p">,</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">90</span><span class="p">)</span>
+        <span class="n">completion_status</span> <span class="o">=</span> <span class="n">expected_result</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_search_results</span><span class="p">(</span><span class="n">WR_STREAM_FAILED</span><span class="p">):</span>
+            <span class="n">completion_status</span> <span class="o">=</span> <span class="n">WR_STREAM_FAILED</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_search_results</span><span class="p">(</span><span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span><span class="p">):</span>
+            <span class="n">completion_status</span> <span class="o">=</span> <span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_search_results</span><span class="p">(</span><span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span><span class="p">):</span>
+            <span class="n">completion_status</span> <span class="o">=</span> <span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">has_search_results</span><span class="p">(</span><span class="n">MINIDUMP_UPLOAD_FAILURE</span><span class="p">):</span>
+            <span class="n">completion_status</span> <span class="o">=</span> <span class="n">MINIDUMP_UPLOAD_FAILURE</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;UDP LOG: </span><span class="se">\n</span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_udp_log</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">completion_status</span></div>
+
+<div class="viewcode-block" id="verify_backtrace_matches_logged_uuid"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.verify_backtrace_matches_logged_uuid">[docs]</a><span class="k">def</span> <span class="nf">verify_backtrace_matches_logged_uuid</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">proc_name</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compare the UUID saved to the backtrace file, mapped to by each</span>
+<span class="sd">    respective process, to the logged UUID</span>
+
+<span class="sd">    :param zp: SonosZoneComponent</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">proc_name</span> <span class="o">==</span> <span class="s2">&quot;anacapad&quot;</span><span class="p">:</span>
+        <span class="n">backtrace_uuid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_backtrace</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">proc_name</span> <span class="o">==</span> <span class="s2">&quot;sonospowercoordinator&quot;</span><span class="p">:</span>
+        <span class="n">pwrcoord_bktrace_path</span> <span class="o">=</span> <span class="s2">&quot;/jffs/sonospowercoordinator_backtrace&quot;</span>
+        <span class="n">backtrace_uuid</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pwrcoord_bktrace_path</span><span class="p">))</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;Proc name not implemented&quot;</span><span class="p">)</span>
+    <span class="n">udp_log</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_udp_log</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">backtrace_uuid</span> <span class="ow">in</span> <span class="n">udp_log</span></div>
+
+<div class="viewcode-block" id="a_bounced_anacapa_minidump_enabled_device"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.a_bounced_anacapa_minidump_enabled_device">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">a_bounced_anacapa_minidump_enabled_device</span><span class="p">(</span><span class="n">a_anacapa_minidump_enabled_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a anacapa minidump enabled device with anacapa having been bounced</span>
+
+<span class="sd">    :return zp: SonosZoneComponent</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">a_anacapa_minidump_enabled_device</span>
+    <span class="n">player_local_time</span> <span class="o">=</span> <span class="n">get_player_local_time</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">upload_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,</span> <span class="n">SECS_TO_TIMEDJOB_START</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">bounce_and_wait_anacapa</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">crash_files_exist</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s2">&quot;anacapad&quot;</span><span class="p">)</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">zp</span> <span class="p">,</span> <span class="n">upload_time</span></div>
+
+
+<div class="viewcode-block" id="a_crashed_anacapa_minidump_enabled_device"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.a_crashed_anacapa_minidump_enabled_device">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">a_crashed_anacapa_minidump_enabled_device</span><span class="p">(</span><span class="n">a_anacapa_minidump_enabled_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a anacapa minidump enabled device where anacapad has segfaulted</span>
+
+<span class="sd">    :return zp: SonosZoneComponent</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">a_anacapa_minidump_enabled_device</span>
+    <span class="n">player_local_time</span> <span class="o">=</span> <span class="n">get_player_local_time</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">cause_anacapad_crash</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">upload_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,</span> <span class="n">SECS_TO_TIMEDJOB_START</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">wait_for_anacapad</span><span class="p">()</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">zp</span> <span class="p">,</span> <span class="n">upload_time</span></div>
+
+<div class="viewcode-block" id="a_crashed_pwrcoord_minidump_enabled_device"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.a_crashed_pwrcoord_minidump_enabled_device">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">a_crashed_pwrcoord_minidump_enabled_device</span><span class="p">(</span><span class="n">a_powercoordinator_minidump_enabled_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a sonospowercoordinator minidump enabled device where sonospowercoordinator has segfaulted</span>
+
+<span class="sd">    :return zp: SonosZoneComponent</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">a_powercoordinator_minidump_enabled_device</span>
+    <span class="n">player_local_time</span> <span class="o">=</span> <span class="n">get_player_local_time</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">update_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,</span><span class="n">SECS_TO_UPDATE_TIME</span><span class="p">)</span>
+    <span class="n">upload_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,(</span><span class="n">SECS_TO_UPDATE_TIME</span><span class="o">+</span><span class="n">AUTODIAG_POLL_RATE_SECS</span> <span class="o">-</span> \
+                                                                <span class="p">(</span><span class="n">AUTODIAG_SUBMISSION_TIME</span><span class="o">-</span><span class="n">UPLOAD_TIME_OFFSET</span><span class="p">)))</span>
+    <span class="n">cause_sonospowercoordinator_crash</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+
+    <span class="k">yield</span> <span class="n">zp</span> <span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">update_time</span></div>
+
+
+<div class="viewcode-block" id="test_single_anacapa_upload"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.test_single_anacapa_upload">[docs]</a><span class="k">def</span> <span class="nf">test_single_anacapa_upload</span><span class="p">(</span><span class="n">a_crashed_anacapa_minidump_enabled_device</span><span class="p">,</span>
+                               <span class="n">capture_anacapa_logs</span><span class="p">,</span>
+                               <span class="n">override_diag_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test that an anacapa minidump is uploaded to sentry after a player segfault crash</span>
+
+<span class="sd">    :param a_crashed_anacapa_minidump_enabled_device: SonosZoneComponent</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span> <span class="o">=</span> <span class="n">a_crashed_anacapa_minidump_enabled_device</span>
+    <span class="n">compl</span> <span class="o">=</span> <span class="n">watch_player_for_log_result</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">MINIDUMP_UPLOAD_SUCCESS</span><span class="p">)</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Completion Status: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span><span class="n">compl</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">compl</span> <span class="o">==</span> <span class="n">MINIDUMP_UPLOAD_SUCCESS</span><span class="p">,</span> \
+        <span class="s2">&quot;Minidump upload did not complete succesfully&quot;</span>
+    <span class="n">verify_backtrace_matches_logged_uuid</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;anacapad&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="test_single_pwrcoord_upload"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.test_single_pwrcoord_upload">[docs]</a><span class="k">def</span> <span class="nf">test_single_pwrcoord_upload</span><span class="p">(</span><span class="n">a_crashed_pwrcoord_minidump_enabled_device</span><span class="p">,</span>
+                                <span class="n">capture_anacapa_logs</span><span class="p">,</span>
+                                <span class="n">override_diag_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test that sonospowercoordinator minidump is uploaded to sentry after a player segfault crash</span>
+
+<span class="sd">    :param a_crashed_pwrcoord_minidump_enabled_device: SonosZoneComponent</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">update_time</span> <span class="o">=</span> <span class="n">a_crashed_pwrcoord_minidump_enabled_device</span>
+    <span class="n">schedule_automatic_update</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">update_time</span><span class="p">)</span>
+    <span class="n">compl</span> <span class="o">=</span> <span class="n">watch_player_for_log_result</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">MINIDUMP_UPLOAD_SUCCESS</span><span class="p">)</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Completion Status: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span><span class="n">compl</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">compl</span> <span class="o">==</span> <span class="n">MINIDUMP_UPLOAD_SUCCESS</span><span class="p">,</span> \
+        <span class="s2">&quot;Minidump upload did not complete succesfully&quot;</span>
+    <span class="n">verify_backtrace_matches_logged_uuid</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="s1">&#39;sonospowercoordinator&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="test_no_anacapa_upload"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.test_no_anacapa_upload">[docs]</a><span class="k">def</span> <span class="nf">test_no_anacapa_upload</span><span class="p">(</span><span class="n">a_bounced_anacapa_minidump_enabled_device</span><span class="p">,</span>
+                           <span class="n">capture_anacapa_logs</span><span class="p">,</span>
+                           <span class="n">override_diag_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test that crashdump uploader doesn&#39;t attempt to upload anacapa crash files</span>
+
+<span class="sd">    :param bounced_anacapa_minidump_enabled_device: SonosZoneComponent</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span> <span class="o">=</span> <span class="n">a_bounced_anacapa_minidump_enabled_device</span>
+    <span class="n">compl</span> <span class="o">=</span> <span class="n">watch_player_for_log_result</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span><span class="p">)</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Completion Status: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span><span class="n">compl</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">compl</span> <span class="o">==</span> <span class="n">ANACAPA_MINIDUMP_DOESNT_EXIST</span><span class="p">,</span> \
+        <span class="s2">&quot;Minidump upload did not complete succesfully&quot;</span></div>
+
+<div class="viewcode-block" id="test_no_pwrcoord_upload"><a class="viewcode-back" href="../../../../pytest_automation.player.crash_uploads.html#pytest_automation.player.crash_uploads.test_sentry_uploads.test_no_pwrcoord_upload">[docs]</a><span class="k">def</span> <span class="nf">test_no_pwrcoord_upload</span><span class="p">(</span><span class="n">a_powercoordinator_minidump_enabled_device</span><span class="p">,</span>
+                            <span class="n">capture_anacapa_logs</span><span class="p">,</span>
+                            <span class="n">override_diag_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test that crashdump uploader doesn&#39;t attempt to upload sonospowercoordinator crash files</span>
+<span class="sd">    during autodiag submission time</span>
+
+<span class="sd">    :param powercoordinator_anacapa_minidump_enabled_device: SonosZoneComponent</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">a_powercoordinator_minidump_enabled_device</span>
+    <span class="n">player_local_time</span> <span class="o">=</span> <span class="n">get_player_local_time</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">update_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,</span><span class="n">SECS_TO_UPDATE_TIME</span><span class="p">)</span>
+    <span class="n">upload_time</span> <span class="o">=</span> <span class="n">add_seconds_to_current_time</span><span class="p">(</span><span class="n">player_local_time</span><span class="p">,(</span><span class="n">SECS_TO_UPDATE_TIME</span><span class="o">+</span><span class="n">AUTODIAG_POLL_RATE_SECS</span> <span class="o">-</span> \
+                                                                <span class="p">(</span><span class="n">AUTODIAG_SUBMISSION_TIME</span><span class="o">-</span><span class="n">UPLOAD_TIME_OFFSET</span><span class="p">)))</span>
+    <span class="n">schedule_automatic_update</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">update_time</span><span class="p">)</span>
+    <span class="n">compl</span> <span class="o">=</span> <span class="n">watch_player_for_log_result</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">upload_time</span><span class="p">,</span> <span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span><span class="p">)</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Completion Status: </span><span class="si">%s</span><span class="s2">&quot;</span><span class="p">,</span><span class="n">compl</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">compl</span> <span class="o">==</span> <span class="n">PWRCOORD_MINIDUMP_DOESNT_EXIST</span><span class="p">,</span> \
+        <span class="s2">&quot;Minidump upload did not complete succesfully&quot;</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

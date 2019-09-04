@@ -1,0 +1,313 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.bluetooth.log_tracker &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.bluetooth.log_tracker</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Base class to wrap Bluetooth Manager and Anacapa Log Inspector classes and</span>
+<span class="sd">the error handling and retry logic that is done for serial connections.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.bluetooth_manager</span> <span class="k">import</span> \
+    <span class="n">BluetoothManagerLogInspector</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.anacapa_trace</span> <span class="k">import</span> <span class="n">AnacapaTraceLogInspector</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">archiving</span> <span class="k">import</span> <span class="n">dump_logs_to_artifacts</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">string</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+
+
+<span class="n">DEFAULT_RETRY_DELAY_SECONDS</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">DEFAULT_MAX_RETRIES</span> <span class="o">=</span> <span class="mi">5</span>
+
+
+<div class="viewcode-block" id="MessageFilter"><a class="viewcode-back" href="../../../../pytest_automation.player.bluetooth.html#pytest_automation.player.bluetooth.log_tracker.MessageFilter">[docs]</a><span class="k">class</span> <span class="nc">MessageFilter</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class to hold a regular expression to be used when searching a</span>
+<span class="sd">    LogInspector class and also a string that can be used in conjunction</span>
+<span class="sd">    with grep to filter down the log searching to the point where the amount</span>
+<span class="sd">    of traffic sent over serial is far less than it would be otherwise.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">regex</span><span class="p">,</span> <span class="n">grep_str</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initializer</span>
+
+<span class="sd">        :param str regex: the regular expression to be searched</span>
+<span class="sd">        :param str grep_str: the string to grep the log with</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">regex</span> <span class="o">=</span> <span class="n">regex</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">grep_str</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="se">\&quot;</span><span class="si">{}</span><span class="se">\&quot;</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">grep_str</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LogTracker"><a class="viewcode-back" href="../../../../pytest_automation.player.bluetooth.html#pytest_automation.player.bluetooth.log_tracker.LogTracker">[docs]</a><span class="k">class</span> <span class="nc">LogTracker</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base class to be used by other classes that search Bluetooth Manager and</span>
+<span class="sd">    Anacapa logs. Especially useful for serial connections.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initializer</span>
+
+<span class="sd">        :param zp: zone player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="n">zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_bmli</span> <span class="o">=</span> <span class="n">BluetoothManagerLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_atli</span> <span class="o">=</span> <span class="n">AnacapaTraceLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">syslog</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">(</span>
+            <span class="p">[</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+
+    <span class="k">def</span> <span class="nf">_dump_logs_with_timestamp_and_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Dump all of the relevant logs with a custom message and the current</span>
+<span class="sd">        timestamp to a series of files that can be later analyzed for</span>
+<span class="sd">        debugging purposes</span>
+
+<span class="sd">        :param MessageFilter msg_filter: a MessageFilter object</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="n">msg_filter</span><span class="o">.</span><span class="n">regex</span>
+        <span class="n">ts</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%Y-%m-</span><span class="si">%d</span><span class="s2">_%H-%M-%S&quot;</span><span class="p">)</span>
+        <span class="n">note</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_failed_to_find_msg=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">ts</span><span class="p">,</span> <span class="n">_convert_msg_to_filename_friendly_str</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="n">dump_logs_to_artifacts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="n">note</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">,</span>
+                 <span class="n">max_attempts</span><span class="o">=</span><span class="n">DEFAULT_MAX_RETRIES</span><span class="p">,</span>
+                 <span class="n">fail_on_not_found</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Try to get the given message from the given LogInspector object</span>
+
+<span class="sd">        :param log_inspector: a class that inherits from LogInspector</span>
+<span class="sd">        :param MessageFilter msg_filter: a MessageFilter object</span>
+<span class="sd">        :param int max_attempts: the max number of times to try to get the</span>
+<span class="sd">            message from the LogInspector given before we give up</span>
+<span class="sd">        :param bool fail_on_not_found: whether or not to raise an exception</span>
+<span class="sd">            if we don&#39;t find the message</span>
+<span class="sd">        :return: a LogEntry object or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="n">msg_filter</span><span class="o">.</span><span class="n">regex</span>
+
+        <span class="c1"># apply a filter so that we don&#39;t have tons of stuff to pass over</span>
+        <span class="c1"># serial</span>
+        <span class="n">log_inspector</span><span class="o">.</span><span class="n">set_grep_str</span><span class="p">(</span><span class="n">msg_filter</span><span class="o">.</span><span class="n">grep_str</span><span class="p">)</span>
+        <span class="n">ret_val</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">while</span> <span class="n">max_attempts</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">ret_val</span> <span class="o">=</span> <span class="n">log_inspector</span><span class="o">.</span><span class="n">go_to_and_get_last_occurrence</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+                <span class="c1"># if we got anything, just break out here</span>
+                <span class="k">if</span> <span class="n">ret_val</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="n">ret_val</span>
+            <span class="k">except</span> <span class="p">(</span><span class="ne">RuntimeError</span><span class="p">,</span> <span class="ne">ValueError</span><span class="p">)</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">syslog</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                    <span class="s1">&#39;Error trying to go to and get last &#39;</span>
+                    <span class="s1">&#39;occurrence of &quot;</span><span class="si">{}</span><span class="s1">&quot;: &quot;</span><span class="si">{}</span><span class="s1">&quot; &#39;</span>
+                    <span class="s1">&#39;Attempting </span><span class="si">{}</span><span class="s1"> more times&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">msg</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">message</span><span class="p">,</span> <span class="n">max_attempts</span><span class="p">))</span>
+            <span class="n">max_attempts</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">DEFAULT_RETRY_DELAY_SECONDS</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">ret_val</span> <span class="ow">and</span> <span class="n">fail_on_not_found</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_dump_logs_with_timestamp_and_log</span><span class="p">(</span><span class="n">msg_filter</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span>
+                <span class="s1">&#39;Message &quot;</span><span class="si">{}</span><span class="s1">&quot; not found in log&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">ret_val</span>
+
+    <span class="k">def</span> <span class="nf">_find_and_get_next</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">,</span>
+                           <span class="n">max_attempts</span><span class="o">=</span><span class="n">DEFAULT_MAX_RETRIES</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Try to get the next message of the given form in the given log</span>
+
+<span class="sd">        :param log_inspector: a class that inherits from LogInspector</span>
+<span class="sd">        :param MessageFilter msg_filter: a MessageFilter object</span>
+<span class="sd">        :param int max_attempts: the max number of times to try to get the</span>
+<span class="sd">            message from the LogInspector given before we give up</span>
+<span class="sd">        :return: a LogEntry object or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="n">msg_filter</span><span class="o">.</span><span class="n">regex</span>
+
+        <span class="c1"># apply a filter so that we don&#39;t have tons of stuff to pass over</span>
+        <span class="c1"># serial</span>
+        <span class="n">log_inspector</span><span class="o">.</span><span class="n">set_grep_str</span><span class="p">(</span><span class="n">msg_filter</span><span class="o">.</span><span class="n">grep_str</span><span class="p">)</span>
+        <span class="n">ret_val</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">while</span> <span class="n">max_attempts</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">ret_val</span> <span class="o">=</span> <span class="n">log_inspector</span><span class="o">.</span><span class="n">find_and_get_next</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+                <span class="c1"># if we got anything, just break out here</span>
+                <span class="k">if</span> <span class="n">ret_val</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="n">ret_val</span>
+            <span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">syslog</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                    <span class="s1">&#39;Error trying to find and get next &#39;</span>
+                    <span class="s1">&#39;occurrence of &quot;</span><span class="si">{}</span><span class="s1">&quot;: &quot;</span><span class="si">{}</span><span class="s1">&quot; &#39;</span>
+                    <span class="s1">&#39;Attempting </span><span class="si">{}</span><span class="s1"> more times&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">msg</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">message</span><span class="p">,</span> <span class="n">max_attempts</span><span class="p">))</span>
+            <span class="n">max_attempts</span> <span class="o">-=</span> <span class="mi">1</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">DEFAULT_RETRY_DELAY_SECONDS</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ret_val</span>
+
+    <span class="k">def</span> <span class="nf">_get_time_of_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Using the given log inspector object, find the given message</span>
+<span class="sd">        in the relevant log and return the time value of that message when</span>
+<span class="sd">        found. If the message is not found, raise an AssertionError</span>
+
+<span class="sd">        :param log_inspector: of type :obj:`LogInspector`</span>
+<span class="sd">        :param MessageFilter msg_filter: message to look for in the log</span>
+<span class="sd">        :return: :obj:`float`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_msg</span><span class="p">(</span><span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ret_val</span><span class="o">.</span><span class="n">time</span>
+
+    <span class="k">def</span> <span class="nf">_wait_for_msg</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+                      <span class="n">delay</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wait until a specified message is found in the log inspector object</span>
+<span class="sd">        given</span>
+
+<span class="sd">        :param log_inspector: of type :obj:`LogInspector`</span>
+<span class="sd">        :param MessageFilter msg_filter: message to look for in the log</span>
+<span class="sd">        :param int timeout_seconds: number of seconds to wait</span>
+<span class="sd">        :param int delay: iteration delay in seconds</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">msg</span> <span class="o">=</span> <span class="n">msg_filter</span><span class="o">.</span><span class="n">regex</span>
+        <span class="n">error_str</span> <span class="o">=</span> <span class="s2">&quot;Waiting to see message </span><span class="si">{}</span><span class="s2"> in log&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_msg</span><span class="p">(</span><span class="n">log_inspector</span><span class="p">,</span> <span class="n">msg_filter</span><span class="p">,</span>
+                                      <span class="n">fail_on_not_found</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">timeout_seconds</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="n">delay</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="n">error_str</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_dump_logs_with_timestamp_and_log</span><span class="p">(</span><span class="n">msg_filter</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">TimeoutError</span><span class="p">(</span><span class="n">error_str</span><span class="p">)</span></div>
+
+
+<span class="k">def</span> <span class="nf">_convert_msg_to_filename_friendly_str</span><span class="p">(</span><span class="n">msg</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert a given message into a string that can be used as part of a</span>
+<span class="sd">    filename</span>
+
+<span class="sd">    :param str msg: a string containing a message</span>
+<span class="sd">    :return: a string that can be used as a filename</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">valid_chars</span> <span class="o">=</span> <span class="s2">&quot;-_.() </span><span class="si">%s%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">string</span><span class="o">.</span><span class="n">ascii_letters</span><span class="p">,</span> <span class="n">string</span><span class="o">.</span><span class="n">digits</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">msg</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">valid_chars</span><span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

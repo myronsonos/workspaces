@@ -1,0 +1,421 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.test_neptune_output_sync &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.test_neptune_output_sync</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test is to check that Neptune&#39;s analog and digital outputs are properly</span>
+<span class="sd">synced. This test is unique to Neptune because other Connect-like products</span>
+<span class="sd">utilize a single sound card for both digital and analog outputs. Neptune is</span>
+<span class="sd">the first Sonos Connect-like player to use two separate sound cards for the</span>
+<span class="sd">outputs.</span>
+
+<span class="sd">This test utilizes the clock-time in /all/syslib/tools/clock-time</span>
+<span class="sd">The app generally compares tx and rx, but it has been tweaked to accept</span>
+<span class="sd">spdif-tx as an &quot;input&quot; to compare with the analog tx.</span>
+
+<span class="sd">Test cannot replace actual sync testbed that will be managed my the DSP team,</span>
+<span class="sd">which will be more reliable. This ensures that at least from the software&#39;s</span>
+<span class="sd">perspective, all is good.</span>
+
+<span class="sd">** NOTES **</span>
+<span class="sd">This test is considered a full fail if ANY of the tests fail. Currently</span>
+<span class="sd">configured to fail on --maxfail=1 in the DSL job definition.</span>
+<span class="sd">Doesn&#39;t have to run in order. Would be slightly more efficient but we wouldn&#39;t</span>
+<span class="sd">get failure logging which could be useful.</span>
+<span class="sd">The time difference test outcome is useless if the parallel test fails</span>
+
+<span class="sd">Questions/concerns: james.park@sonos.com or SYSSW QA</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.tools.clock_time</span> <span class="k">import</span> <span class="n">ClockTimeUtility</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">numpy</span> <span class="k">import</span> <span class="n">diff</span>
+
+
+<span class="c1"># The deviance of the delta between two data sets. Basically checks if</span>
+<span class="c1"># the difference between two sets changes by more than the tolerance value</span>
+<span class="c1"># below. The difference should stay fairly consistent (parallel data sets)</span>
+<span class="n">PARALLEL_TOLERANCE</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="c1"># Default sampling freq of Sonos players.</span>
+<span class="n">SAMPLING_FREQ</span> <span class="o">=</span> <span class="mi">44100</span>
+<span class="c1"># General value to check sync excursion tolerance</span>
+<span class="c1"># For reference, group sync is 5 ms, stereo is .1 ms. Set this to 1 ms for now.</span>
+<span class="c1"># There is no PRD for this value.</span>
+<span class="n">SYNC_TOLERANCE_SEC</span> <span class="o">=</span> <span class="o">.</span><span class="mi">001</span>
+
+
+<div class="viewcode-block" id="sqatools_spec"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.sqatools_spec">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">sqatools_spec</span><span class="p">(</span><span class="n">sqatools_spec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Overrides the :func:`~pytest_automation.conftest.sqatools_spec` fixture to</span>
+<span class="sd">    update archive and platform info for sqa tools used for measuring clock</span>
+<span class="sd">    time. This is used by the fixture</span>
+<span class="sd">    :func:`~pytest_automation.conftest.download_extract_and_host_archive`.</span>
+
+<span class="sd">    :return sqatools_spec:</span>
+<span class="sd">    :rtype: `obj`dict</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">neptune_clock_time_tool</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;syslib/tools/clock-time/neptune-release/clock-time&quot;</span><span class="p">:</span>
+            <span class="s2">&quot;clock-time&quot;</span><span class="p">}</span>
+    <span class="n">sqatools_spec</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+        <span class="p">{</span><span class="s2">&quot;archive_files&quot;</span><span class="p">:</span> <span class="n">neptune_clock_time_tool</span><span class="p">,</span>
+         <span class="s2">&quot;platform&quot;</span><span class="p">:</span> <span class="s2">&quot;neptune&quot;</span><span class="p">})</span>
+    <span class="k">yield</span> <span class="n">sqatools_spec</span></div>
+
+
+<div class="viewcode-block" id="device"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.device">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">device</span><span class="p">(</span><span class="n">a_neptune</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Local module fixture to override root device selection to use a generic</span>
+<span class="sd">    fixture for killing anacapa on neptune.</span>
+<span class="sd">    Overrides device selection param in &quot;kill_anacapa_with_stopanacapa&quot;</span>
+
+<span class="sd">    :return: A single testbed Neptune</span>
+<span class="sd">    :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">a_neptune</span></div>
+
+
+<div class="viewcode-block" id="neptune_with_clocktime_app"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.neptune_with_clocktime_app">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">neptune_with_clocktime_app</span><span class="p">(</span><span class="n">kill_anacapa_with_stopanacapa</span><span class="p">,</span>
+                               <span class="n">download_extract_and_host_archive</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fixture that grabs the clock-time test app onto a Neptune</span>
+
+<span class="sd">    :param kill_anacapa_with_stopanacapa: Device selection for a single neptune</span>
+<span class="sd">        with anacapa killed</span>
+<span class="sd">    :param download_extract_and_host_archive: Downloads and extracts clock-time</span>
+<span class="sd">        utility</span>
+<span class="sd">    :return: Yields the neptune and the UtilityHelper child object for</span>
+<span class="sd">        clock-time app</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Locally parametrized to yield only a Neptune with stopanacapa</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">kill_anacapa_with_stopanacapa</span>
+    <span class="n">tool_url</span> <span class="o">=</span> <span class="n">download_extract_and_host_archive</span><span class="o">.</span><span class="n">keys</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="c1"># setup</span>
+    <span class="n">clock_time_app</span> <span class="o">=</span> <span class="n">ClockTimeUtility</span><span class="p">(</span>
+        <span class="n">device</span><span class="p">,</span>
+        <span class="n">custom_location</span><span class="o">=</span><span class="n">tool_url</span><span class="p">)</span>
+
+    <span class="c1"># clean install of the app</span>
+    <span class="n">clock_time_app</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span>
+    <span class="c1"># install checks if app was installed properly as well and raises</span>
+    <span class="c1"># UtilityException</span>
+    <span class="n">clock_time_app</span><span class="o">.</span><span class="n">install</span><span class="p">()</span>
+
+    <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">clock_time_app</span>
+
+    <span class="c1"># teardown</span>
+    <span class="n">clock_time_app</span><span class="o">.</span><span class="n">remove</span><span class="p">()</span></div>
+
+
+<span class="c1"># Parameters in format [Number of samples, Sleep in between samples]</span>
+<span class="n">SAMPLE_PARAMETERS</span> <span class="o">=</span> <span class="p">[[</span><span class="mi">30</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">30</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">]]</span>
+<span class="n">IDS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;Fixture with </span><span class="si">{}</span><span class="s2"> samples and </span><span class="si">{}</span><span class="s2"> sec sleep generated &quot;</span> \
+       <span class="s2">&quot;data&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">param</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">param</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="k">for</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">SAMPLE_PARAMETERS</span><span class="p">]</span>
+
+<div class="viewcode-block" id="neptune_generate_clock_data"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.neptune_generate_clock_data">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">SAMPLE_PARAMETERS</span><span class="p">,</span> <span class="n">ids</span><span class="o">=</span><span class="n">IDS</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">neptune_generate_clock_data</span><span class="p">(</span><span class="n">neptune_with_clocktime_app</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fixture that gets and yields data sets from the clock-time test app.</span>
+<span class="sd">    Is parametrized to run test with multiple input sets of sample count and</span>
+<span class="sd">    sleep in-between seconds.</span>
+
+<span class="sd">    :param neptune_with_clocktime_app: Fixture that returns neptune with test</span>
+<span class="sd">        app.</span>
+<span class="sd">    :return: Yields data set of rx (digital out) sample count, tx (analog out)</span>
+<span class="sd">    sample count, and system time. Returns tuple of int.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">clock_time_app</span> <span class="o">=</span> <span class="n">neptune_with_clocktime_app</span>
+    <span class="n">sample_num</span><span class="p">,</span> <span class="n">sleep</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">param</span>
+
+    <span class="c1"># Setup - run the app and check output file of app</span>
+    <span class="n">option_args</span> <span class="o">=</span> <span class="s2">&quot;--input spdif-tx --run_collect_time &quot;</span> \
+                  <span class="s2">&quot;--samples </span><span class="si">{}</span><span class="s2"> --sleep </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sample_num</span><span class="p">,</span> <span class="n">sleep</span><span class="p">)</span>
+    <span class="n">clock_time_app</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">options</span><span class="o">=</span><span class="n">option_args</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">))</span>
+    <span class="c1"># Approximate time the app will run for</span>
+    <span class="n">run_time</span> <span class="o">=</span> <span class="n">sample_num</span> <span class="o">*</span> <span class="n">sleep</span>
+    <span class="c1"># Wait for app to finish running and generate the correct output file.</span>
+    <span class="n">wait_until_true</span><span class="p">(</span>
+        <span class="n">predicate</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_file_exist</span><span class="p">(</span>
+            <span class="n">clock_time_app</span><span class="o">.</span><span class="n">TIME_RESULTS_FILE</span><span class="p">),</span>
+        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">run_time</span><span class="p">,</span>
+        <span class="n">iteration_delay</span><span class="o">=</span><span class="n">sleep</span><span class="p">,</span>
+        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for clock-time app to generate output data&quot;</span><span class="p">)</span>
+    <span class="c1"># Assert non zero file size</span>
+    <span class="k">assert</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_file_size</span><span class="p">(</span><span class="n">clock_time_app</span><span class="o">.</span><span class="n">TIME_RESULTS_FILE</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> \
+        <span class="s2">&quot;The output file should be non-zero size.&quot;</span>
+
+    <span class="k">yield</span> <span class="n">device</span><span class="p">,</span> <span class="n">clock_time_app</span>
+
+    <span class="c1"># Teardown - clear the data output file</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="n">clock_time_app</span><span class="o">.</span><span class="n">TIME_RESULTS_FILE</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="neptune_parse_clock_data"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.neptune_parse_clock_data">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">neptune_parse_clock_data</span><span class="p">(</span><span class="n">neptune_generate_clock_data</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Module scoped fixture that parses and yields the data from the output</span>
+<span class="sd">    file generated by clock-test app in the neptune_generate_clock_data</span>
+<span class="sd">    fixture.</span>
+
+<span class="sd">    :param neptune_generate_clock_data: Module scoped fixture that generates</span>
+<span class="sd">        output data on Neptune&#39;s /jffs with the parametrized inputs the</span>
+<span class="sd">        fixture is given.</span>
+<span class="sd">    :return: Yields data parsed into lists of digitial and analog frame counts</span>
+<span class="sd">        along with the system time.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="p">,</span> <span class="n">clock_time_app</span> <span class="o">=</span> <span class="n">neptune_generate_clock_data</span>
+
+    <span class="c1"># Read in and parse the data file into respective lists</span>
+    <span class="n">csv_data</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cat &#39;</span> <span class="o">+</span> <span class="n">clock_time_app</span><span class="o">.</span><span class="n">TIME_RESULTS_FILE</span><span class="p">)</span>
+    <span class="n">csv_data_array</span> <span class="o">=</span> <span class="n">csv_data</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\r\n</span><span class="s1">&#39;</span><span class="p">)</span>
+    <span class="n">digital_frame_count</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">analog_frame_count</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">time_stamp</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">csv_data_array</span><span class="p">:</span>
+        <span class="n">temp</span> <span class="o">=</span> <span class="n">row</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+        <span class="n">digital_frame_count</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">temp</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">analog_frame_count</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">temp</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">time_stamp</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">temp</span><span class="p">[</span><span class="mi">2</span><span class="p">]))</span>
+    <span class="c1"># Sanity check that the frame lists are the same length</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">digital_frame_count</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">analog_frame_count</span><span class="p">),</span> \
+        <span class="s2">&quot;Analog and digital (spdif-tx) data sets are not equal length.&quot;</span>
+
+    <span class="k">yield</span> <span class="n">digital_frame_count</span><span class="p">,</span> <span class="n">analog_frame_count</span><span class="p">,</span> <span class="n">time_stamp</span></div>
+    <span class="c1"># No Teardown</span>
+
+
+<div class="viewcode-block" id="get_derivative"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.get_derivative">[docs]</a><span class="k">def</span> <span class="nf">get_derivative</span><span class="p">(</span><span class="n">data_set</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns a list of difference between list[i+1] and list[i] aka the</span>
+<span class="sd">    derivative assuming y axis is the data set and x axis is just</span>
+<span class="sd">    incrementing by 1. Also checks that the list is longer than one.</span>
+
+<span class="sd">    :param data_set: A list of integers of size n</span>
+<span class="sd">    :return: A list of size n-1 that has the difference between</span>
+<span class="sd">        list[i+1] and list[i] (derivative)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">data_set</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;Data set given to get_derivative() should be&quot;</span> \
+                              <span class="s2">&quot;longer than 1.&quot;</span>
+    <span class="n">derivative_set</span> <span class="o">=</span> <span class="n">diff</span><span class="p">(</span><span class="n">data_set</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">derivative_set</span></div>
+
+
+<span class="c1"># Helper functions for the tests below</span>
+<div class="viewcode-block" id="get_parallel_data"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.get_parallel_data">[docs]</a><span class="k">def</span> <span class="nf">get_parallel_data</span><span class="p">(</span><span class="n">digital_set</span><span class="p">,</span> <span class="n">analog_set</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Checks that the delta between two data sets remains fairly consistent</span>
+<span class="sd">    over time. A way to check that two sets of data are changing the same</span>
+<span class="sd">    aka parallel.</span>
+
+<span class="sd">    :param digital_set: A list of digital frame count represented in integers</span>
+<span class="sd">    :param analog_set: A list of analog frame count represented in integers</span>
+<span class="sd">    :return: Tuple containing:</span>
+<span class="sd">        Int of the max number of the derivative of delta of two sets.</span>
+<span class="sd">        The derivative of the delta set. List of Ints</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">delta_set</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">digital_set</span><span class="p">)):</span>
+        <span class="n">delta</span> <span class="o">=</span> <span class="n">analog_set</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">-</span> <span class="n">digital_set</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">delta_set</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span>
+    <span class="c1"># The delta set should be fairly constant (horizontal line) so taking a</span>
+    <span class="c1"># derivative would show us the change of difference. A faux double</span>
+    <span class="c1"># derivative of sorts.</span>
+    <span class="n">deriv_delta_set</span> <span class="o">=</span> <span class="n">get_derivative</span><span class="p">(</span><span class="n">delta_set</span><span class="p">)</span>
+    <span class="n">max_deviance</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">deriv_delta_set</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">max_deviance</span><span class="p">,</span> <span class="n">delta_set</span><span class="p">,</span> <span class="n">deriv_delta_set</span></div>
+
+
+<div class="viewcode-block" id="check_sync_sample_delta"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.check_sync_sample_delta">[docs]</a><span class="k">def</span> <span class="nf">check_sync_sample_delta</span><span class="p">(</span><span class="n">digital_sample</span><span class="p">,</span> <span class="n">analog_sample</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Function that takes two samples counts and calculates the approximate time</span>
+<span class="sd">    delay between those two values assuming Sonos&#39;s default 44.1 kHz sampling</span>
+<span class="sd">    frequency.</span>
+
+<span class="sd">    :param digital_sample: Time in samples of the digital in int</span>
+<span class="sd">    :param analog_sample: Time in samples of the analog in int</span>
+<span class="sd">    :return: Float value in seconds the difference between digital and analog.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">sample_difference</span> <span class="o">=</span> <span class="n">digital_sample</span> <span class="o">-</span> <span class="n">analog_sample</span>
+    <span class="n">time_delay</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">sample_difference</span><span class="p">)</span><span class="o">/</span><span class="nb">float</span><span class="p">(</span><span class="n">SAMPLING_FREQ</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">time_delay</span></div>
+
+
+<span class="c1"># This test should pass for test_sync_time_delta to be valid.</span>
+<div class="viewcode-block" id="test_consistent_time_delta"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.test_consistent_time_delta">[docs]</a><span class="k">def</span> <span class="nf">test_consistent_time_delta</span><span class="p">(</span><span class="n">neptune_parse_clock_data</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test that checks that the two data sets are parallel. If the data sets</span>
+<span class="sd">    are linear but not parallel, it means time is increasing and different</span>
+<span class="sd">    rates for digital and analog or analog and analog in our case.</span>
+
+<span class="sd">    :param neptune_parse_clock_data: Fixture yielded clock data.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">digital_frames</span><span class="p">,</span> <span class="n">analog_frames</span><span class="p">,</span> <span class="n">time_stamp</span> <span class="o">=</span> <span class="n">neptune_parse_clock_data</span>
+
+    <span class="c1"># Max deviance, set of differences, derivative of set of differences</span>
+    <span class="n">max_deviance</span><span class="p">,</span> <span class="n">delta_set</span><span class="p">,</span> <span class="n">deriv_delta_set</span> <span class="o">=</span> \
+        <span class="n">get_parallel_data</span><span class="p">(</span><span class="n">digital_frames</span><span class="p">,</span> <span class="n">analog_frames</span><span class="p">)</span>
+    <span class="n">consistant_result</span> <span class="o">=</span> <span class="n">max_deviance</span> <span class="o">&lt;=</span> <span class="n">PARALLEL_TOLERANCE</span>
+
+    <span class="k">assert</span> <span class="n">consistant_result</span><span class="p">,</span> \
+        <span class="s2">&quot;The two data sets were not parallel.&quot;</span> \
+        <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Delta Set: </span><span class="si">{}</span><span class="s2">&quot;</span> \
+        <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Derivative of Delta Set: </span><span class="si">{}</span><span class="s2">&quot;</span> \
+        <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">Max of Derivative: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">delta_set</span><span class="p">,</span>
+                                         <span class="n">deriv_delta_set</span><span class="p">,</span>
+                                         <span class="n">max_deviance</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_sync_time_delta"><a class="viewcode-back" href="../../../pytest_automation.syssw.html#pytest_automation.syssw.test_neptune_output_sync.test_sync_time_delta">[docs]</a><span class="k">def</span> <span class="nf">test_sync_time_delta</span><span class="p">(</span><span class="n">neptune_parse_clock_data</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests that the difference in sample count is under the excursion</span>
+<span class="sd">    tolerance. Tested at 3 different points in the data set.</span>
+
+<span class="sd">    :param neptune_parse_clock_data: Fixture yielded clock data.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">digital_frames</span><span class="p">,</span> <span class="n">analog_frames</span><span class="p">,</span> <span class="n">time_stamp</span> <span class="o">=</span> <span class="n">neptune_parse_clock_data</span>
+    <span class="n">data_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">digital_frames</span><span class="p">)</span>
+    <span class="c1"># Since the two tests above confirm the data sets are linear and</span>
+    <span class="c1"># parallel, we compare the difference between the two lines at</span>
+    <span class="c1"># the start, mid, and end of data set.</span>
+    <span class="n">start_ret</span> <span class="o">=</span> <span class="n">check_sync_sample_delta</span><span class="p">(</span><span class="n">digital_frames</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+                                        <span class="n">analog_frames</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">mid_ret</span> <span class="o">=</span> <span class="n">check_sync_sample_delta</span><span class="p">(</span><span class="n">digital_frames</span><span class="p">[</span><span class="n">data_size</span><span class="o">/</span><span class="mi">2</span><span class="p">],</span>
+                                      <span class="n">analog_frames</span><span class="p">[</span><span class="n">data_size</span><span class="o">/</span><span class="mi">2</span><span class="p">])</span>
+    <span class="n">end_ret</span> <span class="o">=</span> <span class="n">check_sync_sample_delta</span><span class="p">(</span><span class="n">digital_frames</span><span class="p">[</span><span class="n">data_size</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+                                      <span class="n">analog_frames</span><span class="p">[</span><span class="n">data_size</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">start_result</span> <span class="o">=</span> <span class="n">start_ret</span> <span class="o">&lt;=</span> <span class="n">SYNC_TOLERANCE_SEC</span>
+    <span class="n">mid_result</span> <span class="o">=</span> <span class="n">mid_ret</span> <span class="o">&lt;=</span> <span class="n">SYNC_TOLERANCE_SEC</span>
+    <span class="n">end_result</span> <span class="o">=</span> <span class="n">end_ret</span> <span class="o">&lt;=</span> <span class="n">SYNC_TOLERANCE_SEC</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Start time diff was: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">start_ret</span><span class="p">))</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Mid time diff was: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">mid_ret</span><span class="p">))</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;End time diff was: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">end_ret</span><span class="p">))</span>
+
+    <span class="k">assert</span> <span class="n">start_result</span> <span class="ow">and</span> <span class="n">mid_result</span> <span class="ow">and</span> <span class="n">end_result</span><span class="p">,</span> \
+        <span class="s2">&quot;The excursion between the two outputs is &quot;</span> \
+        <span class="s2">&quot;over sync tolerance: </span><span class="si">{}</span><span class="s2"> sec.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SYNC_TOLERANCE_SEC</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

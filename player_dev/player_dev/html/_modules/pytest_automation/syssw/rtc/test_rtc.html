@@ -1,0 +1,773 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.syssw.rtc.test_rtc &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.syssw.rtc.test_rtc</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test is for stress testing the real time clock on Alpine (may be</span>
+<span class="sd">adapted to work on other devices which use an RTC in the future). Tests</span>
+<span class="sd">basic RTC setter/getter syslib API calls, RTC drift and RTC-system clock</span>
+<span class="sd">interaction.</span>
+
+<span class="sd">Note:</span>
+<span class="sd">Currently the rtc-test utility does not store sub-second time</span>
+<span class="sd">and the python wrapper does not store time under a second either</span>
+<span class="sd">(this is because of the time.struct_time object - datetime objects</span>
+<span class="sd">could be used instead).</span>
+<span class="sd">If we want more accurate test measurements the test app and wrapper</span>
+<span class="sd">will have to be modified, but for now this test verifies RTC time</span>
+<span class="sd">and drift on the order of seconds, not milliseconds.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">math</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">import</span> <span class="nn">calendar</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.base</span> <span class="k">import</span> <span class="n">BLACKBOX_LOG_FILE</span>
+<span class="kn">from</span> <span class="nn">common.battery_utils</span> <span class="k">import</span> <span class="p">(</span><span class="n">is_battery_charging</span><span class="p">,</span> <span class="n">is_battery_discharging</span><span class="p">,</span>
+                                  <span class="n">charge_device</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">common.suspend_resume_utils</span> <span class="k">import</span> <span class="p">(</span><span class="n">confirm_printk_suspend</span><span class="p">,</span>
+                                         <span class="n">confirm_printk_power_off</span><span class="p">)</span>
+
+<span class="c1"># The crystal oscillator used on Alpine to drive the RTC on the PSoC</span>
+<span class="c1"># has an error of +/- 20ppm (parts per million). This means that</span>
+<span class="c1"># in 1 million seconds (~12 days) we can expect an error and drift</span>
+<span class="c1"># of about 20 seconds; we can use this to determine pass/fail criteria</span>
+<span class="c1"># when evaluating RTC drift over a varying amount of time</span>
+<span class="n">RTC_ERROR_PPM</span> <span class="o">=</span> <span class="mi">20</span>
+<span class="n">RTC_DRIFT_ERROR</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">RTC_ERROR_PPM</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">10</span> <span class="o">**</span> <span class="mi">6</span><span class="p">)</span>
+
+<span class="c1"># There are some accuracy issues when doing very short run durations</span>
+<span class="c1"># because it takes about 0.8 seconds to call rtc_utility.get_rtc_time.</span>
+<span class="c1"># This can lead to cases where, due to code execution times and no</span>
+<span class="c1"># sub-second precision, we see RTC drift being reported a second higher</span>
+<span class="c1"># than expected. These errors are not present for long drift test</span>
+<span class="c1"># durations where a second or two of drift error is no longer significant</span>
+<span class="c1"># (&gt; 1 day). This means that when doing real drift tests we should run</span>
+<span class="c1"># for multiple days, but we can still catch issues by testing shorter durations</span>
+<span class="c1"># if drift is reported being greater than 2 seconds.</span>
+<span class="c1"># This value is essentially the resolution we have available given the current</span>
+<span class="c1"># pytest and rtc-test app infrastructure.</span>
+<span class="n">MINIMUM_EXPECTED_DRIFT_SEC</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="c1"># The amount of time between RTC time drift samples</span>
+<span class="n">RTC_DRIFT_SAMPLE_PERIOD_SEC</span> <span class="o">=</span> <span class="mi">5</span>
+
+<span class="c1"># The blackbox mask to use for seeing alarm event logs (EVENT, DEBUG)</span>
+<span class="n">BLACKBOX_MASK</span> <span class="o">=</span> <span class="mh">0x10000010</span>
+
+<span class="c1"># The amount of time to wait for device power on/off to take effect;</span>
+<span class="c1"># this is useful because we may have anacapa killed and no diag pages</span>
+<span class="c1"># available for checking the charge/discharge status</span>
+<span class="n">POWER_TRANSITION_SEC</span> <span class="o">=</span> <span class="mi">10</span>
+
+<span class="c1"># Random dates that can be used for testing RTC time and alarms -</span>
+<span class="c1"># times must be later than 2018 due to alarm recovery code that exists</span>
+<span class="c1"># (these are time.struct_time objects)</span>
+<span class="n">TEST_RTC_TIME</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="s2">&quot;28 Apr 2018 14:17:15&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">%d</span><span class="s2"> %b %Y %H:%M:%S&quot;</span><span class="p">)</span>
+<span class="n">TEST_RTC_ALARM</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="s2">&quot;04 May 2018 14:17:15&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">%d</span><span class="s2"> %b %Y %H:%M:%S&quot;</span><span class="p">)</span>
+<span class="n">EPOCH_TIME</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span><span class="s2">&quot;Fri 02 Jan 1970 00:00:00&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="si">%a</span><span class="s2"> </span><span class="si">%d</span><span class="s2"> %b %Y %H:%M:%S&quot;</span><span class="p">)</span>
+
+<span class="c1"># Chrony related variables</span>
+<span class="n">CHRONY_PROCESS_NAME</span> <span class="o">=</span> <span class="s2">&quot;chronyd&quot;</span>
+<span class="n">CHRONY_CONF_OVERRIDE_FILE</span> <span class="o">=</span> <span class="s2">&quot;/jffs/dev_chrony.conf&quot;</span>
+
+<span class="c1"># The amount of time to wait for a device to wake from suspend or power off</span>
+<span class="c1"># before timing out and failing the test</span>
+<span class="n">WAKE_TIMEOUT</span> <span class="o">=</span> <span class="mi">120</span>
+
+
+<span class="c1"># Disable Chrony for all tests because it may interfere with RTC</span>
+<span class="c1"># testing and make sure device has enough battery percentage to run test cases</span>
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s2">&quot;disable_chrony&quot;</span><span class="p">,</span> <span class="s2">&quot;charge_portable&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_disable_external_power</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to disable a device&#39;s external power source</span>
+<span class="sd">    (useful for switching between battery vs. powered).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">off</span><span class="p">()</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">POWER_TRANSITION_SEC</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_enable_external_power</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to enable a device&#39;s external power source</span>
+<span class="sd">    (useful for switching between battery vs. powered).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">on</span><span class="p">()</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">POWER_TRANSITION_SEC</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_suspend_device</span><span class="p">(</span><span class="n">rtc_utility</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">,</span> <span class="n">suspend_duration</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                    <span class="n">force_suspend</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to force suspend a device using the rtc-test utility</span>
+
+<span class="sd">    :param rtc_utility: An rtc-test utility object based on the DUT</span>
+<span class="sd">    :type rtc_utility:</span>
+<span class="sd">        :obj:`sonos.client.cli.tools.rtc_test_utility.RtcTestUtility`</span>
+<span class="sd">    :param printk_monitor: A set up printk monitor object for monitoring</span>
+<span class="sd">                           suspends</span>
+<span class="sd">    :type printk_monitor: :obj:`common.printk_monitor.PrintkMonitor`</span>
+<span class="sd">    :param suspend_duration: The amount of time to suspend for before</span>
+<span class="sd">                             waking in seconds</span>
+<span class="sd">    :type suspend_duration: :obj:`int`</span>
+<span class="sd">    :param force_suspend: Whether or not to force a suspend without going</span>
+<span class="sd">                          through the power coordinator</span>
+<span class="sd">    :type force_suspend: :obj:`bool`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">suspend_count</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_resume_count</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">force_suspend</span><span class="p">:</span>
+        <span class="n">rtc_utility</span><span class="o">.</span><span class="n">suspend</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">rtc_utility</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">spoof_suspend</span><span class="p">()</span>
+
+    <span class="k">assert</span> <span class="n">confirm_printk_suspend</span><span class="p">(</span><span class="n">printk_monitor</span><span class="p">,</span> <span class="n">suspend_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span> <span class="p">(</span>
+            <span class="s2">&quot;Failed to suspend device!&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Wait for suspend_duration seconds</span>
+    <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">suspend_duration</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_power_off_device</span><span class="p">(</span><span class="n">portable_device</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to force a power off by holding down the</span>
+<span class="sd">    power button for &gt;= 5 seconds and &lt; 10 seconds.</span>
+
+<span class="sd">    :param portable_device: The DUT which is a portable device</span>
+<span class="sd">    :type portable_device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :param printk_monitor: A set up printk monitor object for monitoring</span>
+<span class="sd">                           suspends</span>
+<span class="sd">    :type printk_monitor: :obj:`common.printk_monitor.PrintkMonitor`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">button_press_hold_time_msec</span> <span class="o">=</span> <span class="mi">5500</span>
+    <span class="n">portable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">spoof_poweroff</span><span class="p">(</span><span class="n">button_press_hold_time_msec</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">confirm_printk_power_off</span><span class="p">(</span><span class="n">printk_monitor</span><span class="p">),</span> <span class="p">(</span>
+            <span class="s2">&quot;Failed to power off device!&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_erase_and_reprogram_psoc</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper function to erase and reprogram the PSoC</span>
+
+<span class="sd">    :param device: The DUT</span>
+<span class="sd">    :type device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">psoc_command_string</span> <span class="o">=</span> <span class="s2">&quot;echo psoc-flash=</span><span class="si">{}</span><span class="s2"> &gt; /proc/driver/cmd&quot;</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">psoc_command_string</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s2">&quot;erase&quot;</span><span class="p">))</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">psoc_command_string</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s2">&quot;program&quot;</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="setup_blackbox_log"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.setup_blackbox_log">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">setup_blackbox_log</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Clears the device&#39;s blackbox log and sets mask for capturing</span>
+<span class="sd">    debug event logs only. Resets blackbox mask during teardown.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_blackbox_mask</span><span class="p">(</span><span class="n">BLACKBOX_MASK</span><span class="p">)</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">clear_blackbox_log</span><span class="p">()</span>
+    <span class="k">yield</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reset_blackbox_log</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="disable_chrony"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.disable_chrony">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">disable_chrony</span><span class="p">(</span><span class="n">device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Disables Chrony for the duration of testing and restarts during</span>
+<span class="sd">    teardown. Disabling is done by overwriting the Chrony configuration</span>
+<span class="sd">    file at /etc/chrony.conf by adding an empty dev configuration at</span>
+<span class="sd">    /jffs/dev_chrony.conf</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Override chrony configuration to do nothing</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;touch </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">CHRONY_CONF_OVERRIDE_FILE</span><span class="p">))</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">kill_process</span><span class="p">(</span><span class="n">CHRONY_PROCESS_NAME</span><span class="p">)</span>
+    <span class="k">yield</span>
+
+    <span class="c1"># Remove fake chrony configuration and kill chrony to restart again</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s2">&quot;rm </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">CHRONY_CONF_OVERRIDE_FILE</span><span class="p">))</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">kill_process</span><span class="p">(</span><span class="n">CHRONY_PROCESS_NAME</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="charge_portable"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.charge_portable">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">charge_portable</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Charge the DUT to at least 80% to make sure it has enough battery</span>
+<span class="sd">    for long suspend durations and make sure the device&#39;s power is on</span>
+<span class="sd">    during test teardown</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">charge_percentage</span> <span class="o">=</span> <span class="mi">80</span>
+    <span class="n">charge_device</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">unique_portable_device</span><span class="o">.</span><span class="n">power</span><span class="p">,</span>
+                  <span class="n">charge_percentage</span><span class="p">)</span>
+    <span class="k">yield</span>
+    <span class="n">unique_portable_device</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">on</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="reboot_for_teardown"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.reboot_for_teardown">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">reboot_for_teardown</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Reboots a device after test teardown to bring the device</span>
+<span class="sd">    back to a supported state. This is needed because some of the</span>
+<span class="sd">    test cases in this file force suspend without the power coordinator</span>
+<span class="sd">    which can cause the device to wake into an unsupported state.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">yield</span>
+    <span class="n">unique_portable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="sync_rtc_system_and_testrunner"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.sync_rtc_system_and_testrunner">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">sync_rtc_system_and_testrunner</span><span class="p">(</span><span class="n">install_rtc_utility</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set RTC time to current time to make sure the RTC is synced</span>
+<span class="sd">    to the testrunner&#39;s clock. Also sets the system clock to keep</span>
+<span class="sd">    that in sync as well.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+    <span class="n">testrunner_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">gmtime</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">())</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_rtc_time</span><span class="p">(</span><span class="n">testrunner_time</span><span class="p">)</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_system_time</span><span class="p">(</span><span class="n">testrunner_time</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_rtc_time"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_rtc_time">[docs]</a><span class="k">def</span> <span class="nf">test_rtc_time</span><span class="p">(</span><span class="n">install_rtc_utility</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies the ability to set and get the RTC time. Sets the</span>
+<span class="sd">    RTC to a given date/time, reads the RTC time afterwards and</span>
+<span class="sd">    verifies that this read time is within a few seconds of the set time</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Set RTC time to TEST_RTC_TIME</span>
+<span class="sd">    2. Get RTC time</span>
+<span class="sd">    3. Verify read RTC time is close to set RTC time (won&#39;t be exact)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Set RTC time and then read the RTC time</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_rtc_time</span><span class="p">(</span><span class="n">TEST_RTC_TIME</span><span class="p">)</span>
+    <span class="n">rtc_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_rtc_time</span><span class="p">()</span>
+
+    <span class="c1"># Verify RTC time was set to the expected time by converting</span>
+    <span class="c1"># time structs to seconds and verifying the rtc time is within</span>
+    <span class="c1"># a few seconds of the expected time (since the calls above may</span>
+    <span class="c1"># take longer than a second and the RTC time will continue to increase)</span>
+    <span class="n">rtc_time_sec</span> <span class="o">=</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">)</span>
+    <span class="n">expected_time_sec</span> <span class="o">=</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">TEST_RTC_TIME</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">expected_time_sec</span> <span class="o">-</span> <span class="n">rtc_time_sec</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span>
+        <span class="s2">&quot;RTC time did not match expected set value!&quot;</span>
+        <span class="s2">&quot;RTC time: </span><span class="si">{}</span><span class="s2">, expected time: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">,</span> <span class="n">set_time</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="test_rtc_alarm"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_rtc_alarm">[docs]</a><span class="k">def</span> <span class="nf">test_rtc_alarm</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">setup_blackbox_log</span><span class="p">,</span>
+                   <span class="n">install_rtc_utility</span><span class="p">,</span> <span class="n">sync_rtc_system_and_testrunner</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies setting an RTC alarm, reading the set RTC alarm and</span>
+<span class="sd">    alarm expiration</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Sync RTC time to testrunner time</span>
+<span class="sd">    2. Set alarm to a time in the future</span>
+<span class="sd">    3. Read alarm time and verify it was set as expected</span>
+<span class="sd">    4. Wait for alarm to expire and verify an RTC alarm event was sent</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Set alarm to go off a few seconds later</span>
+    <span class="n">alarm_seconds_ahead</span> <span class="o">=</span> <span class="mi">5</span>
+    <span class="n">set_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">gmtime</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">+</span> <span class="n">alarm_seconds_ahead</span><span class="p">)</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_absolute_alarm_time</span><span class="p">(</span><span class="n">set_time</span><span class="p">)</span>
+
+    <span class="c1"># Verify alarm was set correctly and can be read (compare in seconds</span>
+    <span class="c1"># to factor out uninitialized daylight savings time values)</span>
+    <span class="n">alarm_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_alarm_time</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">alarm_time</span><span class="p">)</span> <span class="o">==</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">set_time</span><span class="p">),</span> <span class="p">(</span>
+        <span class="s2">&quot;RTC alarm was not set correctly! Alarm time: </span><span class="si">{}</span><span class="s2">, expected time: </span><span class="si">{}</span><span class="s2">&quot;</span>
+        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">alarm_time</span><span class="p">,</span> <span class="n">set_time</span><span class="p">))</span>
+
+    <span class="c1"># Verify alarm expired and an event was sent</span>
+    <span class="n">expected_event_log</span> <span class="o">=</span> <span class="s2">&quot;Sent event EVTINFO_ALARM from EVTSOURCE_RTC&quot;</span>
+
+    <span class="k">def</span> <span class="nf">alarm_log_found</span><span class="p">():</span>
+        <span class="n">log_matches</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">find_all_in_blackbox</span><span class="p">(</span><span class="n">expected_event_log</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">log_matches</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span>
+
+    <span class="n">wait_until_true</span><span class="p">(</span><span class="n">alarm_log_found</span><span class="p">,</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">alarm_seconds_ahead</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Timed out waiting for an RTC alarm event! &quot;</span>
+                            <span class="s2">&quot;Blackbox: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                                    <span class="s2">&quot;cat </span><span class="si">{}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">BLACKBOX_LOG_FILE</span><span class="p">))))</span></div>
+
+
+<div class="viewcode-block" id="test_rtc_drift"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_rtc_drift">[docs]</a><span class="k">def</span> <span class="nf">test_rtc_drift</span><span class="p">(</span><span class="n">install_rtc_utility</span><span class="p">,</span> <span class="n">rtc_drift_duration</span><span class="p">,</span>
+                   <span class="n">sync_rtc_system_and_testrunner</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that the RTC time does not drift more than is expected</span>
+<span class="sd">    given a run duration. This expected drift is based off of the</span>
+<span class="sd">    error of the crystal oscillator that drives the RTC on Alpine, but</span>
+<span class="sd">    does not take into consideration external factors like temperature</span>
+<span class="sd">    that may also affect drift. Sub-second drift will not be measured</span>
+<span class="sd">    so the expected drift will always be rounded up to the nearest integer</span>
+<span class="sd">    second value; this is useful too because it gives some more leeway</span>
+<span class="sd">    around verifying expected drift given external factors that may</span>
+<span class="sd">    make our expected drift estimate/calculation non-realistic.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Calculate expected drift given a run duration</span>
+<span class="sd">    2. Set RTC time to testrunner time</span>
+<span class="sd">    3. For a given time, sample the RTC time and compare to external</span>
+<span class="sd">       time. If the time difference/drift is above the previous stored</span>
+<span class="sd">       max value, set the new drift to the max</span>
+<span class="sd">    4. Verify max drift measured was less than or equal to the expected drift</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># We don&#39;t have sub-second precision right now, so round up to the</span>
+    <span class="c1"># nearest integer (&gt;= 1)</span>
+    <span class="n">expected_drift</span> <span class="o">=</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">rtc_drift_duration</span> <span class="o">*</span> <span class="n">RTC_DRIFT_ERROR</span><span class="p">))</span> <span class="ow">or</span>
+                      <span class="n">MINIMUM_EXPECTED_DRIFT_SEC</span><span class="p">)</span>
+
+    <span class="n">max_drift</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="k">while</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span> <span class="o">&lt;</span> <span class="n">rtc_drift_duration</span><span class="p">:</span>
+        <span class="n">rtc_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_rtc_time</span><span class="p">()</span>
+        <span class="n">wall_clock_time</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">())</span>  <span class="c1"># use integers like rtc_time</span>
+        <span class="n">rtc_time_sec</span> <span class="o">=</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">)</span>
+        <span class="n">drift</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">rtc_time_sec</span> <span class="o">-</span> <span class="n">wall_clock_time</span><span class="p">)</span>
+
+        <span class="c1"># Store max amount of drift while running</span>
+        <span class="k">if</span> <span class="n">drift</span> <span class="o">&gt;</span> <span class="n">max_drift</span><span class="p">:</span>
+            <span class="n">max_drift</span> <span class="o">=</span> <span class="n">drift</span>
+
+        <span class="c1"># Only sample occasionally</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">RTC_DRIFT_SAMPLE_PERIOD_SEC</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Max RTC drift measured was </span><span class="si">{}</span><span class="s2"> second/s. &quot;</span>
+                       <span class="s2">&quot;Expected &lt;= </span><span class="si">{}</span><span class="s2"> second/s.&quot;</span>
+                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">max_drift</span><span class="p">,</span> <span class="n">expected_drift</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="n">max_drift</span> <span class="o">&lt;=</span> <span class="n">expected_drift</span><span class="p">,</span> <span class="p">(</span>
+        <span class="s2">&quot;Measured a max drift of </span><span class="si">{}</span><span class="s2"> seconds which is higher than an &quot;</span>
+        <span class="s2">&quot;expected drift of </span><span class="si">{}</span><span class="s2"> seconds given a run duration of </span><span class="si">{}</span><span class="s2"> seconds&quot;</span>
+        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">max_drift</span><span class="p">,</span> <span class="n">expected_drift</span><span class="p">,</span> <span class="n">rtc_drift_duration</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="verify_rtc_after_action"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.verify_rtc_after_action">[docs]</a><span class="k">def</span> <span class="nf">verify_rtc_after_action</span><span class="p">(</span><span class="n">portable_device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span>
+                            <span class="o">*</span><span class="n">action_args</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Runs a test that verifies a set RTC time and alarm are not affected</span>
+<span class="sd">    after an action is executed.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Turn off external power to stop charging device</span>
+<span class="sd">    2. Execute action</span>
+<span class="sd">    3. Turn on external power to wake device</span>
+<span class="sd">    4. Read RTC time and alarm and verify they are expected given the</span>
+<span class="sd">       previously set RTC time, RTC alarm and suspend duration</span>
+
+<span class="sd">    :param portable_device: The DUT which is a portable device</span>
+<span class="sd">    :type portable_device: :obj:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    :parm rtc_utility: An rtc-test utility object based on the DUT</span>
+<span class="sd">    :type rtc_utility:</span>
+<span class="sd">        :obj:`sonos.client.cli.tools.rtc_test_utility.RtcTestUtility`</span>
+<span class="sd">    :param action: The action to execute before verifying the RTC time/alarm</span>
+<span class="sd">                   is expected</span>
+<span class="sd">    :type action: :obj:`lambda`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Turn device power off</span>
+    <span class="n">_disable_external_power</span><span class="p">(</span><span class="n">portable_device</span><span class="p">)</span>
+
+    <span class="c1"># Set RTC time and an alarm; record the time these were set</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_rtc_time</span><span class="p">(</span><span class="n">TEST_RTC_TIME</span><span class="p">)</span>
+    <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_absolute_alarm_time</span><span class="p">(</span><span class="n">TEST_RTC_ALARM</span><span class="p">)</span>
+
+    <span class="c1"># Execute action</span>
+    <span class="n">action</span><span class="p">(</span><span class="o">*</span><span class="n">action_args</span><span class="p">)</span>
+
+    <span class="c1"># Turn device power on (wakes a sleeping/powered off device)</span>
+    <span class="n">_enable_external_power</span><span class="p">(</span><span class="n">portable_device</span><span class="p">)</span>
+
+    <span class="c1"># The RTC time difference should be near how long it took</span>
+    <span class="c1"># to perform the action, while the alarm should not have changed</span>
+    <span class="n">rtc_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_rtc_time</span><span class="p">()</span>
+    <span class="n">elapsed_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span>  <span class="c1"># stop timer after reading RTC</span>
+    <span class="n">rtc_alarm</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_alarm_time</span><span class="p">()</span>
+    <span class="n">time_difference</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">)</span>
+                          <span class="o">-</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">TEST_RTC_TIME</span><span class="p">))</span>
+
+    <span class="c1"># Calculate drift that may occur when an action takes a long time;</span>
+    <span class="c1"># we don&#39;t have sub-second precision right now, so round up to the</span>
+    <span class="c1"># nearest integer (&gt;= 1)</span>
+    <span class="n">expected_drift</span> <span class="o">=</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">elapsed_time</span> <span class="o">*</span> <span class="n">RTC_DRIFT_ERROR</span><span class="p">))</span> <span class="ow">or</span>
+                      <span class="n">MINIMUM_EXPECTED_DRIFT_SEC</span><span class="p">)</span>
+
+    <span class="c1"># Add a small buffer to the expected RTC time which includes</span>
+    <span class="c1"># expected drift and verify time is somewhat expected</span>
+    <span class="c1"># (cast to int since we don&#39;t have sub-second precision anyways)</span>
+    <span class="n">expected_difference</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">elapsed_time</span> <span class="o">+</span> <span class="n">expected_drift</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">time_difference</span> <span class="o">&lt;=</span> <span class="n">expected_difference</span><span class="p">,</span> <span class="p">(</span>
+        <span class="s2">&quot;RTC time not expected after action was executed! &quot;</span>
+        <span class="s2">&quot;RTC time difference: </span><span class="si">{}</span><span class="s2">, Expected &lt;= </span><span class="si">{}</span><span class="s2">. &quot;</span>
+        <span class="s2">&quot;RTC time received: </span><span class="si">{}</span><span class="s2">&quot;</span>
+        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">time_difference</span><span class="p">,</span> <span class="n">expected_difference</span><span class="p">,</span> <span class="n">rtc_time</span><span class="p">))</span>
+
+    <span class="c1"># Verify RTC alarm did not change</span>
+    <span class="k">assert</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_alarm</span><span class="p">)</span> <span class="o">==</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">TEST_RTC_ALARM</span><span class="p">),</span> <span class="p">(</span>
+        <span class="s2">&quot;RTC alarm not equal to set RTC alarm after action was executed! &quot;</span>
+        <span class="s2">&quot;RTC alarm: </span><span class="si">{}</span><span class="s2">, expected: </span><span class="si">{}</span><span class="s2">&quot;</span>
+        <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rtc_alarm</span><span class="p">,</span> <span class="n">TEST_RTC_ALARM</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="test_multiple_suspend_resume"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_multiple_suspend_resume">[docs]</a><span class="k">def</span> <span class="nf">test_multiple_suspend_resume</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">install_rtc_utility</span><span class="p">,</span>
+                                 <span class="n">num_suspend_cycles</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">,</span>
+                                 <span class="n">reboot_for_teardown</span><span class="p">,</span>
+                                 <span class="n">kill_anacapa_with_stopanacapa</span><span class="p">,</span>
+                                 <span class="n">kill_power_coordinator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This test verifies that multiple suspend/resume cycles do not affect a</span>
+<span class="sd">    set RTC time or alarm. Requires a serial port server for suspend</span>
+<span class="sd">    verification and a power outlet for waking the device. Anacapa and</span>
+<span class="sd">    power coordinator are killed so they don&#39;t interfere with RTC alarm</span>
+<span class="sd">    setting when suspending.</span>
+
+<span class="sd">    ..note:</span>
+<span class="sd">        This test forces suspend without the power coordinator by doing</span>
+<span class="sd">        a direct call to the RTC alarm/suspend syslib API. This may</span>
+<span class="sd">        have unexpected consequences, but the power coordinator sets</span>
+<span class="sd">        RTC alarms when it suspends which can break our tests. To avoid</span>
+<span class="sd">        leaving the device in an unsupported state, the device is</span>
+<span class="sd">        rebooted at the end of testing.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Kill anacapa and power coordinator</span>
+<span class="sd">    2. Set RTC time and alarm</span>
+<span class="sd">    3. Turn off external power to stop charging device</span>
+<span class="sd">    4. Suspend device</span>
+<span class="sd">    5. Wake device</span>
+<span class="sd">    6. Read RTC time and alarm and verify they are expected given the</span>
+<span class="sd">       previously set RTC time and alarm and suspend duration</span>
+<span class="sd">    7. Repeat steps 4-6 for a number of suspend/resume cycles</span>
+<span class="sd">    8. Reboot the device</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Define args required for _suspend_device()</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">_suspend_device</span>
+    <span class="n">action_args</span> <span class="o">=</span> <span class="p">(</span><span class="n">rtc_utility</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">)</span>
+
+    <span class="c1"># Repeat for a number of suspend/resume cycles</span>
+    <span class="k">for</span> <span class="n">cycle</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_suspend_cycles</span><span class="p">):</span>
+        <span class="c1"># Run RTC suspend test to verify RTC time and alarm is not affected</span>
+        <span class="c1"># by suspend/resume</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Testing suspend/resume cycle </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cycle</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">verify_rtc_after_action</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="o">*</span><span class="n">action_args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_long_suspend"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_long_suspend">[docs]</a><span class="k">def</span> <span class="nf">test_long_suspend</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">install_rtc_utility</span><span class="p">,</span>
+                      <span class="n">suspend_duration</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">,</span> <span class="n">reboot_for_teardown</span><span class="p">,</span>
+                      <span class="n">kill_anacapa_with_stopanacapa</span><span class="p">,</span>
+                      <span class="n">kill_power_coordinator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This test verifies that one long suspend will not affect a set</span>
+<span class="sd">    RTC time or alarm. Requires a serial port server for suspend</span>
+<span class="sd">    verification and a power outlet for waking the device. Anacapa and</span>
+<span class="sd">    power coordinator are killed so they don&#39;t interfere with RTC alarm</span>
+<span class="sd">    setting when suspending.</span>
+
+<span class="sd">    ..note:</span>
+<span class="sd">        This test forces suspend without the power coordinator by doing</span>
+<span class="sd">        a direct call to the RTC alarm/suspend syslib API. This may</span>
+<span class="sd">        have unexpected consequences, but the power coordinator sets</span>
+<span class="sd">        RTC alarms when it suspends which can break our tests. To avoid</span>
+<span class="sd">        leaving the device in an unsupported state, the device is</span>
+<span class="sd">        rebooted at the end of testing.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Kill anacapa and power coordinator</span>
+<span class="sd">    2. Set RTC time and alarm</span>
+<span class="sd">    3. Turn off external power to stop charging device</span>
+<span class="sd">    4. Suspend the device for suspend_duration seconds</span>
+<span class="sd">    5. Wake device</span>
+<span class="sd">    6. Read RTC time and alarm and verify they are expected given the</span>
+<span class="sd">       previously set RTC time and alarm and suspend duration</span>
+<span class="sd">    7. Reboot the device</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Define args required for _suspend_device()</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">_suspend_device</span>
+    <span class="n">action_args</span> <span class="o">=</span> <span class="p">(</span><span class="n">rtc_utility</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">,</span> <span class="n">suspend_duration</span><span class="p">)</span>
+
+    <span class="c1"># Run RTC suspend test to verify RTC time and alarm is not affected</span>
+    <span class="c1"># by suspending for suspend_duration seconds before resuming</span>
+    <span class="n">verify_rtc_after_action</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="o">*</span><span class="n">action_args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_soft_reboot"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_soft_reboot">[docs]</a><span class="k">def</span> <span class="nf">test_soft_reboot</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">install_rtc_utility</span><span class="p">,):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that a soft reboot will not affect a set RTC time or alarm.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Set RTC time and alarm</span>
+<span class="sd">    2. Reboot device</span>
+<span class="sd">    3. Read RTC time and alarm and verify they are expected given the</span>
+<span class="sd">       amount of time that has passed during the reboot (alarm should</span>
+<span class="sd">       not change)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Run test to verify a set RTC time and alarm are not affected after</span>
+    <span class="c1"># a reboot</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span>
+    <span class="n">verify_rtc_after_action</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_power_off"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_power_off">[docs]</a><span class="k">def</span> <span class="nf">test_power_off</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span> <span class="n">install_rtc_utility</span><span class="p">,</span>
+                   <span class="n">printk_monitor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that a power off by pressing the power button does</span>
+<span class="sd">    not affect a set RTC time and alarm. Note: a 10+ second</span>
+<span class="sd">    power button press will hard reset the CCG3 and PSoC and will</span>
+<span class="sd">    reset the RTC; this is expected and not the type of power off</span>
+<span class="sd">    we will test here.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Set RTC time and alarm</span>
+<span class="sd">    2. Turn off external power to stop charging device</span>
+<span class="sd">    3. Power off device by spoofing power button press</span>
+<span class="sd">    4. Turn on external device power (dock) to power back on device</span>
+<span class="sd">    5. Read RTC time and alarm and verify they are expected given the</span>
+<span class="sd">       elapsed time</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Run test to verify a set RTC time and alarm is not affected</span>
+    <span class="c1"># by a power off</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">_power_off_device</span>
+    <span class="n">action_args</span> <span class="o">=</span> <span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">)</span>
+    <span class="n">verify_rtc_after_action</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="o">*</span><span class="n">action_args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_rtc_restore_after_psoc_program"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_rtc_restore_after_psoc_program">[docs]</a><span class="k">def</span> <span class="nf">test_rtc_restore_after_psoc_program</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span>
+                                        <span class="n">install_rtc_utility</span><span class="p">,</span>
+                                        <span class="n">kill_anacapa_with_stopanacapa</span><span class="p">,</span>
+                                        <span class="n">kill_power_coordinator</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that a set RTC time and alarm are saved when we erase and</span>
+<span class="sd">    reprogram the PSoC. Anacapa and power coordinator are killed so that</span>
+<span class="sd">    there are no issues when reprogramming the PSoC.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Kill anacapa and power coordinator</span>
+<span class="sd">    2. Set an RTC time and alarm</span>
+<span class="sd">    3. Erase PSoC</span>
+<span class="sd">    4. Reprogram PSoC</span>
+<span class="sd">    5. Verify RTC time and alarm are still set as expected</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># FIXME SWPBL-125876 - enable this test case when this work is complete</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Requires SWPBL-125876 to be complete.&quot;</span><span class="p">)</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Reprogram PSoC and verify RTC time and alarm</span>
+    <span class="n">action</span> <span class="o">=</span> <span class="n">_erase_and_reprogram_psoc</span>
+    <span class="n">action_args</span> <span class="o">=</span> <span class="p">(</span><span class="n">device</span><span class="p">,)</span>
+    <span class="n">verify_rtc_after_action</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">rtc_utility</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="o">*</span><span class="n">action_args</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_system_clock_sync_after_boot"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_system_clock_sync_after_boot">[docs]</a><span class="k">def</span> <span class="nf">test_system_clock_sync_after_boot</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span>
+                                      <span class="n">install_rtc_utility</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that the system clock time is set to the RTC clock time value</span>
+<span class="sd">    after a reboot/boot.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Set RTC time and clear system clock time to make sure they are</span>
+<span class="sd">       different and out of sync</span>
+<span class="sd">    2. Reboot device</span>
+<span class="sd">    3. Verify system clock time is about equal to the RTC time</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># FIXME SWPBL-118499 - enable this test case when this work is complete</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Requires SWBPL-118499 to be complete.&quot;</span><span class="p">)</span>
+
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Set RTC and clear out system clock</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_rtc_time</span><span class="p">(</span><span class="n">TEST_RTC_TIME</span><span class="p">)</span>
+    <span class="n">rtc_utility</span><span class="o">.</span><span class="n">set_system_time</span><span class="p">(</span><span class="n">EPOCH_TIME</span><span class="p">)</span>
+
+    <span class="c1"># Reboot</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+
+    <span class="c1"># Verify system clock time is within a second of the RTC time</span>
+    <span class="n">rtc_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_rtc_time</span><span class="p">()</span>
+    <span class="n">sys_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_system_time</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">)</span> <span class="o">-</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">sys_time</span><span class="p">))</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span>
+        <span class="s2">&quot;System time is not equal to the RTC time after reboot! &quot;</span>
+        <span class="s2">&quot;System time: </span><span class="si">{}</span><span class="s2">, expected: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sys_time</span><span class="p">,</span> <span class="n">rtc_time</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="test_system_clock_update_during_suspend"><a class="viewcode-back" href="../../../../pytest_automation.syssw.rtc.html#pytest_automation.syssw.rtc.test_rtc.test_system_clock_update_during_suspend">[docs]</a><span class="k">def</span> <span class="nf">test_system_clock_update_during_suspend</span><span class="p">(</span><span class="n">unique_portable_device</span><span class="p">,</span>
+                                            <span class="n">install_rtc_utility</span><span class="p">,</span>
+                                            <span class="n">printk_monitor</span><span class="p">,</span>
+                                            <span class="n">sync_rtc_system_and_testrunner</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies that the system clock time continues to update during suspend.</span>
+<span class="sd">    This is not a test specific to the RTC and is handled automatically</span>
+<span class="sd">    by the linux kernel, but we should verify that the system time continues</span>
+<span class="sd">    to update across suspends so we can be sure that we don&#39;t have to manually</span>
+<span class="sd">    keep it in sync with the RTC.</span>
+
+<span class="sd">    Test Steps:</span>
+<span class="sd">    1. Sync the system and RTC clocks to each other</span>
+<span class="sd">    2. Turn off external power to stop charging device</span>
+<span class="sd">    2. Suspend device</span>
+<span class="sd">    3. Wake device by turning external device power on</span>
+<span class="sd">    4. Verify system clock time is still about equal to the RTC time</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">unique_portable_device</span>
+    <span class="n">rtc_utility</span> <span class="o">=</span> <span class="n">install_rtc_utility</span>
+
+    <span class="c1"># Disable extern power source</span>
+    <span class="n">_disable_external_power</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+    <span class="c1"># Suspend for 30 seconds</span>
+    <span class="n">_suspend_device</span><span class="p">(</span><span class="n">rtc_utility</span><span class="p">,</span> <span class="n">printk_monitor</span><span class="p">,</span> <span class="n">suspend_duration</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+                    <span class="n">force_suspend</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="c1"># Wake up by enabling external power source</span>
+    <span class="n">_enable_external_power</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+    <span class="n">device</span><span class="o">.</span><span class="n">wait_for_upnp_alive</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="n">WAKE_TIMEOUT</span><span class="p">)</span>
+
+    <span class="c1"># Verify RTC clock and system clock are within a second of each other</span>
+    <span class="n">rtc_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_rtc_time</span><span class="p">()</span>
+    <span class="n">sys_time</span> <span class="o">=</span> <span class="n">rtc_utility</span><span class="o">.</span><span class="n">get_system_time</span><span class="p">()</span>
+    <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">rtc_time</span><span class="p">)</span> <span class="o">-</span> <span class="n">calendar</span><span class="o">.</span><span class="n">timegm</span><span class="p">(</span><span class="n">sys_time</span><span class="p">))</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span>
+        <span class="s2">&quot;System time is not equal to the RTC time after waking from suspend! &quot;</span>
+        <span class="s2">&quot;System time: </span><span class="si">{}</span><span class="s2">, expected: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sys_time</span><span class="p">,</span> <span class="n">rtc_time</span><span class="p">))</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

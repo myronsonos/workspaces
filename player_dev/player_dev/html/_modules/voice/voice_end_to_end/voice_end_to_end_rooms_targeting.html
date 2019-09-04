@@ -1,0 +1,923 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>voice.voice_end_to_end.voice_end_to_end_rooms_targeting &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for voice.voice_end_to_end.voice_end_to_end_rooms_targeting</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">shutil</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">urllib</span> <span class="k">import</span> <span class="n">quote_plus</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">upnp.helpers.diag</span> <span class="k">import</span> <span class="n">UDPDiagnosticModuleMonitor</span>
+<span class="kn">from</span> <span class="nn">voice_util.voice_overlay</span> <span class="k">import</span> <span class="n">VoiceOverlay</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">voice_end_to_end_base</span> <span class="k">import</span> <span class="p">(</span><span class="n">VoiceEndToEndBase</span><span class="p">,</span>
+                                   <span class="n">AVSConnectionFailureException</span><span class="p">,</span>
+                                   <span class="n">AVSTransactionValidator</span><span class="p">,</span>
+                                   <span class="n">VOICETAP_PATH_BASE</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.musicservices.smapi_client_base</span> <span class="k">import</span> <span class="n">SmapiClientBase</span>
+
+<span class="n">VOICETAP_PATH</span> <span class="o">=</span> <span class="n">VOICETAP_PATH_BASE</span> <span class="o">+</span> <span class="s2">&quot;targeted_rooms/&quot;</span>
+<span class="n">VOICE_SPEC_JSON</span> <span class="o">=</span> <span class="s1">&#39;voice_device_discovery.json&#39;</span>
+<span class="n">VOICETAP_NAME</span> <span class="o">=</span> <span class="s2">&quot;alexa_discover_devices.raw&quot;</span>
+<span class="n">AMAZON_SERVICE</span> <span class="o">=</span> <span class="s1">&#39;Amazon Music&#39;</span>
+<span class="n">SERIAL_TO_ROOM_NAME_MAP</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;ROOM_NAMES&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+<span class="n">DEFAULT_VOLUME</span> <span class="o">=</span> <span class="mi">15</span>
+
+<span class="n">SET_VOLUME</span> <span class="o">=</span> <span class="s1">&#39;Set volume&#39;</span>
+<span class="n">ADD_TO_QUEUE</span> <span class="o">=</span> <span class="s1">&#39;Add to queue&#39;</span>
+<span class="c1"># MUSE command confirmation on target rooms</span>
+<span class="n">MUSE_DUCK</span> <span class="o">=</span> <span class="s1">&#39;Received command playerVolume:1#duck&#39;</span>
+<span class="n">MUSE_UNDUCK</span> <span class="o">=</span> <span class="s1">&#39;Received command playerVolume:1#unduck&#39;</span>
+<span class="n">MUSE_PAUSE</span> <span class="o">=</span> <span class="s1">&#39;Received command playback:1#pause()&#39;</span>
+<span class="n">MUSE_RESUME</span> <span class="o">=</span> <span class="s1">&#39;Received command playbackSession:1#skipToItemWithWindow&#39;</span>
+<span class="n">MUSE_RESPONSE</span> <span class="o">=</span> <span class="s1">&#39;&lt;muse,3&gt; [0] Responded success=true&#39;</span>
+<span class="c1"># CHSRC confirmation of start of playback in target rooms.</span>
+<span class="n">CHSRC_START_PLAYING</span> <span class="o">=</span> <span class="s1">&#39;&lt;chsrc,2&gt; Start streaming&#39;</span>
+<span class="n">CHSRC_STOP_PLAYING</span> <span class="o">=</span> <span class="s1">&#39;&lt;chsrc,2&gt; Stopped playing&#39;</span>
+<span class="n">CHSRC_PAUSE</span> <span class="o">=</span> <span class="s1">&#39;&lt;chsrc,2&gt; running pauseRoutine&#39;</span>
+<span class="n">CHSRC_RESUME</span> <span class="o">=</span> <span class="s1">&#39;&lt;chsrc,2&gt; resuming from pause&#39;</span>
+
+<span class="n">VOLUME_EVENTS</span> <span class="o">=</span> <span class="p">[</span><span class="n">SET_VOLUME</span><span class="p">]</span>
+<span class="n">AVT_EVENTS</span> <span class="o">=</span> <span class="p">[</span><span class="n">ADD_TO_QUEUE</span><span class="p">]</span>
+<span class="n">MUSE_EVENTS</span> <span class="o">=</span> <span class="p">[</span><span class="n">MUSE_DUCK</span><span class="p">,</span> <span class="n">MUSE_UNDUCK</span><span class="p">,</span> <span class="n">MUSE_PAUSE</span><span class="p">,</span> <span class="n">MUSE_RESPONSE</span><span class="p">,</span> <span class="n">MUSE_RESUME</span><span class="p">]</span>
+<span class="n">CHSRC_EVENTS</span> <span class="o">=</span> <span class="p">[</span><span class="n">CHSRC_PAUSE</span><span class="p">,</span> <span class="n">CHSRC_RESUME</span><span class="p">,</span> <span class="n">CHSRC_START_PLAYING</span><span class="p">,</span>
+                <span class="n">CHSRC_STOP_PLAYING</span><span class="p">]</span>
+<span class="c1"># default wait time between tests or allow playback to continue</span>
+<span class="n">WAIT_TIME</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="c1"># default timeout seconds for a command to work successfully</span>
+<span class="n">TIMEOUT_SEC</span><span class="o">=</span><span class="mi">20</span>
+
+<span class="n">MIN_TRACKS</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">CONNECTED</span> <span class="o">=</span> <span class="s1">&#39;CONNECTED&#39;</span>
+
+
+<div class="viewcode-block" id="UnSupportedCommandException"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.UnSupportedCommandException">[docs]</a><span class="k">class</span> <span class="nc">UnSupportedCommandException</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="VoiceCommandHelper"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper">[docs]</a><span class="k">class</span> <span class="nc">VoiceCommandHelper</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper class to handle build up to voice commands and to issue a voice</span>
+<span class="sd">    command from voice assistant using VoiceOverlay.</span>
+<span class="sd">    Note: The defines listed are only a subset of all possible values for</span>
+<span class="sd">    test purposes.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># wake word</span>
+    <span class="n">ALEXA</span> <span class="o">=</span> <span class="s1">&#39;alexa&#39;</span>
+    <span class="c1"># device discovery</span>
+    <span class="c1"># conventional room targets for test</span>
+    <span class="c1"># see https://confluence.sonos.com/display/BETA/SG+and+Bootleg+beta+guide</span>
+    <span class="c1"># for list of top 300 names</span>
+    <span class="n">CONVENTIONAL_TARGET_ROOM_NAMES</span> <span class="o">=</span> <span class="p">[</span>
+       <span class="s1">&#39;Kitchen&#39;</span><span class="p">,</span>
+       <span class="s1">&#39;Living Room&#39;</span>
+    <span class="p">]</span>
+    <span class="n">VOLUME_CONTROL_COMMANDS</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s1">&#39;turn it up&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;turn it down&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;raise volume&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;lower volume&#39;</span>
+    <span class="p">]</span>
+    <span class="n">PLAY_CONTROL_COMMANDS</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="s1">&#39;skip&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;previous&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;pause&#39;</span><span class="p">,</span>
+        <span class="s1">&#39;resume&#39;</span>
+    <span class="p">]</span>
+    <span class="n">PLAY_COMMAND</span> <span class="o">=</span> <span class="s1">&#39;play&#39;</span>
+    <span class="n">CONTROL_COMMAND</span> <span class="o">=</span> <span class="s1">&#39;control&#39;</span>
+
+    <span class="n">PLAY_PREPOSITION</span> <span class="o">=</span> <span class="s1">&#39;from&#39;</span>
+    <span class="n">TARGET_PREPOSITION</span> <span class="o">=</span> <span class="s1">&#39;in&#39;</span>
+
+    <span class="c1"># device discovery</span>
+    <span class="n">DISCOVER_DEVICES_COMMAND</span> <span class="o">=</span> <span class="s1">&#39;alexa_discover_devices&#39;</span>
+    <span class="c1"># control command follow the general template</span>
+    <span class="n">CONTROL_COMMAND_TEMPLATE</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{wake_word}</span><span class="s1"> </span><span class="si">{command}</span><span class="s1"> in </span><span class="si">{target_room_name}</span><span class="s1">&#39;</span>
+    <span class="c1"># play command follow the general template</span>
+    <span class="n">PLAY_COMMAND_TEMPLATE</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;</span><span class="si">{wake_word}</span><span class="s1"> </span><span class="si">{command}</span><span class="s1"> </span><span class="si">{play_noun}</span><span class="s1"> from &#39;</span>
+                             <span class="s1">&#39;</span><span class="si">{play_source}</span><span class="s1"> in </span><span class="si">{target_room_name}</span><span class="s1">&#39;</span><span class="p">)</span>
+    <span class="c1"># for test with radio, we will only use WBUR radio station from tunein</span>
+    <span class="n">RADIO_SOURCE</span> <span class="o">=</span> <span class="s1">&#39;tunein&#39;</span>
+    <span class="n">RADIO_STATION</span> <span class="o">=</span> <span class="s1">&#39;wbur&#39;</span>
+    <span class="c1"># for track play, we will use an uploaded album from &#39;Def Leppard&#39; in</span>
+    <span class="c1"># Amazon music. We will pick a standard track : &#39;Animal&#39;</span>
+    <span class="n">TRACK_SOURCE</span> <span class="o">=</span> <span class="s1">&#39;amazon music&#39;</span>
+    <span class="n">ARTIST</span> <span class="o">=</span> <span class="s1">&#39;def leppard&#39;</span>
+    <span class="n">TRACK</span> <span class="o">=</span> <span class="s1">&#39;Animal&#39;</span>
+    <span class="n">PLAY_SOURCE_MAP</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">RADIO_SOURCE</span><span class="p">:</span> <span class="p">[</span>
+            <span class="n">RADIO_STATION</span>
+        <span class="p">],</span>
+        <span class="n">TRACK_SOURCE</span><span class="p">:</span> <span class="p">[</span>
+            <span class="n">ARTIST</span><span class="p">,</span>
+            <span class="n">TRACK</span>
+        <span class="p">]</span>
+    <span class="p">}</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">logger</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">voice_assistant</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">voicetap_server</span><span class="o">=</span><span class="kc">None</span>
+                 <span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span> <span class="o">=</span> <span class="n">voice_assistant</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logger</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span> <span class="o">=</span> <span class="n">VoiceOverlay</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voicetap_server</span> <span class="o">=</span> <span class="n">voicetap_server</span>
+
+<div class="viewcode-block" id="VoiceCommandHelper.generate_play_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.generate_play_command">[docs]</a>    <span class="k">def</span> <span class="nf">generate_play_command</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                              <span class="n">play_noun</span><span class="p">,</span>
+                              <span class="n">play_source</span><span class="p">,</span>
+                              <span class="n">target_room_name</span><span class="p">,</span>
+                              <span class="n">wake_word</span><span class="o">=</span><span class="n">ALEXA</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate play voice command</span>
+<span class="sd">        :param str play_noun: artist name, album name or radio station..</span>
+<span class="sd">        :param str play_source: Source of music: example tune in, amazon music</span>
+<span class="sd">        :param str target_room_name: Room name where command is executed</span>
+<span class="sd">        :param str wake_word: Wake word example: alexa</span>
+<span class="sd">        :return: PLay command</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">PLAY_COMMAND_TEMPLATE</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">wake_word</span><span class="o">=</span><span class="n">wake_word</span><span class="p">,</span>
+            <span class="n">command</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">PLAY_COMMAND</span><span class="p">,</span>
+            <span class="n">play_noun</span><span class="o">=</span><span class="n">play_noun</span><span class="p">,</span>
+            <span class="n">play_source</span><span class="o">=</span><span class="n">play_source</span><span class="p">,</span>
+            <span class="n">target_room_name</span><span class="o">=</span><span class="n">target_room_name</span>
+            <span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceCommandHelper.generate_control_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.generate_control_command">[docs]</a>    <span class="k">def</span> <span class="nf">generate_control_command</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                 <span class="n">command</span><span class="p">,</span>
+                                 <span class="n">target_room_name</span><span class="p">,</span>
+                                 <span class="n">wake_word</span><span class="o">=</span><span class="n">ALEXA</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generate control command</span>
+<span class="sd">        :param str command: command to execute on target room</span>
+<span class="sd">        :param str target_room_name: target room name</span>
+<span class="sd">        :param str wake_word: Wake word example: alexa</span>
+<span class="sd">        :return: control command example: mute, unmute, pause, resume, skip etc</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">CONTROL_COMMAND_TEMPLATE</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">wake_word</span><span class="o">=</span><span class="n">wake_word</span><span class="p">,</span>
+            <span class="n">command</span><span class="o">=</span><span class="n">command</span><span class="p">,</span>
+            <span class="n">target_room_name</span><span class="o">=</span><span class="n">target_room_name</span>
+            <span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceCommandHelper.get_voicetap_name_for_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.get_voicetap_name_for_command">[docs]</a>    <span class="k">def</span> <span class="nf">get_voicetap_name_for_command</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get voicetap file name from command name</span>
+<span class="sd">        :param str command: Voice tap file name from voice command</span>
+<span class="sd">        :return voice_tap: Name of voice tap file</span>
+<span class="sd">        :rtype voice_tap: :`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">voice_tap</span> <span class="o">=</span> <span class="n">command</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">+</span> <span class="s1">&#39;.raw&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Voice tap file name: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">voice_tap</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">voice_tap</span></div>
+
+<div class="viewcode-block" id="VoiceCommandHelper.get_voicetap_url"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.get_voicetap_url">[docs]</a>    <span class="k">def</span> <span class="nf">get_voicetap_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">voicetap_name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get voicetap file url</span>
+<span class="sd">        :param str voicetap_name: voicetap name</span>
+<span class="sd">        :return url: Voice tap file url</span>
+<span class="sd">        :rtype url: :`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/voicetap/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voicetap_server</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+                                             <span class="n">voicetap_name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">url</span></div>
+
+<div class="viewcode-block" id="VoiceCommandHelper.discover_devices"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.discover_devices">[docs]</a>    <span class="k">def</span> <span class="nf">discover_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Send voice command to discover devices</span>
+<span class="sd">        We currently do no have a way to check what are the discovered</span>
+<span class="sd">        devices, so use of this command is like &#39;do dicovery and hope devices</span>
+<span class="sd">        are discovered as expected&#39;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Playing voice command: &#39;alexa discover devices&#39; using&quot;</span>
+                         <span class="s2">&quot; overlay&quot;</span><span class="p">)</span>
+        <span class="n">command</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">DISCOVER_DEVICES_COMMAND</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">play_voice_command</span><span class="p">(</span><span class="n">command</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceCommandHelper.play_voice_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceCommandHelper.play_voice_command">[docs]</a>    <span class="k">def</span> <span class="nf">play_voice_command</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Play voicetap for the command provided</span>
+<span class="sd">        :param str command: voice command to play using voiceoverlay</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Playing voice command: </span><span class="si">{}</span><span class="s2"> using overlay&quot;</span>
+                         <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command</span><span class="p">))</span>
+        <span class="n">command</span> <span class="o">=</span> <span class="n">command</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">)</span>
+        <span class="n">voicetap_name</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap_name_for_command</span><span class="p">(</span><span class="n">command</span><span class="p">)</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap_url</span><span class="p">(</span><span class="n">voicetap_name</span><span class="p">)</span>
+        <span class="c1"># voice tap plays automatically once mic is turned on.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">load_and_start_overlay</span><span class="p">(</span><span class="n">url</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper">[docs]</a><span class="k">class</span> <span class="nc">AmazonMusicPlayHelper</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Helper for adding tracks in queue from amazon music library and play</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">AMAZON</span> <span class="o">=</span> <span class="sa">u</span><span class="s1">&#39;Amazon Music&#39;</span>
+    <span class="n">AMAZON_MY_MUSIC_URI</span> <span class="o">=</span> <span class="s2">&quot;x-rincon-cpcontainer:100e206c</span><span class="si">{}</span><span class="s2">?sid=</span><span class="si">{}</span><span class="s2">&amp;flags=8300&amp;sn=</span><span class="si">{}</span><span class="s2">&quot;</span>
+    <span class="n">AMAZON_MY_MUSIC_METADATA</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot;</span>
+<span class="s2">    xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot;</span>
+<span class="s2">    xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;</span>
+<span class="s2">    xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;</span>
+<span class="s2">    &lt;item id=&quot;100e206c</span><span class="si">{}</span><span class="s2">&quot; parentID=&quot;10082064</span><span class="si">{}</span><span class="s2">&quot; restricted=&quot;true&quot;&gt;</span>
+<span class="s2">    &lt;dc:title&gt;Tracks&lt;/dc:title&gt;</span>
+<span class="s2">    &lt;upnp:class&gt;object.container.playlistContainer&lt;/upnp:class&gt;</span>
+<span class="s2">    &lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;SA_RINCON</span><span class="si">{}</span><span class="s2">_X_#Svc</span><span class="si">{}</span><span class="s2">-0-Token&lt;/desc&gt;</span>
+<span class="s2">    &lt;/item&gt;</span>
+<span class="s2">    &lt;/DIDL-Lite&gt;&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">smapi_id</span><span class="p">,</span> <span class="n">svc_acct</span><span class="p">,</span> <span class="n">logger</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logger</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi_id</span> <span class="o">=</span> <span class="n">smapi_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_zp</span> <span class="o">=</span> <span class="n">zp</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span> <span class="o">=</span> <span class="n">svc_acct</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">smapi_client</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_smapi_client</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">amazon_root</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_root_collections</span><span class="p">()</span>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.get_smapi_client"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.get_smapi_client">[docs]</a>    <span class="k">def</span> <span class="nf">get_smapi_client</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initialize the SMAPI client interface</span>
+<span class="sd">        :return smapi_client</span>
+<span class="sd">        :rtype: :class:`~upnp.functional.musicservices.SmapiClientBase`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">smapi_client</span> <span class="o">=</span> <span class="n">SmapiClientBase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_id</span><span class="p">,</span>
+                                       <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">oauth_id</span><span class="p">,</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">token</span><span class="p">,</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">key</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">smapi_client</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.get_root_collections"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.get_root_collections">[docs]</a>    <span class="k">def</span> <span class="nf">get_root_collections</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">base</span><span class="o">=</span><span class="s1">&#39;root&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return a list of mediaCollection items from the top level</span>
+<span class="sd">        hierarchy of the content provider</span>
+<span class="sd">        :param str base: The base level to retrieve content - default &#39;root&#39;</span>
+<span class="sd">        :return: List of mediaCollection</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span><span class="p">,</span> <span class="n">warn</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_client</span><span class="o">.</span><span class="n">getMetadata</span><span class="p">(</span>
+            <span class="n">base</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">smapi_client</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">res</span> <span class="ow">and</span> <span class="n">res</span><span class="o">.</span><span class="n">Items</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.get_my_music_collection_info"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.get_my_music_collection_info">[docs]</a>    <span class="k">def</span> <span class="nf">get_my_music_collection_info</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                     <span class="n">level</span><span class="o">=</span><span class="s1">&#39;My Music&#39;</span><span class="p">,</span>
+                                     <span class="n">sub_level</span><span class="o">=</span><span class="s1">&#39;Tracks&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return a tuple of the mediaCollection corresponding</span>
+<span class="sd">        to the sub level and the mediaCollection of the parent</span>
+<span class="sd">        :param str level: Container from which to get music collection info</span>
+<span class="sd">        :param sub_level: Sub level in container to get info by</span>
+<span class="sd">        :return: Tuple of playlist id in Tracks and id of its parent</span>
+<span class="sd">        collection, My Music.</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">amazon_root</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">item</span><span class="o">.</span><span class="n">title</span> <span class="o">==</span> <span class="n">level</span><span class="p">:</span>
+                <span class="n">collection_id</span> <span class="o">=</span> <span class="n">item</span><span class="o">.</span><span class="n">id</span>
+                <span class="n">sub_items</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_root_collections</span><span class="p">(</span><span class="n">base</span><span class="o">=</span><span class="n">item</span><span class="o">.</span><span class="n">id</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">sub_item</span> <span class="ow">in</span> <span class="n">sub_items</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">sub_item</span><span class="o">.</span><span class="n">title</span> <span class="o">==</span> <span class="n">sub_level</span><span class="p">:</span>
+                        <span class="n">playlist_id</span> <span class="o">=</span> <span class="n">sub_item</span><span class="o">.</span><span class="n">id</span>
+                        <span class="k">return</span> <span class="n">playlist_id</span><span class="p">,</span> <span class="n">collection_id</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.create_amazon_playlist_uri_metadata"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.create_amazon_playlist_uri_metadata">[docs]</a>    <span class="k">def</span> <span class="nf">create_amazon_playlist_uri_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create amazon track uri and metadata</span>
+<span class="sd">        :return: tuple of track uri and metadata</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">playlist_id</span><span class="p">,</span> <span class="n">collection_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_my_music_collection_info</span><span class="p">()</span>
+        <span class="n">uri</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">AMAZON_MY_MUSIC_URI</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">quote_plus</span><span class="p">(</span><span class="n">playlist_id</span><span class="p">),</span>
+                                              <span class="bp">self</span><span class="o">.</span><span class="n">smapi_id</span><span class="p">,</span>
+                                              <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">serial_number</span><span class="p">)</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">AMAZON_MY_MUSIC_METADATA</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">quote_plus</span><span class="p">(</span><span class="n">playlist_id</span><span class="p">),</span>
+            <span class="n">quote_plus</span><span class="p">(</span><span class="n">collection_id</span><span class="p">),</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">service_id</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">svc_acct</span><span class="o">.</span><span class="n">service_id</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.load_amazon_tracks_in_queue"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.load_amazon_tracks_in_queue">[docs]</a>    <span class="k">def</span> <span class="nf">load_amazon_tracks_in_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Load tracks from Amazon Music, My Music folder into queue</span>
+<span class="sd">        :return: Number of tracks in queue</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Loading tracks in queue&quot;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">create_amazon_playlist_uri_metadata</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s1">&#39;REPEAT_ALL&#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">set_queue_position</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_number_of_tracks_in_queue</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.start_playback_from_amazon_my_music"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.start_playback_from_amazon_my_music">[docs]</a>    <span class="k">def</span> <span class="nf">start_playback_from_amazon_my_music</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                            <span class="n">zp</span><span class="p">,</span>
+                                            <span class="n">queue_pos</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                                            <span class="n">play_mode</span><span class="o">=</span><span class="s1">&#39;REPEAT_ALL&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start playack from Amazon Music My Music folder</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param int queue_pos: Position in queue from where to play</span>
+<span class="sd">        :param str play_mode: Play mode to set</span>
+<span class="sd">        :return: Is the player playing ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="n">play_mode</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">set_queue_position</span><span class="p">(</span><span class="n">queue_pos</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AmazonMusicPlayHelper.stop_and_clear_queue"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.AmazonMusicPlayHelper.stop_and_clear_queue">[docs]</a>    <span class="k">def</span> <span class="nf">stop_and_clear_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop Playback</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetPlayMode</span><span class="p">(</span><span class="s1">&#39;NORMAL&#39;</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests">[docs]</a><span class="k">class</span> <span class="nc">VoiceEndToEndRoomsTargetingTests</span><span class="p">(</span><span class="n">VoiceEndToEndBase</span><span class="p">,</span>
+                                       <span class="n">UDPDiagnosticModuleMonitor</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Basic tests of alexa initiated playback and control on sonos rooms.</span>
+<span class="sd">    1. Tests explicit Room Targeting only.</span>
+<span class="sd">    2. Uses a small subset of conventional room names</span>
+<span class="sd">    3. Assumes amazon music library (My Music) container already has tracks</span>
+<span class="sd">    uploaded.</span>
+<span class="sd">    4. Uses Amazon music library and Tunein.</span>
+<span class="sd">    5. No Ducking verification (but watch them).</span>
+<span class="sd">    6. Device discovery done using voice command, no verification done as</span>
+<span class="sd">    currently there is not option available. See SWPBL-85862.</span>
+<span class="sd">    7. Only non voice capable devices are used for target rooms.</span>
+<span class="sd">    8. Players secure registration accounts are whitelisted</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;VOICE&quot;</span><span class="p">]</span>
+    <span class="n">PLAYER_EVENTS</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;chsrc&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">:</span> <span class="n">CHSRC_EVENTS</span><span class="p">},</span>
+                     <span class="s1">&#39;muse&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">6</span><span class="p">:</span> <span class="n">MUSE_EVENTS</span><span class="p">},</span>
+                     <span class="s1">&#39;rc_impl&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">:</span> <span class="n">VOLUME_EVENTS</span><span class="p">},</span>
+                     <span class="s1">&#39;avt_impl&#39;</span><span class="p">:</span> <span class="p">{</span><span class="mi">2</span><span class="p">:</span> <span class="n">AVT_EVENTS</span><span class="p">}</span>
+                     <span class="p">}</span>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.generate_zp_noun_and_play_source"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.generate_zp_noun_and_play_source">[docs]</a>    <span class="k">def</span> <span class="nf">generate_zp_noun_and_play_source</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">PLAY_SOURCE_MAP</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">noun</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">PLAY_SOURCE_MAP</span><span class="p">[</span><span class="n">source</span><span class="p">]:</span>
+                        <span class="k">yield</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">noun</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.generate_zp_and_volume_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.generate_zp_and_volume_command">[docs]</a>    <span class="k">def</span> <span class="nf">generate_zp_and_volume_command</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">command</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">VOLUME_CONTROL_COMMANDS</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">command</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.generate_zp_and_play_command"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.generate_zp_and_play_command">[docs]</a>    <span class="k">def</span> <span class="nf">generate_zp_and_play_command</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_zone_name</span><span class="p">()</span> <span class="ow">in</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONVENTIONAL_TARGET_ROOM_NAMES</span><span class="p">):</span>
+                <span class="k">for</span> <span class="n">command</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">PLAY_CONTROL_COMMANDS</span><span class="p">:</span>
+                    <span class="k">yield</span> <span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">command</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">VoiceEndToEndBase</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        <span class="n">UDPDiagnosticModuleMonitor</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                            <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+                                            <span class="n">udp_log_to_file</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.get_current_test_name"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.get_current_test_name">[docs]</a>    <span class="k">def</span> <span class="nf">get_current_test_name</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the current running test name.</span>
+
+<span class="sd">        :return: The current running test name.</span>
+<span class="sd">        :rtype: :str:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">.</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_name</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_test_name</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.setUpFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up test fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Fixture&quot;</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceEndToEndRoomsTargetingTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># get a sample zp to check amazon music service and setup music player</span>
+        <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">smapi_id</span><span class="p">,</span> <span class="n">svc_acct</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">get_service_account_from_music_service</span><span class="p">(</span>
+                <span class="n">AMAZON_SERVICE</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">svc_acct</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">amazon_music_player</span> <span class="o">=</span> <span class="n">AmazonMusicPlayHelper</span><span class="p">(</span>
+                <span class="n">zp</span><span class="p">,</span> <span class="n">smapi_id</span><span class="p">,</span> <span class="n">svc_acct</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+            <span class="c1"># for the test, we need pre-uploaded music tracks to Amazon Music</span>
+            <span class="n">music_collection</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">amazon_music_player</span>
+                                   <span class="o">.</span><span class="n">get_my_music_collection_info</span><span class="p">())</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">music_collection</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;No music collection found in My Music &quot;</span>
+                                <span class="s2">&quot;container of Amazon Music. Stopping test&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Amazon music service not setup. Stopping test&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_files_from_nas</span><span class="p">(</span><span class="n">VOICETAP_PATH</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># convert wav file to raw for the designated voice assistant</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">convert_voicetaps_for_player</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">veh</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_event_handler</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span>
+        <span class="c1"># voice command helper to generate and play voice commands on voice</span>
+        <span class="c1"># assistant</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span> <span class="o">=</span> <span class="n">VoiceCommandHelper</span><span class="p">(</span>
+            <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+            <span class="n">voice_assistant</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">,</span>
+            <span class="n">voicetap_server</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="p">)</span>
+        <span class="c1"># Only non voice capable device devices are chosen as target rooms to</span>
+        <span class="c1"># keep it simple</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_playback_devices</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">voice_capable</span><span class="p">]</span>
+        <span class="c1"># build a dictionary of player to its room name.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_player_to_room_name_map</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Player to target room map:&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> : </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">[</span><span class="n">zp</span><span class="p">],</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">setup_udplogger_on_target_rooms</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_room_names</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">do_device_discovery</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.setUpTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setup Test&quot;</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">VoiceEndToEndRoomsTargetingTests</span><span class="p">,</span>
+              <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span><span class="s2">&quot;Start test: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_test_name</span><span class="p">()))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">DEFAULT_VOLUME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.is_voice_assistant_connected_to_avs"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.is_voice_assistant_connected_to_avs">[docs]</a>    <span class="k">def</span> <span class="nf">is_voice_assistant_connected_to_avs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Check AVS connection</span>
+<span class="sd">        :return: Is voice assistant connected to avs</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_voice_service_connection_status</span><span class="p">()</span>
+                 <span class="o">==</span> <span class="n">CONNECTED</span><span class="p">),</span>
+                 <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                 <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Connected to AVS.&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">))</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.tearDownTest"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down test</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Tear down test&quot;</span><span class="p">)</span>
+        <span class="n">date_str</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s1">&#39;%H_%M_%S&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span><span class="s2">&quot;End test:</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">date_str</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_test_name</span><span class="p">()))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span><span class="s2">&quot;End test:</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">date_str</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_test_name</span><span class="p">()))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">DEFAULT_VOLUME</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">WAIT_TIME</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.tearDownFixture"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down fixture.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Tear down fixture&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">remove_overlay_file</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_event_handler</span><span class="p">[</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">]</span><span class="o">.</span><span class="n">teardown_udplogger</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">teardown_udplogger_on_target_rooms</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;websrv&#39;</span><span class="p">):</span>
+            <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">resource_path</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Stopping web server&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.setup_udplogger_on_target_rooms"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.setup_udplogger_on_target_rooms">[docs]</a>    <span class="k">def</span> <span class="nf">setup_udplogger_on_target_rooms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup udp logger on voice assistant and target rooms.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting up udplogger on target room: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                             <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_watch</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                             <span class="bp">self</span><span class="o">.</span><span class="n">cb_watch_event</span><span class="p">,</span>
+                             <span class="bp">self</span><span class="o">.</span><span class="n">PLAYER_EVENTS</span><span class="p">,</span>
+                             <span class="n">reset</span><span class="o">=</span><span class="kc">True</span>  <span class="c1"># restart_logging for this device</span>
+                             <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">reg_fatal_errors_callbacks</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">cb_detected_error</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">turn_on_upnp_invocation_callback</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.cb_detected_error"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.cb_detected_error">[docs]</a>    <span class="k">def</span> <span class="nf">cb_detected_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">expr</span><span class="p">,</span> <span class="n">l</span><span class="p">,</span> <span class="n">counters</span><span class="p">)):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback in case of error for target room devices.</span>
+<span class="sd">        :param str msg: error Log message caught by udp logger.</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Error detected on </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span> <span class="o">=</span> <span class="n">msg</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.cb_watch_event"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.cb_watch_event">[docs]</a>    <span class="k">def</span> <span class="nf">cb_watch_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">expr</span><span class="p">,</span> <span class="n">l</span><span class="p">,</span> <span class="n">counters</span><span class="p">)):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Callback for watch events on target rooms</span>
+<span class="sd">        :param str msg: Log message caught by udp logger.</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Caught matching string on </span><span class="si">{}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{}</span><span class="s2"> &quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.teardown_udplogger_on_target_rooms"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.teardown_udplogger_on_target_rooms">[docs]</a>    <span class="k">def</span> <span class="nf">teardown_udplogger_on_target_rooms</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down udp logger.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Tear down udp logger on target rooms&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unreg_fatal_errors_callbacks</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">turn_off_upnp_invocation_callback</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_watch</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.set_room_names"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.set_room_names">[docs]</a>    <span class="k">def</span> <span class="nf">set_room_names</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set rooms names based on player to room name mapping</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting target room names&quot;</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">set_zone_name</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">[</span><span class="n">zp</span><span class="p">])</span>
+         <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.get_player_to_room_name_map"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.get_player_to_room_name_map">[docs]</a>    <span class="k">def</span> <span class="nf">get_player_to_room_name_map</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get player to room name map. Gets serial number to room name map from</span>
+<span class="sd">        environment variable is it exists or build one using names defined in</span>
+<span class="sd">        VoiceCommandHelper.CONVENTIONAL_TARGET_ROOM_NAMES.</span>
+<span class="sd">        The environment variable is a space separated serialNumber:&lt;room name&gt;</span>
+<span class="sd">        list</span>
+<span class="sd">        :return: Player to target room dictionary</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Getting player to room name map.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONVENTIONAL_TARGET_ROOM_NAMES</span><span class="p">)</span> <span class="o">&gt;</span>
+                <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">)):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Not enough number of playback players available.&quot;</span><span class="p">)</span>
+        <span class="n">player_to_target_room_map</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># check if SERIAL_TO_ROOM_NAME_MAP env variable exists. Setting this</span>
+        <span class="c1"># give more stability since same device&lt;-&gt;room names are chosen</span>
+        <span class="c1"># across tests to avoid device discovery issues. Note: We donot have</span>
+        <span class="c1"># capability to programaticaly determine while rooms are discovered.</span>
+        <span class="k">if</span> <span class="n">SERIAL_TO_ROOM_NAME_MAP</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No serial to room name map available. Building &quot;</span>
+                             <span class="s2">&quot;new player&lt;-&gt;room name mapping.&quot;</span><span class="p">)</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONVENTIONAL_TARGET_ROOM_NAMES</span><span class="p">:</span>
+                <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playback_devices</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">set_zone_name</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+                <span class="n">player_to_target_room_map</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">name</span>
+                <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Serial number to room name map available. Using &quot;</span>
+                             <span class="s2">&quot;it to build player&lt;-&gt;room name map. &quot;</span><span class="p">)</span>
+            <span class="n">testbed_serials</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">]</span>
+            <span class="n">serial_to_room_names</span> <span class="o">=</span> <span class="n">SERIAL_TO_ROOM_NAME_MAP</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">serial_name_pair</span> <span class="ow">in</span> <span class="n">serial_to_room_names</span><span class="p">:</span>
+                <span class="n">temp</span> <span class="o">=</span> <span class="n">serial_name_pair</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">)</span>
+                <span class="n">serial</span> <span class="o">=</span> <span class="n">temp</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="n">room_name</span> <span class="o">=</span> <span class="n">temp</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="s2">&quot; &quot;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="p">(</span><span class="n">room_name</span> <span class="ow">in</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONVENTIONAL_TARGET_ROOM_NAMES</span>
+                    <span class="ow">and</span> <span class="n">serial</span> <span class="ow">in</span> <span class="n">testbed_serials</span><span class="p">):</span>
+                    <span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_device_by_serial</span><span class="p">(</span><span class="n">serial</span><span class="p">)</span>
+                    <span class="n">player_to_target_room_map</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span> <span class="o">=</span> <span class="n">room_name</span>
+        <span class="k">return</span> <span class="n">player_to_target_room_map</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.do_device_discovery"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.do_device_discovery">[docs]</a>    <span class="k">def</span> <span class="nf">do_device_discovery</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform device discover from voice assistant.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_voice_assistant_connected_to_avs</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">discover_devices</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">collect_anacapa_trace</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">,</span>
+                <span class="n">log_file_name</span><span class="o">=</span><span class="s2">&quot;NO_AVS_Connection_</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">get_name</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;No connection to AVS. Stopping test &quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">avs_validator</span> <span class="o">=</span> <span class="n">AVSTransactionValidator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+                                                     <span class="n">VOICE_SPEC_JSON</span><span class="p">,</span>
+                                                     <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">validate_avs_transactions</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">,</span>
+                                       <span class="n">VOICETAP_NAME</span><span class="p">,</span>
+                                       <span class="n">log_file_name</span><span class="o">=</span><span class="s2">&quot;DeviceDiscovery&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.verify_volume_control"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.verify_volume_control">[docs]</a>    <span class="k">def</span> <span class="nf">verify_volume_control</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify volume control commands on target rooms</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str voice_command: Voice command to test on target room</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="s1">&#39;unmute&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">ini_vol</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">play_voice_command</span><span class="p">(</span><span class="n">voice_command</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">word</span> <span class="ow">in</span> <span class="n">voice_command</span> <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span><span class="p">[</span><span class="s1">&#39;raise volume&#39;</span><span class="p">,</span> <span class="s1">&#39;turn it up&#39;</span><span class="p">]):</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">ini_vol</span> <span class="o">&lt;</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="nb">any</span><span class="p">(</span><span class="n">word</span> <span class="ow">in</span> <span class="n">voice_command</span> <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span><span class="p">[</span><span class="s1">&#39;lower volume&#39;</span><span class="p">,</span>
+                                                   <span class="s1">&#39;turn it down&#39;</span><span class="p">]):</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">ini_vol</span> <span class="o">&gt;</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="s1">&#39;[^un]mute&#39;</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">):</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetMute</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="s1">&#39;ummute&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="ow">not</span> <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetMute</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">UnSupportedCommandException</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">TIMEOUT_SEC</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.verify_play_control"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.verify_play_control">[docs]</a>    <span class="k">def</span> <span class="nf">verify_play_control</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify play control commands on target rooms</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str voice_command: Voice command to test on target room</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">amazon_music_player</span><span class="o">.</span><span class="n">load_amazon_tracks_in_queue</span><span class="p">(</span><span class="n">zp</span><span class="p">),</span>
+            <span class="n">MIN_TRACKS</span><span class="p">,</span>
+            <span class="s2">&quot;Expect at least </span><span class="si">{}</span><span class="s2"> tracks in queue&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">MIN_TRACKS</span><span class="p">))</span>
+
+        <span class="c1"># put the player in playing from queue so that it can skip,</span>
+        <span class="c1"># rewind etc from queue.</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="s1">&#39;resume&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">amazon_music_player</span><span class="o">.</span><span class="n">start_playback_from_amazon_my_music</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="p">,</span> <span class="n">queue_pos</span><span class="o">=</span><span class="n">MIN_TRACKS</span><span class="o">-</span><span class="mi">2</span><span class="p">),</span>
+                <span class="s2">&quot;Expect </span><span class="si">{}</span><span class="s2"> playing from queue&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">start_track_num</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Start track num: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">start_track_num</span><span class="p">))</span>
+        <span class="c1"># allow playback for few seconds.</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">WAIT_TIME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">play_voice_command</span><span class="p">(</span><span class="n">voice_command</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s1">&#39;pause&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_paused</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="s1">&#39;stop&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_stopped</span><span class="p">()</span>
+        <span class="k">elif</span> <span class="nb">any</span><span class="p">(</span><span class="n">word</span> <span class="ow">in</span> <span class="n">voice_command</span> <span class="k">for</span> <span class="n">word</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;skip&#39;</span><span class="p">,</span> <span class="s1">&#39;next&#39;</span><span class="p">]):</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span>
+                <span class="k">return</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span>
+                        <span class="o">&gt;</span> <span class="n">start_track_num</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="s1">&#39;previous&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span>
+                <span class="k">return</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_current_track</span><span class="p">()</span>
+                        <span class="o">&lt;</span> <span class="n">start_track_num</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="s1">&#39;resume&#39;</span> <span class="ow">in</span> <span class="n">voice_command</span><span class="p">:</span>
+            <span class="k">def</span> <span class="nf">predicate</span><span class="p">():</span> <span class="k">return</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">UnSupportedCommandException</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">TIMEOUT_SEC</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">amazon_music_player</span><span class="o">.</span><span class="n">stop_and_clear_queue</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.verify_playback"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.verify_playback">[docs]</a>    <span class="k">def</span> <span class="nf">verify_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify playback on target room</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str voice_command: Voice command to test on target room</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">play_voice_command</span><span class="p">(</span><span class="n">voice_command</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">TIMEOUT_SEC</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.do_test"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.do_test">[docs]</a>    <span class="k">def</span> <span class="nf">do_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                <span class="n">func</span><span class="p">,</span>
+                <span class="n">zp</span><span class="p">,</span>
+                <span class="n">command_type</span><span class="p">,</span>
+                <span class="n">command</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">noun</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                <span class="n">source</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Do playback or control (volume or playback) command</span>
+<span class="sd">        :param func: Function to call to perform test</span>
+<span class="sd">        :param zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str command_type: Type of command, playback or control</span>
+<span class="sd">        :param str command: Applicable to volume or playback command to execute</span>
+<span class="sd">        :param str noun: Applicable to playback, name of station or track or</span>
+<span class="sd">        artist to play music</span>
+<span class="sd">        :param str source: Applicable to playback, name of music source</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">command_type</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONTROL_COMMAND</span><span class="p">:</span>
+            <span class="c1"># generate control command</span>
+            <span class="n">voice_command</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">generate_control_command</span><span class="p">(</span>
+                <span class="n">command</span><span class="o">=</span><span class="n">command</span><span class="p">,</span>
+                <span class="n">target_room_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">[</span><span class="n">zp</span><span class="p">])</span>
+        <span class="k">elif</span> <span class="n">command_type</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">PLAY_COMMAND</span><span class="p">:</span>
+            <span class="n">voice_command</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">generate_play_command</span><span class="p">(</span>
+                <span class="n">play_noun</span><span class="o">=</span><span class="n">noun</span><span class="p">,</span>
+                <span class="n">play_source</span><span class="o">=</span><span class="n">source</span><span class="p">,</span>
+                <span class="n">target_room_name</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">player_to_target_map</span><span class="p">[</span><span class="n">zp</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Testing voice command: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">voice_command</span><span class="p">))</span>
+        <span class="n">log_file_name</span> <span class="o">=</span> <span class="n">voice_command</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot; &quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">func</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">collect_anacapa_trace</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">log_file_name</span><span class="o">=</span><span class="n">log_file_name</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">: Voice command  &lt;&#39;</span><span class="si">{}</span><span class="s2">&#39;&gt; Failed.&quot;</span>
+                      <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">voice_command</span><span class="p">))</span>
+        <span class="k">except</span> <span class="n">AVSConnectionFailureException</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">collect_anacapa_trace</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">voice_assistant</span><span class="p">,</span>
+                <span class="n">log_file_name</span><span class="o">=</span><span class="s2">&quot;AVS_Connection_Failure_</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">log_file_name</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Voice Assistant connection to amazon lost!.&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UnSupportedCommandException</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Command: </span><span class="si">{}</span><span class="s2"> not supported in test yet&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">command</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">error_detected</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">collect_anacapa_trace</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">log_file_name</span><span class="o">=</span><span class="n">log_file_name</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Error detected on </span><span class="si">{}</span><span class="s2">. Log line: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                      <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">error_msg</span><span class="p">))</span>
+        <span class="c1"># Continue to play for few seconds before stopping test</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">WAIT_TIME</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.test_play_in_room"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.test_play_in_room">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_zp_noun_and_play_source&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_play_in_room</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">noun</span><span class="p">,</span> <span class="n">source</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test play command sample: alexa, play wbur from tunein in living room</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">         room name</span>
+<span class="sd">        :param str noun: radio station name, track name or artist name</span>
+<span class="sd">        :param str source: source of music, example tunein, amazon music</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">do_test</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">verify_playback</span><span class="p">,</span>
+                     <span class="n">zp</span><span class="p">,</span>
+                     <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">PLAY_COMMAND</span><span class="p">,</span>
+                     <span class="n">noun</span><span class="o">=</span><span class="n">noun</span><span class="p">,</span>
+                     <span class="n">source</span><span class="o">=</span><span class="n">source</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.test_volume_control_in_room"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.test_volume_control_in_room">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_zp_and_volume_command&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_volume_control_in_room</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test volume control related commands in target rooms</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">         room name</span>
+<span class="sd">        :param str command: volume control command to execute on room</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">do_test</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">verify_volume_control</span><span class="p">,</span>
+                     <span class="n">zp</span><span class="p">,</span>
+                     <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONTROL_COMMAND</span><span class="p">,</span>
+                     <span class="n">command</span><span class="o">=</span><span class="n">command</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="VoiceEndToEndRoomsTargetingTests.test_play_control_in_room"><a class="viewcode-back" href="../../../voice.voice_end_to_end.html#voice.voice_end_to_end.voice_end_to_end_rooms_targeting.VoiceEndToEndRoomsTargetingTests.test_play_control_in_room">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_zp_and_play_command&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_play_control_in_room</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">command</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test play control command on target room.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">         room name</span>
+<span class="sd">        :param str command: play control command to execute on room</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">do_test</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">verify_play_control</span><span class="p">,</span>
+                     <span class="n">zp</span><span class="p">,</span>
+                     <span class="bp">self</span><span class="o">.</span><span class="n">voice_command_helper</span><span class="o">.</span><span class="n">CONTROL_COMMAND</span><span class="p">,</span>
+                     <span class="n">command</span><span class="o">=</span><span class="n">command</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span><span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;VoiceEndToEndRoomsTargetingTests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span>
+               <span class="n">VoiceEndToEndRoomsTargetingTests</span><span class="p">()])</span>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

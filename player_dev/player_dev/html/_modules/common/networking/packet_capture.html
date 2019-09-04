@@ -1,0 +1,589 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>common.networking.packet_capture &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for common.networking.packet_capture</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Packet capture and analysis tools for Workflow-based test suites&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">defaultdict</span>
+<span class="kn">from</span> <span class="nn">tempfile</span> <span class="k">import</span> <span class="n">NamedTemporaryFile</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="k">import</span> <span class="n">Process</span>
+<span class="kn">from</span> <span class="nn">pyshark</span> <span class="k">import</span> <span class="n">LiveCapture</span><span class="p">,</span> <span class="n">FileCapture</span>
+
+<span class="kn">from</span> <span class="nn">wifi.channels</span> <span class="k">import</span> <span class="n">channel_frequency_to_number</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">linux.cli.base</span> <span class="k">import</span> <span class="n">CliCommand</span>
+
+
+<div class="viewcode-block" id="PacketCaptureError"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureError">[docs]</a><span class="k">class</span> <span class="nc">PacketCaptureError</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    any packet capture error</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="EmptyWirelessPacketCapture"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.EmptyWirelessPacketCapture">[docs]</a><span class="k">class</span> <span class="nc">EmptyWirelessPacketCapture</span><span class="p">(</span><span class="n">PacketCaptureError</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    No wireless packets were captured when they should have been</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="PacketCaptureArgumentError"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureArgumentError">[docs]</a><span class="k">class</span> <span class="nc">PacketCaptureArgumentError</span><span class="p">(</span><span class="n">PacketCaptureError</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    problems passing arugments to capture packets</span>
+<span class="sd">    &quot;&quot;&quot;</span></div>
+
+
+<div class="viewcode-block" id="InvalidCaptureArgument"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.InvalidCaptureArgument">[docs]</a><span class="k">class</span> <span class="nc">InvalidCaptureArgument</span><span class="p">(</span><span class="n">PacketCaptureArgumentError</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    one more invalid arguments are being passed to a packet capture object</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="RequiredCaptureArgument"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.RequiredCaptureArgument">[docs]</a><span class="k">class</span> <span class="nc">RequiredCaptureArgument</span><span class="p">(</span><span class="n">PacketCaptureArgumentError</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    missing a required arugment</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="PacketCaptureMixin"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin">[docs]</a><span class="k">class</span> <span class="nc">PacketCaptureMixin</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Mixin packet capture ability to a WorkflowTestFixture</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">_CAPTURE_FILES</span> <span class="o">=</span> <span class="n">defaultdict</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">NamedTemporaryFile</span><span class="p">()</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+
+<div class="viewcode-block" id="PacketCaptureMixin.set_wireless_channel"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.set_wireless_channel">[docs]</a>    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">set_wireless_channel</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">wlan_id</span><span class="p">,</span> <span class="n">channel</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configures the monitor interface on the test runner pc for channel</span>
+
+<span class="sd">        .. note::</span>
+
+<span class="sd">            wlanX wireless card id&#39;s must map to a monX monitor interface for</span>
+<span class="sd">            this method to work.</span>
+
+<span class="sd">        :param wlan_id: the &#39;wlanX&#39; or &#39;monX&#39; identifier for the wireless card</span>
+<span class="sd">            on the test runner</span>
+<span class="sd">        :type wlan_id: obj:`str`</span>
+<span class="sd">        :param channel: the wireless channel to set the wireless network card</span>
+<span class="sd">            to</span>
+<span class="sd">        :type channel: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">channel</span><span class="p">))</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+            <span class="n">channel</span> <span class="o">=</span> <span class="n">channel_frequency_to_number</span><span class="p">(</span><span class="n">channel</span><span class="p">)</span>
+        <span class="n">wlan_id</span> <span class="o">=</span> <span class="n">wlan_id</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;mon&#39;</span><span class="p">,</span> <span class="s1">&#39;wlan&#39;</span><span class="p">)</span>
+        <span class="n">CliCommand</span><span class="p">(</span><span class="s1">&#39;ip link set </span><span class="si">{}</span><span class="s1"> down&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">wlan_id</span><span class="p">))</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+        <span class="n">CliCommand</span><span class="p">(</span><span class="s1">&#39;iwconfig </span><span class="si">{}</span><span class="s1"> channel </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">wlan_id</span><span class="p">,</span> <span class="n">channel</span><span class="p">))</span><span class="o">.</span><span class="n">run</span><span class="p">()</span></div>
+
+        <span class="c1"># Leave the interface &#39;down&#39;:</span>
+        <span class="c1"># CliCommand(&#39;ip link set {} up&#39;.format(wlan_id)).run()</span>
+
+<div class="viewcode-block" id="PacketCaptureMixin.run_capture"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.run_capture">[docs]</a>    <span class="k">def</span> <span class="nf">run_capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">packet_count</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform a capture for a given interface for a given amount of time or</span>
+<span class="sd">        a given number of packets</span>
+
+<span class="sd">        .. warning::</span>
+
+<span class="sd">            Never tried testing with timeout and packet_count so that may</span>
+<span class="sd">            not work as desired</span>
+
+<span class="sd">        :param timeout: the total amount of time to run the capture before</span>
+<span class="sd">            continuing</span>
+<span class="sd">        :type timeout: :obj:`int`</span>
+<span class="sd">        :param packet_count: the total number of packets to capture before</span>
+<span class="sd">            continuing</span>
+<span class="sd">        :type packet_count: :obj:`int`</span>
+<span class="sd">        :param kwargs: arguments to pass to :class:`pyshark.LiveCapture`</span>
+<span class="sd">        :type kwargs: keyword argument or unpacked dict</span>
+<span class="sd">        :return: the packets captured</span>
+<span class="sd">        :rtype: :obj:`pyshark.LiveCapture`</span>
+
+<span class="sd">        .. seealso::</span>
+
+<span class="sd">            `Berkeley Packet Filter Syntax \</span>
+<span class="sd">            &lt;http://biot.com/capstats/bpf.html&gt;`_ for bpf_filter argument</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="p">(</span><span class="n">timeout</span> <span class="ow">or</span> <span class="n">packet_count</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;&#39;timeout&#39; or &#39;packet_count&#39; must be specified&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;interface&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="n">RequiredCaptureArgument</span><span class="p">(</span>
+                <span class="s2">&quot;&#39;interface&#39; argument must be used to perform a capture&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;output_file&#39;</span><span class="p">):</span>
+            <span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;output_file&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_CAPTURE_FILES</span><span class="p">[</span><span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;interface&#39;</span><span class="p">]]</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="n">LiveCapture</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">set_debug</span><span class="p">()</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">sniff</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span> <span class="n">packet_count</span><span class="o">=</span><span class="n">packet_count</span><span class="p">)</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">capture</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.run_wireless_monitor_capture"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.run_wireless_monitor_capture">[docs]</a>    <span class="nd">@retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">expected_exception</span><span class="o">=</span><span class="n">EmptyWirelessPacketCapture</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">run_wireless_monitor_capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wlan_interface</span><span class="p">,</span> <span class="n">channel</span><span class="p">,</span>
+                                     <span class="n">expect_no_packets</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform a wireless monitor capture for a given wlan interface</span>
+
+<span class="sd">        .. warning::</span>
+
+<span class="sd">            Never tried testing with timeout and packet_count so that may</span>
+<span class="sd">            not work as desired</span>
+
+<span class="sd">        :param wlan_interface: the id of the wireless interface to capture on</span>
+<span class="sd">        :type wlan_interface: :obj:`str`</span>
+<span class="sd">        :param channel: the wireless channel to perform the monitor capture</span>
+<span class="sd">            on</span>
+<span class="sd">        :type channel: :obj:`int`</span>
+<span class="sd">        :param expect_no_packets: whether or not the wireless capture was</span>
+<span class="sd">            supposed to return no packets.  If True this will disable retries</span>
+<span class="sd">        :type expect_no_packets: :obj:`bool`</span>
+<span class="sd">        :param kwargs: keyword arguments to pass to call to</span>
+<span class="sd">            :meth:`PacketCaptureMixin.run_capture`</span>
+<span class="sd">        :type kwargs: keywork arguments or unpacked dictionary</span>
+<span class="sd">        :return: the packets captured</span>
+<span class="sd">        :rtype: :class:`pyshark.LiveCapture`</span>
+
+<span class="sd">        .. seealso::</span>
+
+<span class="sd">            `Berkeley Packet Filter Syntax \</span>
+<span class="sd">            &lt;http://biot.com/capstats/bpf.html&gt;`_</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_wireless_channel</span><span class="p">(</span><span class="n">wlan_interface</span><span class="p">,</span> <span class="n">channel</span><span class="p">)</span>
+        <span class="n">monitor_interface</span> <span class="o">=</span> <span class="n">wlan_interface</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;wlan&#39;</span><span class="p">,</span> <span class="s1">&#39;mon&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">monitor_interface</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;mon&#39;</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s1">&#39;wireless captures can only be done with &#39;</span>
+                <span class="s1">&#39;wlanX or monX interfaces not: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">wlan_interface</span><span class="p">))</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_capture</span><span class="p">(</span><span class="n">interface</span><span class="o">=</span><span class="n">monitor_interface</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">expect_no_packets</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">capture</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+                <span class="s1">&#39;Failed to capture any packets, toggling &#39;</span>
+                <span class="s1">&#39;wireless channel on test runners wireless card to reset the &#39;</span>
+                <span class="s1">&#39;wireless driver and retrying capture&#39;</span><span class="p">)</span>
+            <span class="n">toggle_chan</span> <span class="o">=</span> <span class="mi">1</span> <span class="k">if</span> <span class="nb">int</span><span class="p">(</span><span class="n">channel</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span> <span class="k">else</span> <span class="mi">2</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">set_wireless_channel</span><span class="p">(</span><span class="n">wlan_interface</span><span class="p">,</span> <span class="n">toggle_chan</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="n">EmptyWirelessPacketCapture</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">capture</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.post_process_capture"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.post_process_capture">[docs]</a>    <span class="k">def</span> <span class="nf">post_process_capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">interface</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Run post processing on an existing wireless capture for a given</span>
+<span class="sd">        interface</span>
+
+<span class="sd">        :param interface: get the last packet capture for a given interface</span>
+<span class="sd">            and perform post processing on it</span>
+<span class="sd">        :type interface: :obj:`str`</span>
+<span class="sd">        :param kwargs: arugments to pass to :class:`pyshark.FileCapture`</span>
+<span class="sd">        :type kwargs: keyword arguments or unpacked dict</span>
+<span class="sd">        :return: the post processed packets</span>
+<span class="sd">        :rtype: :class:`pyshark.FileCapture`</span>
+
+<span class="sd">        .. seealso::</span>
+
+<span class="sd">            `Wireshark Export Options \</span>
+<span class="sd">            &lt;https://www.wireshark.org/docs/wsug_html_chunked/\</span>
+<span class="sd">            ChIOExportSection.html&gt;`_</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="s1">&#39;input_file&#39;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+            <span class="n">capture_file</span> <span class="o">=</span> <span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;input_file&#39;</span><span class="p">]</span>
+            <span class="k">del</span> <span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;input_file&#39;</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="n">interface</span><span class="p">:</span>
+            <span class="n">capture_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_CAPTURE_FILES</span><span class="p">[</span><span class="n">interface</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">InvalidCaptureArgument</span><span class="p">(</span>
+                <span class="s2">&quot;Can only run post processing on &#39;interface&#39; or &#39;filename&#39;&quot;</span><span class="p">)</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">FileCapture</span><span class="p">(</span><span class="n">capture_file</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="n">ret</span><span class="o">.</span><span class="n">set_debug</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">ret</span><span class="o">.</span><span class="n">loaded</span><span class="p">:</span>
+            <span class="n">ret</span><span class="o">.</span><span class="n">load_packets</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">ret</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.get_wireless_traffic_between_zones"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.get_wireless_traffic_between_zones">[docs]</a>    <span class="k">def</span> <span class="nf">get_wireless_traffic_between_zones</span><span class="p">(</span>
+            <span class="bp">self</span><span class="p">,</span> <span class="n">wlan_interface</span><span class="p">,</span> <span class="n">src_zone</span><span class="p">,</span>
+            <span class="n">dst_zone</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">packet_count</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+            <span class="n">expect_no_packets</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">zones_direct_routing</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Capture and apply post processing filtering of packets between src_zone</span>
+<span class="sd">        and dst_zone</span>
+
+<span class="sd">        :param wlan_interface: the id of the wireless interface to capture on</span>
+<span class="sd">        :type wlan_interface: :obj:`str`</span>
+<span class="sd">        :param src_zone: use this zone component to filter where packets are</span>
+<span class="sd">            sent from</span>
+<span class="sd">        :type src_zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param dst_zone: use this zone component to filter where packets are</span>
+<span class="sd">            being sent to</span>
+<span class="sd">        :type dst_zone: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param channel: the wireless channel to perform the monitor capture</span>
+<span class="sd">            on</span>
+<span class="sd">        :type channel: :obj:`int`</span>
+<span class="sd">        :param timeout: the total amount of time to run the capture before</span>
+<span class="sd">            continuing</span>
+<span class="sd">        :type timeout: :obj:`int`</span>
+<span class="sd">        :param packet_count: the total number of packets to capture before</span>
+<span class="sd">            continuing</span>
+<span class="sd">        :type packet_count: :obj:`int`</span>
+<span class="sd">        :param expect_no_packets: whether or not the wireless capture was</span>
+<span class="sd">            supposed to return no packets.  If True this will disable retries</span>
+<span class="sd">        :type expect_no_packets: :obj:`bool`</span>
+<span class="sd">        :param zones_direct_routing: are the zone players direct routing</span>
+<span class="sd">            to one another</span>
+<span class="sd">        :type zones_direct_routing: :obj:`bool`</span>
+<span class="sd">        :param kwargs: additional arguments to pass to</span>
+<span class="sd">            :class:`pyshark.FileCapture` for post processing of captured data</span>
+<span class="sd">        :type kwargs: keyword arguments or unpacked dict</span>
+<span class="sd">        :return: the post processed packets</span>
+<span class="sd">        :rtype: :class:`pyshark.FileCapture`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">channel</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">channel</span> <span class="ow">or</span>
+            <span class="n">src_zone</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_fullstatus</span><span class="p">()</span><span class="o">.</span><span class="n">operating_channel_number</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zones_direct_routing</span><span class="p">:</span>
+            <span class="n">src_mac</span> <span class="o">=</span> <span class="n">src_zone</span><span class="o">.</span><span class="n">direct_routing_mac_address</span>
+            <span class="n">dst_mac</span> <span class="o">=</span> <span class="n">dst_zone</span><span class="o">.</span><span class="n">direct_routing_mac_address</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">src_mac</span> <span class="o">=</span> <span class="n">src_zone</span><span class="o">.</span><span class="n">mac_address</span>
+            <span class="n">dst_mac</span> <span class="o">=</span> <span class="n">dst_zone</span><span class="o">.</span><span class="n">mac_address</span>
+        <span class="n">zones_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan src </span><span class="si">{}</span><span class="s1"> &amp;&amp; wlan dst </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">src_mac</span><span class="p">,</span>
+            <span class="n">dst_mac</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_wireless_monitor_capture</span><span class="p">(</span>
+            <span class="n">wlan_interface</span><span class="p">,</span> <span class="n">channel</span><span class="p">,</span>
+            <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span> <span class="n">packet_count</span><span class="o">=</span><span class="n">packet_count</span><span class="p">,</span>
+            <span class="n">expect_no_packets</span><span class="o">=</span><span class="n">expect_no_packets</span><span class="p">,</span> <span class="n">bpf_filter</span><span class="o">=</span><span class="n">zones_filter</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">post_process_capture</span><span class="p">(</span>
+            <span class="n">wlan_interface</span><span class="p">,</span> <span class="n">zones_filter</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_safe_l2"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_safe_l2">[docs]</a>    <span class="k">def</span> <span class="nf">is_safe_l2</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is safe for user to read eth type.</span>
+<span class="sd">        :return: whether a packet is safe for user to read eth type</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">eth</span><span class="p">,</span> <span class="s1">&#39;type&#39;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="c1"># This means that this could be LLC(Link Layer Control)</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_ip"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_ip">[docs]</a>    <span class="k">def</span> <span class="nf">is_ip</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet has IP header.</span>
+<span class="sd">        :return: whether a packet has IP header</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_safe_l2</span><span class="p">(</span><span class="n">pkt</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">pkt</span><span class="o">.</span><span class="n">eth</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;2048&#39;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_tcp"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_tcp">[docs]</a>    <span class="k">def</span> <span class="nf">is_tcp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is TCP packet.</span>
+<span class="sd">        :return: whether a packet is TCP packet</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_ip</span><span class="p">(</span><span class="n">pkt</span><span class="p">)</span> <span class="ow">and</span> <span class="n">pkt</span><span class="o">.</span><span class="n">ip</span><span class="o">.</span><span class="n">proto</span> <span class="o">==</span> <span class="s1">&#39;6&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_udp"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_udp">[docs]</a>    <span class="k">def</span> <span class="nf">is_udp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is UDP packet.</span>
+<span class="sd">        :return: whether a packet is UDP packet</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_ip</span><span class="p">(</span><span class="n">pkt</span><span class="p">)</span> <span class="ow">and</span> <span class="n">pkt</span><span class="o">.</span><span class="n">ip</span><span class="o">.</span><span class="n">proto</span> <span class="o">==</span> <span class="s1">&#39;17&#39;</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_dhcp_req"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_dhcp_req">[docs]</a>    <span class="k">def</span> <span class="nf">is_dhcp_req</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is DHCP request/discover.</span>
+<span class="sd">        :return: whether a packet is DHCP request/discover</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_udp</span><span class="p">(</span><span class="n">pkt</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">pkt</span><span class="o">.</span><span class="n">udp</span><span class="o">.</span><span class="n">srcport</span> <span class="o">==</span> <span class="s1">&#39;68&#39;</span> <span class="ow">and</span> <span class="n">pkt</span><span class="o">.</span><span class="n">udp</span><span class="o">.</span><span class="n">dstport</span> <span class="o">==</span> <span class="s1">&#39;67&#39;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_dhcp_rsp"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_dhcp_rsp">[docs]</a>    <span class="k">def</span> <span class="nf">is_dhcp_rsp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is DHCP offer/ack.</span>
+<span class="sd">        :return: whether a packet is DHCP offer/ack</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_udp</span><span class="p">(</span><span class="n">pkt</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">pkt</span><span class="o">.</span><span class="n">udp</span><span class="o">.</span><span class="n">srcport</span> <span class="o">==</span> <span class="s1">&#39;67&#39;</span> <span class="ow">and</span> <span class="n">pkt</span><span class="o">.</span><span class="n">udp</span><span class="o">.</span><span class="n">dstport</span> <span class="o">==</span> <span class="s1">&#39;68&#39;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_dhcp"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_dhcp">[docs]</a>    <span class="k">def</span> <span class="nf">is_dhcp</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is DHCP packet.</span>
+<span class="sd">        :return: whether a packet is DHCP packet</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">is_dhcp_req</span><span class="p">(</span><span class="n">pkt</span><span class="p">)</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_dhcp_rsp</span><span class="p">(</span><span class="n">pkt</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.is_l2_broadcast"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.is_l2_broadcast">[docs]</a>    <span class="k">def</span> <span class="nf">is_l2_broadcast</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pkt</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decide whether a packet is broadcast.</span>
+<span class="sd">        :return: whether a packet is broadcast</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">pkt</span><span class="o">.</span><span class="n">eth</span><span class="o">.</span><span class="n">dst</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="s2">&quot;ff:ff:ff:ff:ff:ff&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.run_basic_sniffer_test"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.run_basic_sniffer_test">[docs]</a>    <span class="k">def</span> <span class="nf">run_basic_sniffer_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">cap_int</span><span class="p">,</span> <span class="n">chan</span><span class="p">,</span> <span class="n">output_file</span><span class="p">,</span>
+                               <span class="n">bpf_filter</span><span class="p">,</span> <span class="n">display_filter</span><span class="p">,</span>
+                               <span class="n">min_pass</span><span class="p">,</span> <span class="n">max_pass</span><span class="p">,</span>
+                               <span class="n">verify_msg</span><span class="p">,</span> <span class="n">timeout</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Basic sniffer test that does the following:</span>
+<span class="sd">        1. Start a capture</span>
+<span class="sd">        2. Parse results of capture per specified display filter</span>
+<span class="sd">        3. Verify packet count is within specified range</span>
+
+<span class="sd">        :param cap_int: capture interface to sniff on (i.e. &#39;mon0&quot;)</span>
+<span class="sd">        :type cap_int: :obj:`str`</span>
+<span class="sd">        :param chan: channel to sniff on</span>
+<span class="sd">        :type chan: :obj:`int`</span>
+<span class="sd">        :param out_file: file name for capture</span>
+<span class="sd">        :type output_file: :obj:`str`</span>
+<span class="sd">        :param bpf_filter: filter for capture</span>
+<span class="sd">        :type bpf_filter: :obj:`str`</span>
+<span class="sd">        :param display_filter: filter for post-processing capture file</span>
+<span class="sd">        :type display_filter: :obj:`str`</span>
+<span class="sd">        :param min_pass: minimum passing number of packets for validation</span>
+<span class="sd">        :type min_pass: :obj:`int`</span>
+<span class="sd">        :param max_pass: maximum passing number of packets for validation</span>
+<span class="sd">        :type max_pass: :obj:`int`</span>
+<span class="sd">        :param verify_msg: message to print when doing verify</span>
+<span class="sd">        :type verify_msg: :obj:`str`</span>
+<span class="sd">        :type min_pass: :obj:`int`</span>
+<span class="sd">        :param timeout: capture duration</span>
+<span class="sd">        :type timeout: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting </span><span class="si">{}</span><span class="s2"> sec sniffer capture&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">timeout</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_wireless_monitor_capture</span><span class="p">(</span><span class="n">cap_int</span><span class="p">,</span>
+                                          <span class="n">chan</span><span class="p">,</span>
+                                          <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span>
+                                          <span class="n">bpf_filter</span><span class="o">=</span><span class="n">bpf_filter</span><span class="p">,</span>
+                                          <span class="n">output_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture completed.&#39;</span><span class="p">)</span>
+        <span class="n">cap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">post_process_capture</span><span class="p">(</span><span class="n">input_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">,</span>
+                                        <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyInRangeOrFailCase</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">cap</span><span class="p">),</span>
+                                     <span class="n">min_pass</span><span class="p">,</span>
+                                     <span class="n">max_pass</span><span class="p">,</span>
+                                     <span class="n">verify_msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PacketCaptureMixin.run_basic_data_encrypt_test"><a class="viewcode-back" href="../../../common.networking.html#common.networking.packet_capture.PacketCaptureMixin.run_basic_data_encrypt_test">[docs]</a>    <span class="k">def</span> <span class="nf">run_basic_data_encrypt_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">cap_id</span><span class="p">,</span> <span class="n">chan</span><span class="p">,</span>
+                                    <span class="n">source_addr</span><span class="p">,</span> <span class="n">dest_addr</span><span class="p">,</span>
+                                    <span class="n">ping_ip</span><span class="p">,</span> <span class="n">ping_count</span><span class="p">,</span> <span class="n">ping_size</span><span class="p">,</span>
+                                    <span class="n">sniff_time</span><span class="p">,</span> <span class="n">key_id</span><span class="p">,</span> <span class="n">wlan_fc_ds</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Basic encrypted data sniff test does the following:</span>
+<span class="sd">        1. start wireless capture. initial capture filter</span>
+<span class="sd">        will capture all frames from specified source addr.</span>
+<span class="sd">        2. start ping from DUT</span>
+<span class="sd">        3. verify all encrypted frames captured by sniffer</span>
+<span class="sd">        to specified destination will have the specified</span>
+<span class="sd">        key id and that the initialization vector increments</span>
+<span class="sd">        per frame</span>
+
+<span class="sd">        :param dut: sonos zone</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param cap_id: sniffer capture interface/id</span>
+<span class="sd">        :type cap_id: :obj:`str`</span>
+<span class="sd">        :param chan: channel to sniff on</span>
+<span class="sd">        :type chan: :obj:`int`</span>
+<span class="sd">        :param source_addr: source mac address of ping</span>
+<span class="sd">        :type source_addr: :obj:`str`</span>
+<span class="sd">        :param dest_addr: destination mac address of ping</span>
+<span class="sd">        :type dest_addr: :obj:`str`</span>
+<span class="sd">        :param ping_ip: ip to ping to</span>
+<span class="sd">        :type ping_ip: :obj:`str`</span>
+<span class="sd">        :param ping_count: number of pings to send</span>
+<span class="sd">        :type ping_count: :obj:`int`</span>
+<span class="sd">        :param ping_size: payload of ping</span>
+<span class="sd">        :type ping_size: :obj:`int`</span>
+<span class="sd">        :param sniff_time: sniff time</span>
+<span class="sd">        :type sniff_time: :obj:`int`</span>
+<span class="sd">        :param key_id: key id to verify in encrypted data packets</span>
+<span class="sd">        :type key_id: :obj:`int`</span>
+<span class="sd">        :param wlan_fc_ds: DS status value to filter on</span>
+<span class="sd">        :type wlan_fc_ds: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_wireless_channel</span><span class="p">(</span><span class="n">cap_id</span><span class="p">,</span> <span class="n">chan</span><span class="p">)</span>
+        <span class="n">output_file</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_encrypt_data.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut</span><span class="o">.</span><span class="n">modelName</span><span class="p">)</span>
+        <span class="n">bpf_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">source_addr</span><span class="p">)</span>
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;frame.len &gt; </span><span class="si">{}</span><span class="s2"> and &quot;</span>
+                          <span class="s2">&quot;wlan.fc.retry == 0 and &quot;</span>
+                          <span class="s2">&quot;wlan.da == </span><span class="si">{}</span><span class="s2"> and &quot;</span>
+                          <span class="s2">&quot;wlan.fc.ds == </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ping_size</span><span class="p">,</span>
+                                                    <span class="n">dest_addr</span><span class="p">,</span>
+                                                    <span class="n">wlan_fc_ds</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;display filter  = </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">display_filter</span><span class="p">))</span>
+        <span class="n">capture_proc</span> <span class="o">=</span> <span class="n">Process</span><span class="p">(</span>
+            <span class="n">target</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">run_capture</span><span class="p">,</span>
+            <span class="n">kwargs</span><span class="o">=</span><span class="p">{</span>
+                <span class="s1">&#39;interface&#39;</span><span class="p">:</span> <span class="n">cap_id</span><span class="p">,</span>
+                <span class="s1">&#39;timeout&#39;</span><span class="p">:</span> <span class="n">sniff_time</span><span class="p">,</span>
+                <span class="s1">&#39;output_file&#39;</span><span class="p">:</span> <span class="n">output_file</span><span class="p">,</span>
+                <span class="s1">&#39;bpf_filter&#39;</span><span class="p">:</span> <span class="n">bpf_filter</span><span class="p">})</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting capture for </span><span class="si">{}</span><span class="s1"> secs on &#39;</span>
+                         <span class="s1">&#39;chan </span><span class="si">{}</span><span class="s1">...&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sniff_time</span><span class="p">,</span> <span class="n">chan</span><span class="p">))</span>
+        <span class="n">capture_proc</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+        <span class="n">dut</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;ping -s </span><span class="si">{}</span><span class="s1"> -c </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ping_size</span><span class="p">,</span>
+                                                     <span class="n">ping_count</span><span class="p">,</span>
+                                                     <span class="n">ping_ip</span><span class="p">))</span>
+        <span class="n">capture_proc</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture completed.&#39;</span><span class="p">)</span>
+        <span class="n">cap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">post_process_capture</span><span class="p">(</span><span class="n">interface</span><span class="o">=</span><span class="n">cap_id</span><span class="p">,</span>
+                                        <span class="n">input_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">,</span>
+                                        <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+        <span class="n">expected</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">cap</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span>
+                                     <span class="mi">0</span><span class="p">,</span>
+                                     <span class="s2">&quot;Check that we&#39;ve captured some packets&quot;</span><span class="p">)</span>
+        <span class="n">actual</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">packet</span> <span class="ow">in</span> <span class="n">cap</span> <span class="k">if</span>
+                     <span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">fc_protected</span> <span class="o">==</span> <span class="s1">&#39;1&#39;</span>
+                      <span class="ow">and</span> <span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">wep_key</span> <span class="o">==</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">key_id</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected</span><span class="p">,</span>
+                                   <span class="n">actual</span><span class="p">,</span>
+                                   <span class="s2">&quot;Verify all packets have protected bit&quot;</span>
+                                   <span class="s2">&quot; with wep key id </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">key_id</span><span class="p">))</span>
+        <span class="n">init_vector</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">packet</span> <span class="ow">in</span> <span class="n">cap</span><span class="p">:</span>
+            <span class="n">init_vector</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ccmp_extiv</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;packet num </span><span class="si">{}</span><span class="s1"> has &#39;</span>
+                              <span class="s1">&#39;init vector of &#39;</span>
+                              <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">seq</span><span class="p">,</span>
+                                          <span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">ccmp_extiv</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="nb">all</span><span class="p">(</span><span class="n">y</span> <span class="o">-</span> <span class="n">x</span> <span class="o">&gt;=</span> <span class="mi">1</span> <span class="k">for</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">init_vector</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">init_vector</span><span class="p">[</span><span class="mi">1</span><span class="p">:])),</span>
+            <span class="s2">&quot;Verify initialization vector is incremented per-frame &quot;</span>
+            <span class="s2">&quot;accounting for possible dropped/missed packets&quot;</span><span class="p">)</span>
+        <span class="n">cap</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

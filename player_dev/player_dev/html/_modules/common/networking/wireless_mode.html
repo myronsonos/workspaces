@@ -1,0 +1,473 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>common.networking.wireless_mode &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for common.networking.wireless_mode</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="kn">from</span> <span class="nn">common.networking.netstart</span> <span class="k">import</span> <span class="n">NetstartTestFixtureMixin</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.brctl</span> <span class="k">import</span> <span class="n">Brctl</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span><span class="p">,</span> <span class="n">MAX_TRANSITION_TIME</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">sonos.subnet</span> <span class="k">import</span> <span class="n">DevicesSet</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">InvalidArgumentsError</span><span class="p">,</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="p">(</span><span class="n">run_concurrent_zone_player_processes</span><span class="p">,</span>
+    <span class="n">run_concurrent_processes</span><span class="p">)</span>
+
+
+<span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="vm">__name__</span><span class="p">]))</span>
+
+
+<div class="viewcode-block" id="WirelessModeMixin"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin">[docs]</a><span class="k">class</span> <span class="nc">WirelessModeMixin</span><span class="p">(</span><span class="n">NetstartTestFixtureMixin</span><span class="p">):</span>
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">disabled_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;_disabled_zones&#39;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_disabled_zones</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_disabled_zones</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">_all_testbed_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">devices_set</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">)</span>
+        <span class="n">devices_set</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">disabled_zones</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">devices_set</span><span class="p">)</span>
+
+<div class="viewcode-block" id="WirelessModeMixin.enable_zones"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.enable_zones">[docs]</a>    <span class="k">def</span> <span class="nf">enable_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable power on one or more zone components</span>
+
+<span class="sd">        :param zones:one or more zone components</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zone</span><span class="o">.</span><span class="n">power</span> <span class="ow">and</span> <span class="n">zone</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">is_off</span><span class="p">():</span>
+                <span class="n">zone</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">on</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_disabled_zones</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">disabled_zones</span> <span class="o">-</span> <span class="n">DevicesSet</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="WirelessModeMixin.enable_ethernet_wires_on_zones"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.enable_ethernet_wires_on_zones">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">enable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable ethernet wire on one or more zones</span>
+
+<span class="sd">        :param zones:one or more zone components</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zone</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_disabled</span><span class="p">():</span>
+                <span class="n">zone</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">enable</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.disable_ethernet_wires_on_zones"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.disable_ethernet_wires_on_zones">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">disable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disable ethernet wire on one or more zones</span>
+
+<span class="sd">        :param zones:one or more zone components</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zone</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_enabled</span><span class="p">():</span>
+                <span class="n">zone</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">disable</span><span class="p">()</span></div>
+
+    <span class="nd">@retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">expected_exception</span><span class="o">=</span><span class="ne">TimeoutError</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">_force_device_removal</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zone</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">stop_anacapa</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">start_anacapa</span><span class="p">()</span>
+            <span class="k">raise</span>
+
+<div class="viewcode-block" id="WirelessModeMixin.disable_zones"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.disable_zones">[docs]</a>    <span class="k">def</span> <span class="nf">disable_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Usubscribe UPnP events and power off one or more zone components</span>
+<span class="sd">        :param zones:one or more zone components</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_force_device_removal</span><span class="p">(</span><span class="n">zone</span><span class="p">)</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span>
+            <span class="n">zone</span><span class="o">.</span><span class="n">power</span><span class="o">.</span><span class="n">off</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disabled_zones</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_zones_to_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">exclude_zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return all zone components in testbed that are not in exclude_zones and</span>
+<span class="sd">        are enabled</span>
+
+<span class="sd">        :param zones:one or more zone components</span>
+<span class="sd">        :type zones: :obj:`list`</span>
+<span class="sd">        :return: zone components not in zones</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="nb">list</span><span class="p">(</span><span class="n">DevicesSet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_all_testbed_devices</span><span class="p">)</span> <span class="o">-</span>
+                    <span class="n">DevicesSet</span><span class="p">(</span><span class="n">exclude_zones</span><span class="p">)</span> <span class="o">-</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">disabled_zones</span><span class="p">)</span>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_zones_to_station_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_zones_to_station_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_zones_to_station_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disable wires on zones and disconnect all other devices in</span>
+<span class="sd">        testbed</span>
+
+<span class="sd">        :param zones:one or more zone players to remove ethernet wires</span>
+<span class="sd">            from</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sats</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">(</span><span class="nb">sum</span><span class="p">((</span><span class="n">z</span><span class="o">.</span><span class="n">get_ht_satellites</span><span class="p">()</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">),</span> <span class="p">[]))</span>
+        <span class="n">station_capable_in_zones</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">([</span><span class="n">zone</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">zone</span><span class="o">.</span><span class="n">is_bridge</span><span class="p">()])</span>
+        <span class="n">zones_set</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">([</span><span class="n">zone</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span>
+            <span class="k">if</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">station_capable_in_zones</span> <span class="ow">and</span> <span class="n">zone</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">sats</span><span class="p">])</span>
+        <span class="n">zones_to_disable</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_zones_to_disable</span><span class="p">(</span><span class="n">station_capable_in_zones</span><span class="p">)</span>
+        <span class="n">is_already_in_station</span> <span class="o">=</span> <span class="nb">all</span><span class="p">(</span><span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">is_in_station_mode</span><span class="p">,</span> <span class="n">zones_set</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">is_already_in_station</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;All expected zones already in station mode, &quot;</span>
+                <span class="s2">&quot;short-circuiting station mode transition&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_station_mode</span><span class="p">(</span><span class="n">zones_set</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">sats</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Doing station mode transition&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_zones</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">zones_set</span> <span class="o">|</span> <span class="n">sats</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_zones</span><span class="p">(</span><span class="o">*</span><span class="n">zones_to_disable</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">zones_set</span> <span class="o">|</span> <span class="n">sats</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">clear_and_wait_for_devices</span><span class="p">(</span><span class="n">zones_set</span> <span class="o">|</span> <span class="n">sats</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">MAX_TRANSITION_TIME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_station_mode</span><span class="p">(</span><span class="n">zones_set</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">sats</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_zones_to_wired_sonosnet_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_zones_to_wired_sonosnet_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_zones_to_wired_sonosnet_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable wires and atheros radio&#39;s on one or more zone players to</span>
+<span class="sd">        transition the HH into Sonosnet mode</span>
+
+<span class="sd">        :param zones:one or more zone players to remove ethernet wires</span>
+<span class="sd">            from</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">all</span><span class="p">([</span><span class="n">z</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_enabled</span><span class="p">()</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">]):</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;All expected zones in sonosnet mode, &quot;</span>
+                <span class="s2">&quot;short-circuiting wired Sonosnet transition&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing wired sonosnet transition on zones: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                                        <span class="n">zones</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_zones</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zones_to_disable</span><span class="p">(</span><span class="n">zones</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_zones</span><span class="p">(</span><span class="o">*</span><span class="n">zones</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="n">zones</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">clear_and_wait_for_devices</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">MAX_TRANSITION_TIME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span></div>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">_get_bridges</span><span class="p">(</span><span class="n">zones</span><span class="p">):</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">zone</span> <span class="k">for</span> <span class="n">zone</span> <span class="ow">in</span> <span class="n">zones</span> <span class="k">if</span> <span class="n">zone</span><span class="o">.</span><span class="n">is_bridge</span><span class="p">()]</span>
+
+    <span class="k">def</span> <span class="nf">_get_wired_device</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zones</span><span class="p">):</span>
+        <span class="n">bridges</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_bridges</span><span class="p">(</span><span class="n">zones</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">bridges</span><span class="p">:</span>
+            <span class="n">wired_zone</span> <span class="o">=</span> <span class="n">bridges</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">zones</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">wired_zone</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">wired_zone</span> <span class="o">=</span> <span class="n">zones</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">wired_zone</span>
+
+<div class="viewcode-block" id="WirelessModeMixin.wait_for_zones_in_station_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.wait_for_zones_in_station_mode">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">wait_for_zones_in_station_mode</span><span class="p">(</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits until all zones in zones are in station mode</span>
+
+<span class="sd">        :param zones: one or more zone players wait for station mode</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">wait_for_station_mode</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.wait_for_zones_in_sonosnet_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.wait_for_zones_in_sonosnet_mode">[docs]</a>    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">zones</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Waits until all zones in zones are in sonosnet mode</span>
+
+<span class="sd">        :param zones: one or more zone players wait for sonosnet mode</span>
+<span class="sd">        :type zones: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">wait_for_sonosnet_mode</span><span class="p">,</span>
+            <span class="n">zones</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_zones_to_wireless_sonosnet_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_zones_to_wireless_sonosnet_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_zones_to_wireless_sonosnet_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">wireless_devices</span><span class="p">,</span>
+                                                   <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Unplug *wireless_devices* from ethernet and make sure at least 1 device</span>
+<span class="sd">        in the testbed that is not one of said devices has a wire. More than one</span>
+<span class="sd">        device may be wired given a kwarg *wired_devices* which is inclusive of</span>
+<span class="sd">        the kwarg *first_wire* device. All other devices will be disabled (</span>
+<span class="sd">        powered off)</span>
+
+<span class="sd">        .. note::</span>
+
+<span class="sd">            if no first wire is given then this method first attempts to</span>
+<span class="sd">            find other devices not passed to it and make a first wire from</span>
+<span class="sd">            one of those devices.  If no other devices exist then it</span>
+<span class="sd">            attempts to make a bridge first wire</span>
+
+<span class="sd">        :param wireless_devices: one or more zone players to remove ethernet</span>
+<span class="sd">            wires from</span>
+<span class="sd">        :type wireless_devices:</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param first_wire: the sonos device that supplies first wire</span>
+<span class="sd">        :type first_wire: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param wired_devices: the sonos devices to be wired passed as a kwarg</span>
+<span class="sd">        :type wired_devices: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">wired_devices</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">()</span>
+        <span class="k">if</span> <span class="s1">&#39;wired_devices&#39;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+            <span class="n">wired_devices</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;wired_devices&#39;</span><span class="p">])</span>
+        <span class="k">if</span> <span class="s1">&#39;first_wire&#39;</span> <span class="ow">in</span> <span class="n">kwargs</span><span class="p">:</span>
+            <span class="n">wired_devices</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;first_wire&#39;</span><span class="p">])</span>
+        <span class="n">wireless_devices</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">(</span><span class="n">wireless_devices</span><span class="p">)</span> <span class="o">-</span> <span class="n">wired_devices</span>
+        <span class="n">other_devices</span> <span class="o">=</span> <span class="n">DevicesSet</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zones_to_disable</span><span class="p">(</span>
+            <span class="n">wired_devices</span> <span class="o">|</span> <span class="n">wireless_devices</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">wired_devices</span><span class="p">:</span>
+            <span class="n">wired_devices</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_wired_device</span><span class="p">(</span>
+                <span class="n">other_devices</span> <span class="ow">or</span> <span class="n">wireless_devices</span><span class="p">))</span>
+            <span class="n">other_devices</span> <span class="o">-=</span> <span class="n">wired_devices</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">wireless_devices</span><span class="p">:</span>
+            <span class="n">wireless_devices</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zones_to_disable</span><span class="p">(</span><span class="n">wired_devices</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">wired_devices</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">InvalidArgumentsError</span><span class="p">(</span>
+                <span class="s1">&#39;transition_zones_to_wireless_sonosnet_mode requires a wired &#39;</span>
+                <span class="s1">&#39;device, one device must be excluded from the set of &#39;</span>
+                <span class="s1">&#39;wireless_zones + first_wire&#39;</span><span class="p">)</span>
+        <span class="c1"># use lists to make sure the order is correct</span>
+        <span class="n">enabled_devices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">wired_devices</span><span class="p">)</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">wireless_devices</span><span class="p">)</span>
+        <span class="n">expected_wire_state</span> <span class="o">=</span> <span class="p">([</span><span class="kc">False</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">wired_devices</span><span class="p">)</span> <span class="o">+</span>
+            <span class="p">[</span><span class="kc">True</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">wireless_devices</span><span class="p">))</span>
+        <span class="n">actual_wire_state</span> <span class="o">=</span> <span class="p">[</span><span class="n">x</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_enabled</span><span class="p">()</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">enabled_devices</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">expected_wire_state</span> <span class="o">==</span> <span class="n">actual_wire_state</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;All zones in expected wired/sonosnet mode, &quot;</span>
+                <span class="s2">&quot;short-circuiting wireless sonosnet transition&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">enabled_devices</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Performing wireless sonosnet transition&quot;</span><span class="p">)</span>
+        <span class="c1"># enabling devices and wire before disabling minimizes topology churn</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_zones</span><span class="p">(</span><span class="o">*</span><span class="n">enabled_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">enable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="n">wired_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_zones</span><span class="p">(</span><span class="o">*</span><span class="n">other_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ethernet_wires_on_zones</span><span class="p">(</span><span class="o">*</span><span class="n">wireless_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">wait_for_zones_in_sonosnet_mode</span><span class="p">(</span><span class="n">enabled_devices</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">Brctl</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span><span class="o">.</span><span class="n">wait_for_stp_stable</span><span class="p">()</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="n">enabled_devices</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">clear_and_wait_for_devices</span><span class="p">(</span><span class="n">enabled_devices</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">MAX_TRANSITION_TIME</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_testbed_to_wired_sonosnet_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_testbed_to_wired_sonosnet_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_testbed_to_wired_sonosnet_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable radios and wires on every device in the testbed and wait</span>
+<span class="sd">        for them to report they are in sonosnet mode</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_wired_sonosnet_mode</span><span class="p">(</span>
+            <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">_all_testbed_devices</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_testbed_to_wireless_sonosnet_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_testbed_to_wireless_sonosnet_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_testbed_to_wireless_sonosnet_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable radios on all devices in the testbed and then make a zone</span>
+<span class="sd">        first wire and disable wires on every other device in the testbed.</span>
+<span class="sd">        After that is done wait for all devices to report they are in</span>
+<span class="sd">        sonosnet mode</span>
+
+<span class="sd">        :param first_wire: the sonos device that supplies first wire</span>
+<span class="sd">        .. note::</span>
+
+<span class="sd">            this method attempts to make any bridge a first wire and if it</span>
+<span class="sd">            cannot find one then it will pick the first zone player in</span>
+<span class="sd">            the testbed list</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_wireless_sonosnet_mode</span><span class="p">(</span>
+            <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">_all_testbed_devices</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.transition_testbed_to_station_mode"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.transition_testbed_to_station_mode">[docs]</a>    <span class="k">def</span> <span class="nf">transition_testbed_to_station_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove all ethernet wires from the testbed and wait for devices to</span>
+<span class="sd">        report they are connected in station mode</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_station_mode</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">_all_testbed_devices</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_toggle_wire</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wire_enabled_state</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">expect_station_mode</span><span class="p">,</span> <span class="n">wait</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to enable/disable wire on a sonos device</span>
+<span class="sd">        and wait for the device to settle on the specified mode</span>
+
+<span class="sd">        :param wire_enabled_state: true to enable wire, or</span>
+<span class="sd">            false to disable wire</span>
+<span class="sd">        :type wire_enabled_state: :obj:`bool`</span>
+<span class="sd">        :param dut: the sonos device</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param expect_station_mode: flag to expect station mode</span>
+<span class="sd">            or sonosnet mode</span>
+<span class="sd">        :type expect_station_mode: :obj:`bool`</span>
+<span class="sd">        :param wait: flag to skip the wait for the device to change</span>
+<span class="sd">            network operating modes.</span>
+<span class="sd">        :type wait: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">wire_enabled_state</span><span class="p">:</span>
+            <span class="n">dut</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">enable</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">dut</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">disable</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">wait</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="k">if</span> <span class="n">expect_station_mode</span> <span class="ow">and</span> <span class="ow">not</span><span class="p">(</span><span class="n">dut</span><span class="o">.</span><span class="n">is_bridge</span><span class="p">()</span> <span class="ow">or</span>
+                                       <span class="n">dut</span><span class="o">.</span><span class="n">is_satellite</span><span class="p">()):</span>
+            <span class="n">dut</span><span class="o">.</span><span class="n">wait_for_station_mode</span><span class="p">()</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">dut</span><span class="o">.</span><span class="n">wait_for_sonosnet_mode</span><span class="p">()</span>
+
+<div class="viewcode-block" id="WirelessModeMixin.add_wire"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.add_wire">[docs]</a>    <span class="k">def</span> <span class="nf">add_wire</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">expect_station_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Add ethernet wire on specified sonos dut and wait for the device</span>
+<span class="sd">        to transition to a particular operating mode.</span>
+
+<span class="sd">        :param dut: the sonos device</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param expect_station_mode: flag to expect station mode</span>
+<span class="sd">            or sonosnet mode</span>
+<span class="sd">        :type expect_station_mode: :obj:`bool`</span>
+<span class="sd">        :param wait: flag to skip the wait for the device to change</span>
+<span class="sd">            network operating modes.</span>
+<span class="sd">        :type wait: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_wire</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">expect_station_mode</span><span class="p">,</span> <span class="n">wait</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="WirelessModeMixin.remove_wire"><a class="viewcode-back" href="../../../common.networking.html#common.networking.wireless_mode.WirelessModeMixin.remove_wire">[docs]</a>    <span class="k">def</span> <span class="nf">remove_wire</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">expect_station_mode</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove ethernet wire on specified sonos dut and wait for the device</span>
+<span class="sd">        to transition to a particular operating mode.</span>
+
+<span class="sd">        :param dut: the sonos device</span>
+<span class="sd">        :type dut: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param expect_station_mode: flag to expect station mode</span>
+<span class="sd">            or sonosnet mode</span>
+<span class="sd">        :type expect_station_mode: :obj:`bool`</span>
+<span class="sd">        :param wait: flag to skip the wait for the device to change</span>
+<span class="sd">            network operating modes.</span>
+<span class="sd">        :type wait: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_toggle_wire</span><span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="n">dut</span><span class="p">,</span> <span class="n">expect_station_mode</span><span class="p">,</span> <span class="n">wait</span><span class="p">)</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

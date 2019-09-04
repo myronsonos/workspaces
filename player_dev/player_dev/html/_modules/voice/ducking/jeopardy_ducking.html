@@ -1,0 +1,353 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>voice.ducking.jeopardy_ducking &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for voice.ducking.jeopardy_ducking</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="k">import</span> <span class="n">datetime</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">voice.voice_end_to_end.voice_end_to_end_base</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">VoiceEndToEndBase</span><span class="p">,</span> <span class="n">AVSConnectionFailureException</span><span class="p">,</span> <span class="n">VOICETAP_PATH_BASE</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">voice.ducking.ducking_base</span> <span class="k">import</span> <span class="n">DuckingBase</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.saved_generators</span> <span class="k">import</span> <span class="n">SavedWorkflowGenerators</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+
+<span class="c1"># Files</span>
+<span class="n">VOICETAP_PATH</span> <span class="o">=</span> <span class="n">VOICETAP_PATH_BASE</span> <span class="o">+</span> <span class="s2">&quot;jeopardy/&quot;</span>
+<span class="n">VOICETAP_FILE</span> <span class="o">=</span> <span class="s1">&#39;a_replay_what_is_sonos.wav&#39;</span>
+
+<span class="c1"># time constants</span>
+<span class="n">TIME_BETWEEN_TESTS</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">TIME_AFTER_GAME_BEGINS_TO_CREATE_STEREO_PAIR</span> <span class="o">=</span> <span class="mi">15</span>
+<span class="n">TIME_MAX_GAME_DURATION</span> <span class="o">=</span> <span class="mi">300</span>
+<span class="n">TIME_MIN_GAME_DURATION</span> <span class="o">=</span> <span class="mi">120</span>
+
+<span class="c1"># the default number of iterations to execute on each distinct pair of</span>
+<span class="c1"># voice-capable zps</span>
+<span class="c1"># NOTE: this bug has been difficult to reproduce and may require a larger</span>
+<span class="c1"># number of iterations to reproduce.</span>
+<span class="c1"># each jeopardy game takes roughly 3-5 minutes though.</span>
+<span class="n">DEFAULT_NUM_ITERATIONS_PER_PAIR</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">DEFAULT_NUM_ATTEMPTS_PER_GAME</span> <span class="o">=</span> <span class="mi">5</span>
+
+
+<div class="viewcode-block" id="JeopardyDuckingTests"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests">[docs]</a><span class="k">class</span> <span class="nc">JeopardyDuckingTests</span><span class="p">(</span><span class="n">VoiceEndToEndBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test to ensure that the following situation behaves as expected:</span>
+<span class="sd">    1. User plays music through single bootleg</span>
+<span class="sd">    2. User begins playing jeopardy on a single bootleg</span>
+<span class="sd">    3. User creates stereo pair within 30 seconds of beginning game</span>
+<span class="sd">    4. User completes game of jeopardy</span>
+<span class="sd">    5. Stereo pair together un-ducks</span>
+<span class="sd">    ** previously, a difficult-to-replicate bug occurred sometimes, where</span>
+<span class="sd">    the pair would remain ducked indefinitely (until power cycle)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;VOICE&quot;</span><span class="p">]</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        initialize test class</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">JeopardyDuckingTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">generators</span> <span class="o">=</span> <span class="n">SavedWorkflowGenerators</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+        <span class="c1"># parse the number of iterations argument from  command line</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span>
+            <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Jeopardy Ducking Arguments&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--iterations&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;iterations&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_NUM_ITERATIONS_PER_PAIR</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;number of games of jeopardy to play per stereo pair&quot;</span><span class="p">)</span>
+
+        <span class="c1"># attempts per iteration is a parameter that allows the game to be</span>
+        <span class="c1"># played out again if the game terminates prematurely, due to a</span>
+        <span class="c1"># timeout. this can happen infrequently (1/8 games roughly) due to</span>
+        <span class="c1"># changes in the times at which certain prompts are presented.</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+            <span class="s2">&quot;--attempts_per_game&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;attempts&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_NUM_ATTEMPTS_PER_GAME</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;number of time to attempt playing the game for a given &quot;</span>
+                 <span class="s2">&quot;pair before stopping the test. will only execute more than &quot;</span>
+                 <span class="s2">&quot;once if a timeout occurs during a game.&quot;</span><span class="p">)</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">unknown_args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">iterations</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">iterations</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">attempts</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">attempts</span>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.setUpFixture"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup Fixture</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">JeopardyDuckingTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># get the voicetap files</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">get_files_from_nas</span><span class="p">(</span><span class="n">VOICETAP_PATH</span><span class="p">,</span>
+                                <span class="n">files_list</span><span class="o">=</span><span class="p">[</span><span class="n">VOICETAP_FILE</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.setUpTest"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up test, including making sure voice-capable zps are un-bonded</span>
+<span class="sd">        :param left: the left voice-capable zp</span>
+<span class="sd">        :param right: the right voice-capable zp</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">JeopardyDuckingTests</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">(</span><span class="n">left</span><span class="p">)</span>
+        <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">disable_speaker_audio</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">]]</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.tearDownTest"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tear down Test</span>
+<span class="sd">        :param left: the first voice-capable zone-player</span>
+<span class="sd">        :param right: the second voice-capable zone-player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Tear down test: Jeopardy test&quot;</span><span class="p">)</span>
+        <span class="n">left</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">post_diagmsg</span><span class="p">(</span><span class="s2">&quot;End test: </span><span class="si">{}</span><span class="s2">.</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_testFixtureName</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_test_name</span><span class="p">()))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">remove_overlay_file</span><span class="p">()</span>
+        <span class="c1"># Add some delay between tests.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Waiting 10 seconds before starting next test&quot;</span><span class="p">)</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">TIME_BETWEEN_TESTS</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.generate_voice_pairs_with_iterations"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.generate_voice_pairs_with_iterations">[docs]</a>    <span class="k">def</span> <span class="nf">generate_voice_pairs_with_iterations</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return: returns each distinct pair of voice capable zps for the given</span>
+<span class="sd">        number of iterations</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">voice_players</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="p">,</span>
+            <span class="s1">&#39;Should have at least 2 voice capable zone players to generate &#39;</span>
+            <span class="s1">&#39;pair&#39;</span><span class="p">)</span>
+        <span class="c1"># generate pairs of voice-capable players</span>
+        <span class="k">for</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span>\
+                <span class="n">generate_voice_pairs</span><span class="p">():</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">iterations</span><span class="p">):</span>
+                    <span class="k">yield</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.get_datetime"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.get_datetime">[docs]</a>    <span class="k">def</span> <span class="nf">get_datetime</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        return a logfile name with the current timestamp</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s1">&#39;%H_%M_%S&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.players_are_not_ducked"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.players_are_not_ducked">[docs]</a>    <span class="k">def</span> <span class="nf">players_are_not_ducked</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">,</span> <span class="n">duck_base</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        check to see if both players are NOT ducked</span>
+<span class="sd">        :param left: left zone player in stereo pair</span>
+<span class="sd">        :param right: right zone player in stereo pair</span>
+<span class="sd">        :param duck_base: DuckingBase object</span>
+<span class="sd">        :return: True/False</span>
+<span class="sd">        :rtype: `boolean`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">duck_base</span><span class="o">.</span><span class="n">is_player_ducked</span><span class="p">(</span>
+                <span class="n">left</span><span class="p">)</span> <span class="ow">or</span> <span class="n">duck_base</span><span class="o">.</span><span class="n">is_player_ducked</span><span class="p">(</span><span class="n">right</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;-----&gt;still ducked&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;-----&gt;unducked!&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="JeopardyDuckingTests.test_voice_jeopardy"><a class="viewcode-back" href="../../../voice.ducking.html#voice.ducking.jeopardy_ducking.JeopardyDuckingTests.test_voice_jeopardy">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;generate_voice_pairs_with_iterations&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_voice_jeopardy</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param left: left zone player</span>
+<span class="sd">        :param right: right zone player</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># get the URLs for the voicetap files.</span>
+        <span class="n">url_play_jeopardy</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_voicetap_url</span><span class="p">(</span><span class="n">VOICETAP_FILE</span><span class="p">)</span>
+
+        <span class="c1"># initialize a ducking event tracker</span>
+        <span class="n">duck_base</span> <span class="o">=</span> <span class="n">DuckingBase</span><span class="p">()</span>
+
+        <span class="n">attempts_made</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="n">attempts_made</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">attempts</span><span class="p">:</span>
+
+            <span class="c1"># remove any overlay file that previously was there</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">remove_overlay_file</span><span class="p">()</span>
+
+            <span class="c1"># cleanup bonded configuration</span>
+            <span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span>
+                <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">]]</span>
+
+            <span class="c1"># play music on the bootleg, and wait for it to play</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">=</span><span class="n">left</span><span class="p">,</span>
+                <span class="n">source</span><span class="o">=</span><span class="s2">&quot;share&quot;</span><span class="p">,</span>
+                <span class="n">play_mode</span><span class="o">=</span><span class="s2">&quot;REPEAT_ALL&quot;</span><span class="p">)</span>
+
+            <span class="c1"># ask alexa to play jeopardy.</span>
+            <span class="c1"># the file is 5 minutes of the following</span>
+            <span class="c1"># alexa play jeopardy</span>
+            <span class="c1"># replay ... replay ... replay ...</span>
+            <span class="c1"># i don&#39;t know ... i don&#39;t know ... i don&#39;t know ...</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">voice_overlay</span><span class="o">.</span><span class="n">load_and_start_overlay</span><span class="p">(</span><span class="n">url_play_jeopardy</span><span class="p">)</span>
+
+            <span class="c1"># wait a little while after beginning game,</span>
+            <span class="c1"># then add the stereo pair</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">TIME_AFTER_GAME_BEGINS_TO_CREATE_STEREO_PAIR</span><span class="p">)</span>
+            <span class="n">left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_stereo_pair</span><span class="p">(</span><span class="n">right</span><span class="p">)</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="n">start_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">players_are_not_ducked</span><span class="p">(</span>
+                    <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">,</span> <span class="n">duck_base</span><span class="p">),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">TIME_MAX_GAME_DURATION</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Players still ducked after </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">TIME_MAX_GAME_DURATION</span><span class="p">)</span>
+            <span class="p">)</span>
+
+            <span class="c1"># check if game duration is longer than expected duration</span>
+            <span class="n">duration</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span> <span class="o">-</span> <span class="n">start_time</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Game duration: </span><span class="si">{}</span><span class="s2"> seconds&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">duration</span><span class="p">))</span>
+
+            <span class="c1"># if the duration is shorter than the expected minimum duration,</span>
+            <span class="c1"># continue on with the next test to see if it will pass</span>
+            <span class="k">if</span> <span class="n">duration</span> <span class="o">&lt;</span> <span class="n">TIME_MIN_GAME_DURATION</span><span class="p">:</span>
+                <span class="n">attempts_made</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Game ended prematurely. Tried </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                                 <span class="s2">&quot;times&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attempts_made</span><span class="p">))</span>
+                <span class="k">continue</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">duration</span> <span class="o">&gt;=</span> <span class="n">TIME_MIN_GAME_DURATION</span><span class="p">,</span>
+                <span class="s2">&quot;Game duration greater than </span><span class="si">{}</span><span class="s2"> seconds.Is </span><span class="si">{}</span><span class="s2">s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">TIME_MIN_GAME_DURATION</span><span class="p">,</span> <span class="n">duration</span><span class="p">))</span>
+
+            <span class="c1"># check if players are ducked at end of game</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">players_are_not_ducked</span><span class="p">(</span>
+                    <span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">,</span> <span class="n">duck_base</span>
+                <span class="p">),</span>
+                <span class="s2">&quot;At least one player is still ducked after end of game&quot;</span>
+            <span class="p">)</span>
+            <span class="c1"># if we&#39;ve made it this far, there was no timeout error, and we</span>
+            <span class="c1"># can end the test case.</span>
+            <span class="k">return</span>
+
+        <span class="c1"># if we&#39;ve gotten to this point, we can stop the test case and</span>
+            <span class="c1"># attribute it to a series of continuous timeouts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Could not play through a game successfully without timing&quot;</span>
+                  <span class="s2">&quot;out. Tried </span><span class="si">{}</span><span class="s2"> times&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">attempts_made</span><span class="p">))</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">JeopardyDuckingTests</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">JeopardyDuckingTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

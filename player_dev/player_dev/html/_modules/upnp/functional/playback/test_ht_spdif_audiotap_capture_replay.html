@@ -1,0 +1,781 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.playback.test_ht_spdif_audiotap_capture_replay &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.playback.test_ht_spdif_audiotap_capture_replay</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">OrderedDict</span>
+<span class="kn">from</span> <span class="nn">audio_playback.mplayer_playback</span> <span class="k">import</span> <span class="n">MplayerAc3Playback</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.websrv</span> <span class="k">import</span> <span class="n">WebServer</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">audio_util.audiotap_utils</span> <span class="k">import</span> <span class="n">AudiotapUtils</span>
+
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay">[docs]</a><span class="k">class</span> <span class="nc">TestSPDIFAudiotapCaptureAndReplay</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests the capture and replay of SPDIF audiotaps on all HT capable devices</span>
+<span class="sd">    in the testbed.</span>
+
+<span class="sd">    SPDIF signal sources are listed in SPDIF_TESTSIG_FILES</span>
+
+<span class="sd">    1. Capture/download methods include:</span>
+
+<span class="sd">    - CLI Capture method from a testrunner via curl/wget:</span>
+
+<span class="sd">        wget  http://&lt;HT ZP&gt;:1400/audio_tap?tap=spdif -O cli_audiotap.spdif</span>
+
+<span class="sd">    - URL Capture method:</span>
+
+<span class="sd">        http://&lt;HT ZP&gt;:1400/snapshotspdiftap &lt;- capture of previous 90s input</span>
+<span class="sd">        http://&lt;HT ZP&gt;:1400/downloadspdiftap &lt;- download capture as custom zip</span>
+
+<span class="sd">    - URL / BASE64 method:</span>
+
+<span class="sd">        http://&lt;HT ZP&gt;:1400/snapshotspdiftap &lt;- capture of previous 90s input</span>
+<span class="sd">        http://&lt;HT ZP&gt;:1400/spdiftap &lt;- download capture as custom zip via XML</span>
+
+<span class="sd">    - Diag method:</span>
+
+<span class="sd">        UPnP or web URL can be used to submit a diag. Audiotap is embedded</span>
+<span class="sd">        in the XML but is unreadable through regular diagnostics viewer,</span>
+<span class="sd">        so you need to view page source to find the &lt;SPDIFTap&gt; element</span>
+
+<span class="sd">    2. Playback of a captured audiotap can be achieved by loading the tap</span>
+<span class="sd">    into /jffs on the ZP (must be same model, and ensure the file name is</span>
+<span class="sd">    audiotap.spdif) supply a &quot;reference SPDIF clock&quot; input which matches the</span>
+<span class="sd">    sample rate of the captured tap, then finally toggle anacapa to commence</span>
+<span class="sd">    playback. The test checks stream type and sample rate match the original</span>
+<span class="sd">    test signal played in for the capture</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">SPDIF_TAP_FILENAME</span> <span class="o">=</span> <span class="s1">&#39;audiotap.spdif&#39;</span>
+    <span class="n">SPDIF_AUDIOTAP_TYPE</span> <span class="o">=</span> <span class="s1">&#39;spdif&#39;</span>
+    <span class="n">WEBSERVER_PORT</span> <span class="o">=</span> <span class="mi">8080</span>
+    <span class="n">WAIT_POLL_FREQUENCY</span> <span class="o">=</span> <span class="mf">0.5</span>
+    <span class="n">WAIT_TIMEOUT</span> <span class="o">=</span> <span class="mi">20</span>
+    <span class="n">SPDIF_TAP_CAPTURE_DURATION</span> <span class="o">=</span> <span class="mi">20</span>
+    <span class="n">URL_SPDIF_TAP_CAPTURE_DURATION</span> <span class="o">=</span> <span class="mi">90</span>
+    <span class="n">AUDIO_TAP_START_MSG</span> <span class="o">=</span> <span class="s1">&#39;!!!!! start of audio tap !!!!!&#39;</span>
+    <span class="n">CUR_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+    <span class="n">TEST_FILES_DATA_DIR</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba/Automation/SPDIF/functional/playback&#39;</span>
+    <span class="n">SPDIF_TAP_FILE_URI</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">CUR_PATH</span><span class="p">,</span> <span class="n">SPDIF_TAP_FILENAME</span><span class="p">)</span>
+    <span class="n">SPDIF_TESTSIG_FILES</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([</span>
+        <span class="c1">####################</span>
+        <span class="c1">#PCM 2.0 test files:</span>
+        <span class="c1"># (os.path.join(</span>
+        <span class="c1">#     TEST_FILES_DATA_DIR,</span>
+        <span class="c1">#     &#39;2ch_L_857_R_997_32kHz.wav&#39;</span>
+        <span class="c1"># ), {</span>
+        <span class="c1">#      &#39;StreamInfo&#39;: &#39;Stereo&#39;,</span>
+        <span class="c1">#      &#39;NumChannels&#39;: 2,</span>
+        <span class="c1">#      &#39;SampleRate&#39;: float(32000),</span>
+        <span class="c1">#      &#39;Duration&#39;: 120</span>
+        <span class="c1">#  }),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;2ch_L_857_R_997_44kHz.wav&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Stereo&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">44100</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">120</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;2ch_L_857_R_997_48kHz.wav&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Stereo&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">48000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">120</span>
+         <span class="p">}),</span>
+        <span class="c1">####################</span>
+        <span class="c1"># DD 2.0 test files:</span>
+        <span class="c1"># (os.path.join(</span>
+        <span class="c1">#     TEST_FILES_DATA_DIR,</span>
+        <span class="c1">#     &#39;2ch_L_857_R_997_32kHz.ac3&#39;</span>
+        <span class="c1"># ), {</span>
+        <span class="c1">#      &#39;StreamInfo&#39;: &#39;Dolby Digital 2.0&#39;,</span>
+        <span class="c1">#      &#39;NumChannels&#39;: 2,</span>
+        <span class="c1">#      &#39;SampleRate&#39;: float(32000),</span>
+        <span class="c1">#      &#39;Duration&#39;: 120</span>
+        <span class="c1">#  }),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;2ch_L_857_R_997_44kHz.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">44100</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">120</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;2ch_L_857_R_997_48kHz.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">48000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">120</span>
+         <span class="p">}),</span>
+        <span class="c1">####################</span>
+        <span class="c1"># DD 5.1 test files:</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;6ch_L_857_R_997_C_1567_Lfe_197_Ls_2017_Rs_2111_44kHz.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 5.1&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">44100</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;6ch_L_857_R_997_C_1567_Lfe_197_Ls_2017_Rs_2111_48kHz.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 5.1&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">48000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">})</span>
+    <span class="p">])</span>
+    <span class="n">SPDIF_CLOCK_FILES</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">([</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;32k_clock_180s.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">32000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;44k1_clock_180s.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">44100</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">}),</span>
+        <span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
+            <span class="n">TEST_FILES_DATA_DIR</span><span class="p">,</span>
+            <span class="s1">&#39;48k_clock_180s.ac3&#39;</span>
+        <span class="p">),</span> <span class="p">{</span>
+             <span class="s1">&#39;StreamInfo&#39;</span><span class="p">:</span> <span class="s1">&#39;Dolby Digital 2.0&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;NumChannels&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
+             <span class="s1">&#39;SampleRate&#39;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="mi">48000</span><span class="p">),</span>
+             <span class="s1">&#39;Duration&#39;</span><span class="p">:</span> <span class="mi">180</span>
+         <span class="p">})</span>
+    <span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">WorkflowTestFixture</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parameterized_setup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">utils</span> <span class="o">=</span> <span class="n">AudiotapUtils</span><span class="p">()</span>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set up web server instance to facilitate uploading an audiotap onto ZP</span>
+<span class="sd">        Mute all ZPs</span>
+<span class="sd">        Remove any possible local audiotap file and ensure playback has been</span>
+<span class="sd">        stopped</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Setup Fixture&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting web server&#39;</span><span class="p">)</span>
+        <span class="n">webserverdir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_setup_webserver</span><span class="p">(</span><span class="n">webserverdir</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_off</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="s1">&#39;/jffs/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                  <span class="n">ht_master</span><span class="p">,</span>
+                  <span class="n">input_signal</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set autoplay and SPDIF input (TV Mode) on ZP</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :param input_signal: The test SPDIF signal source for capture</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Setup test&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Master: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_spdif</span><span class="p">()</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                     <span class="n">ht_master</span><span class="p">,</span>
+                     <span class="n">input_signal</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove audiotap file from ZP (otherwise will continually play tap from</span>
+<span class="sd">        last test case after tear down)</span>
+<span class="sd">        Remove audiotap file from testrunner web server dir</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :param input_signal: The test SPDIF signal source for capture</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="s1">&#39;/jffs/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">))</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+        <span class="n">audiotap_test_input_uri</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">file_path</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">audiotap_test_input_uri</span><span class="p">):</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">audiotap_test_input_uri</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop web server instance</span>
+<span class="sd">        Perform cleanup</span>
+<span class="sd">        Unmute all ZPs</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Teardown fixture&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Shutting down web server&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">all_testbed_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_on</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Clear avt and queue, remove bonded config if it exists</span>
+<span class="sd">        Clear autoplay URI</span>
+
+<span class="sd">        :param zp: HT master capable ZP</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Performing cleanup&#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_play_state</span><span class="p">(</span><span class="n">timeout_standalone_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue_and_wait</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_setup_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup udp logger for zp</span>
+<span class="sd">        If zp is an HT capable device:</span>
+<span class="sd">            1. Set diag levels for debug message detection</span>
+<span class="sd">            2. Pass in callbacks for strings we are looking for</span>
+<span class="sd">            3. Set/reset any callback flags as required</span>
+
+<span class="sd">        :param zp: HT master capable ZP</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Setting up udp logger on : </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">watch_udp_log_for_string</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">AUDIO_TAP_START_MSG</span><span class="p">,</span>
+            <span class="k">lambda</span> <span class="n">msg</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_cb_detected_audiotap_start</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">wait_for_upnp_alive</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audiotap_playback_triggered</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="k">def</span> <span class="nf">_cb_detected_audiotap_start</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set callback action when &#39;msg&#39; string is detected in UDP log</span>
+<span class="sd">        Only activate alert flag if playback is in progress</span>
+
+<span class="sd">        :param msg: string to be detected</span>
+<span class="sd">        :param zp: zone player</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s1">&#39;Detected </span><span class="si">{}</span><span class="s1"> on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">audiotap_playback_triggered</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="k">def</span> <span class="nf">_setup_webserver</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="n">WEBSERVER_PORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Setup local web server</span>
+
+<span class="sd">        :param resource_path: location of files to be served</span>
+<span class="sd">        :param port: port number for http access</span>
+<span class="sd">        :return: webserver instance</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">websrv</span> <span class="o">=</span> <span class="n">WebServer</span><span class="p">(</span><span class="n">start_reactor</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">websrv</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="n">port</span><span class="p">,</span> <span class="n">resource_path</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s1">&#39;Could not start web server&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Started web server&#39;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">websrv</span>
+
+    <span class="k">def</span> <span class="nf">_spdif_play_test_source_and_capture_tap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                <span class="n">ht_master</span><span class="p">,</span>
+                                                <span class="n">input_signal</span><span class="p">,</span>
+                                                <span class="n">capture_method</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Plays back a test signal, confirm signal is being received as expected</span>
+<span class="sd">        Captures SPDIF audiotap using specified method (cli / url / base64</span>
+<span class="sd">        url / diag)</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param strFileURL: test file URI on test runner</span>
+<span class="sd">        :type strFileURL: utf-8 string</span>
+<span class="sd">        :param dictTrackInfo: metadata accompanying the test file</span>
+<span class="sd">        :type dictTrackInfo: dict</span>
+<span class="sd">        :param capture_method: specified capture method</span>
+<span class="sd">        :type capture_method: utf-8 string</span>
+<span class="sd">        :return: URI (full system path, including filename) of captured tap</span>
+<span class="sd">        :rtype: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strTestInputFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span> <span class="o">=</span> <span class="n">input_signal</span>
+        <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="n">strTestInputFileURL</span><span class="p">,</span> <span class="s1">&#39;hwac3&#39;</span> <span class="k">if</span> <span class="n">dictTrackInfo</span><span class="p">[</span>
+                <span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;Dolby Digital&#39;</span><span class="p">)</span> <span class="k">else</span> <span class="s1">&#39;pcm&#39;</span><span class="p">):</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span> <span class="o">==</span>
+                         <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">])</span> <span class="ow">and</span> <span class="p">(</span>
+                        <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()</span> <span class="o">==</span>
+                         <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">]),</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">WAIT_POLL_FREQUENCY</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">WAIT_TIMEOUT</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;Error while playing back test SPDIF signal: &#39;</span>
+                        <span class="s1">&#39;Expected SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with Sample &#39;</span>
+                        <span class="s1">&#39;Rate: </span><span class="si">{}</span><span class="s1">, Actual SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with &#39;</span>
+                        <span class="s1">&#39;Sample Rate: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span>
+                        <span class="nb">format</span><span class="p">(</span><span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                               <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                               <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span>
+                               <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">())</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Playing back test SPDIF signal </span><span class="si">{}</span><span class="s1">: Expected &#39;</span>
+                             <span class="s1">&#39;SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with Sample &#39;</span>
+                             <span class="s1">&#39;Rate: </span><span class="si">{}</span><span class="s1">, Actual SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with &#39;</span>
+                             <span class="s1">&#39;Sample Rate: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">strTestInputFileURL</span><span class="p">,</span>
+                                <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                                <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                                <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span>
+                                <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()))</span>
+            <span class="k">if</span> <span class="n">capture_method</span> <span class="o">==</span> <span class="s1">&#39;cli&#39;</span><span class="p">:</span>
+                <span class="n">strTapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">get_tap_from_testrunner</span><span class="p">(</span>
+                                    <span class="n">ht_master</span><span class="p">,</span>
+                                    <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_AUDIOTAP_TYPE</span><span class="p">,</span>
+                                    <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_CAPTURE_DURATION</span><span class="p">,</span>
+                                    <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">http</span><span class="o">.</span><span class="n">file_path</span><span class="p">,</span>
+                                                 <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">))</span>
+            <span class="k">elif</span> <span class="n">capture_method</span> <span class="o">==</span> <span class="s1">&#39;url&#39;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">capture_spdif_tap_with_url</span><span class="p">(</span>
+                                        <span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">URL_SPDIF_TAP_CAPTURE_DURATION</span><span class="p">)</span>
+                <span class="n">strTapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">download_spdif_tap_from_url</span><span class="p">(</span>
+                                                    <span class="n">ht_master</span><span class="p">,</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILE_URI</span><span class="p">,</span>
+                                                    <span class="n">is_base64</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">capture_method</span> <span class="o">==</span> <span class="s1">&#39;urlbase64&#39;</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">capture_spdif_tap_with_url</span><span class="p">(</span>
+                                        <span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">URL_SPDIF_TAP_CAPTURE_DURATION</span><span class="p">)</span>
+                <span class="n">strTapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">download_spdif_tap_from_url</span><span class="p">(</span>
+                                                    <span class="n">ht_master</span><span class="p">,</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILE_URI</span><span class="p">,</span>
+                                                    <span class="n">is_base64</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">capture_method</span> <span class="o">==</span> <span class="s1">&#39;diag&#39;</span><span class="p">:</span>
+                <span class="n">diag_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">capture_spdif_tap_with_diag</span><span class="p">(</span>
+                                        <span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="bp">self</span><span class="o">.</span><span class="n">URL_SPDIF_TAP_CAPTURE_DURATION</span><span class="p">)</span>
+                <span class="n">strTapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">download_spdif_tap_from_diag</span><span class="p">(</span>
+                                                    <span class="n">ht_master</span><span class="p">,</span>
+                                                    <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILE_URI</span><span class="p">,</span>
+                                                    <span class="n">diag_id</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s1">&#39;Unknown SPDIF tap capture method &#39;</span>
+                                          <span class="s1">&#39;requested by test&#39;</span><span class="p">)</span>
+            <span class="k">assert</span> <span class="ow">not</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_file_exist</span><span class="p">(</span><span class="s1">&#39;/jffs/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">)),</span> <span class="s1">&#39;Audiotap data was not deleted &#39;</span> \
+                                           <span class="s1">&#39;from /jffs when using capture &#39;</span> \
+                                           <span class="s1">&#39;method:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">capture_method</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">strTapFileURL</span>
+
+    <span class="k">def</span> <span class="nf">_get_SPDIF_clock_track_for_samplerate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samplerate</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Finds a clock source file corresponding with samplerate</span>
+<span class="sd">        Confirms file exists</span>
+<span class="sd">        Returns the file location and file metadata (stream type,</span>
+<span class="sd">        samplerate, channel count, duration)</span>
+
+<span class="sd">        :param samplerate: requested samplerate</span>
+<span class="sd">        :type samplerate: float</span>
+<span class="sd">        :return: file location of matching clock file, or None</span>
+<span class="sd">        :rtype: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">clockfilename</span><span class="p">,</span> <span class="n">clockfileinfo</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_CLOCK_FILES</span><span class="o">.</span><span class="n">iteritems</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">clockfileinfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="n">samplerate</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">clockfilename</span><span class="p">),</span> \
+                    <span class="s1">&#39;failed to find SPDIF clock track </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">clockfilename</span><span class="p">)</span>
+                <span class="k">return</span> <span class="p">[(</span><span class="n">clockfilename</span><span class="p">,</span> <span class="n">clockfileinfo</span><span class="p">)]</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_replay_validate_SPDIF_tap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                   <span class="n">ht_master</span><span class="p">,</span>
+                                   <span class="n">input_signal_info</span><span class="p">,</span>
+                                   <span class="n">strTestAudiotapFileURL</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Plays back the captured SPDIF audiotap file on HT ZP</span>
+<span class="sd">        Requires a reference SPDIF input as clock during audiotap replay</span>
+<span class="sd">        Asserts signal type of clock is correct before replaying tap</span>
+<span class="sd">        Asserts replay tap stream type and sample rate match original input</span>
+<span class="sd">        Cleans up audiotap files after use</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param input_signal_info: metadata plus filename of the original input</span>
+<span class="sd">        :type input_signal_info: tuple</span>
+<span class="sd">        :param strTestAudiotapFileURL: captured audiotap file URI</span>
+<span class="sd">        :type strTestAudiotapFileURL: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strTestInputFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span> <span class="o">=</span> <span class="n">input_signal_info</span>
+        <span class="p">[(</span><span class="n">spdif_clock_track</span><span class="p">,</span> <span class="n">spdif_clock_track_meta</span><span class="p">)]</span> <span class="o">=</span> \
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_SPDIF_clock_track_for_samplerate</span><span class="p">(</span>
+                <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">])</span>
+        <span class="k">assert</span> <span class="n">spdif_clock_track</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">,</span> <span class="s1">&#39;failed to find SPDIF clock &#39;</span> \
+                                              <span class="s1">&#39;track at samplerate: &#39;</span> \
+                                              <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">])</span>
+        <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="n">spdif_clock_track</span><span class="p">,</span> <span class="s1">&#39;hwac3&#39;</span> <span class="k">if</span>
+                                <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span><span class="o">.</span>
+                                <span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;Dolby Digital&#39;</span><span class="p">)</span>
+                                <span class="k">else</span> <span class="s1">&#39;pcm&#39;</span><span class="p">):</span>
+            <span class="c1"># check clock signal is being received as expected</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span> <span class="o">==</span>
+                        <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                        <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()</span> <span class="o">==</span>
+                        <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Preparing to playback captured audiotap: &#39;</span>
+                       <span class="s1">&#39;Error while playing clocking signal - the expected &#39;</span>
+                       <span class="s1">&#39;SPDIF input Stream Type: </span><span class="si">{}</span><span class="s1"> with Sample Rate: </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                       <span class="s1">&#39;was not found. Actual SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                       <span class="s1">&#39;with Sample Rate: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                            <span class="n">spdif_clock_track_meta</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                            <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span>
+                            <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">())</span>
+            <span class="p">)</span>
+            <span class="c1"># copy SPDIF audiotap AFTER checking the input clock file,</span>
+            <span class="c1"># otherwise audiotap will start to play and our check will</span>
+            <span class="c1"># be invalid:</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;wget http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1"> -O /jffs/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">websrv</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">))</span>
+            <span class="c1"># start local audiotap playback:</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_setup_udp_logger</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Audiotap replay: &#39;</span>
+                             <span class="s1">&#39;Waiting for SPDIF tap playback start trigger &#39;</span>
+                             <span class="s1">&#39;message...&#39;</span><span class="p">)</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">audiotap_playback_triggered</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">URL_SPDIF_TAP_CAPTURE_DURATION</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Audiotap replay: Expected SPDIF tap playback start &#39;</span>
+                       <span class="s1">&#39;trigger message...&#39;</span>
+            <span class="p">)</span>
+            <span class="c1"># Validate our captured audiotap is playing back correctly:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">()</span> <span class="o">==</span>
+                        <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span> <span class="ow">and</span>
+                        <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()</span> <span class="o">==</span>
+                        <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_CAPTURE_DURATION</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Audiotap replay of </span><span class="si">{}</span><span class="s1">:&#39;</span>
+                       <span class="s1">&#39;Expected SPDIF tap input Stream Type: </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                       <span class="s1">&#39;with Sample Rate: </span><span class="si">{}</span><span class="s1">,&#39;</span>
+                       <span class="s1">&#39;Actual SPDIF tap Stream Type: </span><span class="si">{}</span><span class="s1"> with Sample &#39;</span>
+                       <span class="s1">&#39;Rate: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">strTestAudiotapFileURL</span><span class="p">,</span>
+                    <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                    <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span>
+                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">())</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Audiotap replay of </span><span class="si">{}</span><span class="s1">: &#39;</span>
+                             <span class="s1">&#39;Expected SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with Sample &#39;</span>
+                             <span class="s1">&#39;Rate: </span><span class="si">{}</span><span class="s1">, Actual SPDIF Stream Type: </span><span class="si">{}</span><span class="s1"> with &#39;</span>
+                             <span class="s1">&#39;Sample Rate: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                    <span class="n">strTestAudiotapFileURL</span><span class="p">,</span>
+                                    <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">],</span>
+                                    <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;SampleRate&#39;</span><span class="p">],</span>
+                                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_stream_type</span><span class="p">(),</span>
+                                    <span class="n">ht_master</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_toslink_sample_rate</span><span class="p">()))</span>
+        <span class="c1"># Dispose of loaded audiotap file and stop playback on the zp:</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="s1">&#39;/jffs/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TAP_FILENAME</span><span class="p">))</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.generate_unique_ht_master_devices"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.generate_unique_ht_master_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_unique_ht_master_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generator to yield an HT Master capable ZP from the testbed, with each</span>
+<span class="sd">        input test SPDIF signal (test signal returned as tuple of file and</span>
+<span class="sd">        file info)</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">spdif_test_files_dict</span> <span class="o">=</span> <span class="n">OrderedDict</span><span class="p">(</span>
+            <span class="p">[</span>
+                <span class="p">(</span><span class="n">strFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span><span class="p">)</span> <span class="k">for</span> <span class="n">strFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span> <span class="ow">in</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SPDIF_TESTSIG_FILES</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()</span>
+            <span class="p">]</span>
+        <span class="p">)</span>
+        <span class="k">for</span> <span class="n">ht_master</span> <span class="ow">in</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_master_capable_devices</span><span class="p">():</span>
+                    <span class="k">for</span> <span class="n">input_SPDIF_signal</span><span class="p">,</span> <span class="p">(</span><span class="n">strFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span><span class="p">)</span> <span class="ow">in</span> \
+                            <span class="nb">enumerate</span><span class="p">(</span><span class="n">spdif_test_files_dict</span><span class="o">.</span><span class="n">iteritems</span><span class="p">()):</span>
+                                <span class="k">yield</span> <span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="p">(</span><span class="n">strFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_cli"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_cli">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_ht_master_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_spdif_audiotap_capture_and_replay_using_cli</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                         <span class="n">ht_master</span><span class="p">,</span>
+                                                         <span class="n">input_signal</span><span class="p">,</span>
+                                                         <span class="n">capture_method</span><span class="o">=</span><span class="s1">&#39;cli&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests all input SPDIF signals on all HT capable ZPs using the CLI</span>
+<span class="sd">        method from testrunner to capture direct to unzipped audiotap file</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param input_signal: file location and signal info of SPDIF test source</span>
+<span class="sd">        :type input_signal: tuple</span>
+<span class="sd">        :param capture_method: capture method</span>
+<span class="sd">        :type capture_method: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strAudiotapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_spdif_play_test_source_and_capture_tap</span><span class="p">(</span>
+                                                                <span class="n">ht_master</span><span class="p">,</span>
+                                                                <span class="n">input_signal</span><span class="p">,</span>
+                                                                <span class="n">capture_method</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_replay_validate_SPDIF_tap</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="n">input_signal</span><span class="p">,</span>
+                                        <span class="n">strAudiotapFileURL</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_url"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_url">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_ht_master_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_spdif_audiotap_capture_and_replay_using_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                                         <span class="n">ht_master</span><span class="p">,</span>
+                                                         <span class="n">input_signal</span><span class="p">,</span>
+                                                         <span class="n">capture_method</span><span class="o">=</span><span class="s1">&#39;url&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests all input SPDIF signals on all HT capable ZPs using URL and</span>
+<span class="sd">        direct download from URL, as used by Customer Care</span>
+<span class="sd">        Download zipped SPDIF tap from direct URL download page</span>
+<span class="sd">        Unzip audiotap data using custom unzip tool and replay</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param input_signal: file location and signal info of SPDIF test source</span>
+<span class="sd">        :type input_signal: tuple</span>
+<span class="sd">        :param capture_method: capture method</span>
+<span class="sd">        :type capture_method: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strAudiotapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_spdif_play_test_source_and_capture_tap</span><span class="p">(</span>
+                                                     <span class="n">ht_master</span><span class="p">,</span>
+                                                     <span class="n">input_signal</span><span class="p">,</span>
+                                                     <span class="n">capture_method</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_replay_validate_SPDIF_tap</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="n">input_signal</span><span class="p">,</span>
+                                        <span class="n">strAudiotapFileURL</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_url_base64"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_url_base64">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_ht_master_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_spdif_audiotap_capture_and_replay_using_url_base64</span><span class="p">(</span>
+                                                <span class="bp">self</span><span class="p">,</span>
+                                                <span class="n">ht_master</span><span class="p">,</span>
+                                                <span class="n">input_signal</span><span class="p">,</span>
+                                                <span class="n">capture_method</span><span class="o">=</span><span class="s1">&#39;urlbase64&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests all input SPDIF signals on all HT capable ZPs using URL and</span>
+<span class="sd">        status page method, as used by Customer Care</span>
+<span class="sd">        Download XML/BASE64 encoded, zipped SPDIF tap from status page</span>
+<span class="sd">        Extract and unzip audiotap data and replay</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param input_signal: file location and signal info of SPDIF test source</span>
+<span class="sd">        :type input_signal: tuple</span>
+<span class="sd">        :param capture_method: capture method</span>
+<span class="sd">        :type capture_method: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">strAudiotapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_spdif_play_test_source_and_capture_tap</span><span class="p">(</span>
+                                                     <span class="n">ht_master</span><span class="p">,</span>
+                                                     <span class="n">input_signal</span><span class="p">,</span>
+                                                     <span class="n">capture_method</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_replay_validate_SPDIF_tap</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                        <span class="n">input_signal</span><span class="p">,</span>
+                                        <span class="n">strAudiotapFileURL</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_diag"><a class="viewcode-back" href="../../../../upnp.functional.playback.html#upnp.functional.playback.test_ht_spdif_audiotap_capture_replay.TestSPDIFAudiotapCaptureAndReplay.test_spdif_audiotap_capture_and_replay_using_diag">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_ht_master_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_spdif_audiotap_capture_and_replay_using_diag</span><span class="p">(</span>
+                                                <span class="bp">self</span><span class="p">,</span>
+                                                <span class="n">ht_master</span><span class="p">,</span>
+                                                <span class="n">input_signal</span><span class="p">,</span>
+                                                <span class="n">capture_method</span><span class="o">=</span><span class="s1">&#39;diag&#39;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests all input SPDIF signals on all HT capable ZPs using diag</span>
+<span class="sd">        submission method, as used by Customer Care and our Customers</span>
+<span class="sd">        Download XML/BASE64 encoded, zipped SPDIF tap from submitted diag</span>
+<span class="sd">        Extract and unzip audiotap data and replay</span>
+
+<span class="sd">        :param ht_master: HT master capable ZP</span>
+<span class="sd">        :type ht_master: ZP</span>
+<span class="sd">        :param input_signal: file location and signal info of SPDIF test source</span>
+<span class="sd">        :type input_signal: tuple</span>
+<span class="sd">        :param capture_method: capture method</span>
+<span class="sd">        :type capture_method: utf-8 string</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Temp removal of WAV files for diag test due to SWPBL-100102</span>
+        <span class="n">strTestInputFileURL</span><span class="p">,</span> <span class="n">dictTrackInfo</span> <span class="o">=</span> <span class="n">input_signal</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">dictTrackInfo</span><span class="p">[</span><span class="s1">&#39;StreamInfo&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s1">&#39;Stereo&#39;</span><span class="p">):</span>
+            <span class="n">strAudiotapFileURL</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_spdif_play_test_source_and_capture_tap</span><span class="p">(</span>
+                                                         <span class="n">ht_master</span><span class="p">,</span>
+                                                         <span class="n">input_signal</span><span class="p">,</span>
+                                                         <span class="n">capture_method</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">_replay_validate_SPDIF_tap</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                            <span class="n">input_signal</span><span class="p">,</span>
+                                            <span class="n">strAudiotapFileURL</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s1">&#39;Test capture and replay of SPDIF audiotaps&#39;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">(),</span> <span class="n">TestSPDIFAudiotapCaptureAndReplay</span><span class="p">()]</span>
+    <span class="p">)</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

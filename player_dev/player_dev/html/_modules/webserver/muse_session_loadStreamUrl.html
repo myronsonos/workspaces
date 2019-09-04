@@ -1,0 +1,664 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver.muse_session_loadStreamUrl &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver.muse_session_loadStreamUrl</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">itertools</span> <span class="k">import</span> <span class="n">izip</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets.event</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">Error</span><span class="p">,</span> <span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">SessionErrorEvent</span><span class="p">,</span>
+    <span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">SessionState</span><span class="p">,</span>
+    <span class="n">Success</span><span class="p">,</span> <span class="n">MetadataStatusEvent</span><span class="p">,</span> <span class="n">PlaybackState</span><span class="p">,</span>
+    <span class="n">GroupsEvent</span><span class="p">,</span> <span class="n">GroupInfoEvent</span><span class="p">,</span>
+    <span class="n">PlaybackErrorEvent</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">webserver.base_muse_fixture</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">BaseMuseFixture</span><span class="p">,</span> <span class="n">MuseClientFixtureMixin</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">from</span> <span class="nn">itertools</span> <span class="k">import</span> <span class="n">ifilter</span>
+<span class="kn">import</span> <span class="nn">webserver.helpers.node_smapi_control</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">upnp.api.queue.helpers</span> <span class="k">import</span> <span class="n">QueueServiceHelpers</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">from</span> <span class="nn">coherence.upnp.core</span> <span class="k">import</span> <span class="n">utils</span>
+
+<span class="n">smapi_ctl</span> <span class="o">=</span> <span class="n">webserver</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">node_smapi_control</span><span class="o">.</span><span class="n">NodeSmapiControl</span><span class="p">()</span>
+<span class="n">queue_helpers</span> <span class="o">=</span> <span class="n">QueueServiceHelpers</span><span class="p">()</span>
+
+
+<span class="n">BEATS1</span> <span class="o">=</span> <span class="s2">&quot;http://itsliveradio.apple.com/streams/hub01/049jvm/master.m3u8&quot;</span>
+<span class="n">BEATS1_MD</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;HLS radio (Beats One)&quot;</span><span class="p">}</span>
+<span class="n">CUSTOM_MP3_RADIO_STREAM</span> <span class="o">=</span> <span class="s2">&quot;http://wbur-sc.streamguys.com/wbur&quot;</span>
+<span class="n">HTTPS_RADIO_STREAM</span> <span class="o">=</span> <span class="s2">&quot;https://opml.radiotime.com/Tune.ashx?serial=AE64GSC57R23676FT2CQQANIIZNA&amp;formats=aac,mp3&amp;id=s27654&amp;partnerId=4JqugguZ&quot;</span>
+<span class="n">HTTPS_RADIO_STREAM_MD</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;WBUR-FM&quot;</span><span class="p">}</span>
+<span class="n">MP3_MD</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Custom MP3 radio&quot;</span><span class="p">}</span>
+
+
+<div class="viewcode-block" id="streaming_radio_generator"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.streaming_radio_generator">[docs]</a><span class="k">def</span> <span class="nf">streaming_radio_generator</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test the different formats streaming stations come in</span>
+<span class="sd">    Beats One: hls-radio</span>
+<span class="sd">    92 PRO FM: m4aradio-adts</span>
+<span class="sd">    Nirvana Relaxation Radio: mp3radio</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">stations</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;http://69.46.88.21&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;idobi Radio&quot;</span><span class="p">},</span>
+                <span class="s2">&quot;http://17443.live.streamtheworld.com:80/WPROFMAAC_SC?DIST=TuneIn&amp;TGT=TuneIn&amp;ua=Sonos&amp;ttag=Sonos&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;92 Pro FM&quot;</span><span class="p">},</span>
+                <span class="n">BEATS1</span><span class="p">:</span> <span class="n">BEATS1_MD</span><span class="p">}</span>
+    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">stations</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">yield</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span></div>
+
+
+<div class="viewcode-block" id="valid_stream_generator"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.valid_stream_generator">[docs]</a><span class="k">def</span> <span class="nf">valid_stream_generator</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generator yields a valid stream URL both with, and without MD for a total of 4 iterations.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">stream</span><span class="p">,</span> <span class="n">md</span> <span class="ow">in</span> <span class="n">izip</span><span class="p">([</span><span class="n">BEATS1</span><span class="p">,</span> <span class="n">BEATS1</span><span class="p">,</span> <span class="n">CUSTOM_MP3_RADIO_STREAM</span><span class="p">,</span> <span class="n">CUSTOM_MP3_RADIO_STREAM</span><span class="p">,</span> <span class="n">HTTPS_RADIO_STREAM</span><span class="p">,</span> <span class="n">HTTPS_RADIO_STREAM</span><span class="p">],</span>
+                           <span class="p">[</span><span class="n">BEATS1_MD</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">MP3_MD</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">HTTPS_RADIO_STREAM_MD</span><span class="p">,</span> <span class="kc">None</span><span class="p">]):</span>
+        <span class="k">yield</span> <span class="p">(</span><span class="n">stream</span><span class="p">,</span> <span class="n">md</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="LoadStreamUrl"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl">[docs]</a><span class="k">class</span> <span class="nc">LoadStreamUrl</span><span class="p">(</span><span class="n">MuseClientFixtureMixin</span><span class="p">):</span>
+<div class="viewcode-block" id="LoadStreamUrl.setUpFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LoadStreamUrl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.setUpTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LoadStreamUrl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_cloud_queue_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.tearDownTest"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LoadStreamUrl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownTest</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_cloud_queue_server</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.tearDownFixture"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LoadStreamUrl</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.get_current_track_album_art"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.get_current_track_album_art">[docs]</a>    <span class="k">def</span> <span class="nf">get_current_track_album_art</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">utils</span><span class="o">.</span><span class="n">parse_xml</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;CurrentTrackMetaData&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">getroot</span><span class="p">():</span>
+            <span class="k">if</span> <span class="s2">&quot;DIDL-Lite&quot;</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">tag</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">subchild</span> <span class="ow">in</span> <span class="n">child</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="s2">&quot;albumArtURI&quot;</span> <span class="ow">in</span> <span class="n">subchild</span><span class="o">.</span><span class="n">tag</span><span class="p">:</span>
+                        <span class="k">return</span> <span class="n">subchild</span><span class="o">.</span><span class="n">text</span>
+        <span class="c1"># Could not find the album art</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_load_stream_url"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_load_stream_url">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">valid_stream_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_load_stream_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stream</span><span class="p">,</span> <span class="n">md</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the loadStreamUrl() Muse method returns successfully both when a stream is provided</span>
+<span class="sd">        with and without station MD and verify the playback policies returned by the player</span>
+<span class="sd">        are correct. The only supported playback policy for streams is canStop.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">stream</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canSkip&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canSkipBack&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canSeek&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canPause&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canStop&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">True</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canRepeat&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canRepeatOne&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canCrossfade&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">availablePlaybackActions</span><span class="p">[</span><span class="s2">&quot;canShuffle&quot;</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">False</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_load_stream_url_item_id"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_load_stream_url_item_id">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">((</span><span class="s2">&quot;0&quot;</span><span class="p">,</span> <span class="s2">&quot;-1&quot;</span><span class="p">,</span> <span class="s2">&quot;A&quot;</span> <span class="o">*</span> <span class="mi">32</span><span class="p">))</span>
+    <span class="k">def</span> <span class="nf">test_load_stream_url_item_id</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">item_id</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that, if passed in, the itemId is included in subsequent playbackStatus</span>
+<span class="sd">        and playbackError events corresponding to this stream.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Test playbackStatus</span>
+        <span class="n">stream</span><span class="p">,</span> <span class="n">md</span> <span class="o">=</span> <span class="n">valid_stream_generator</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">stream</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">,</span>
+                                  <span class="n">item_id</span><span class="o">=</span><span class="n">item_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="n">item_id</span><span class="p">)</span>
+
+        <span class="c1"># Strip out the end of the URL to make it invalid</span>
+        <span class="c1">#   ex. http://www.test.com/test -&gt; http://www.test.com</span>
+        <span class="n">stream</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="s1">&#39;/[^/]*$&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">stream</span><span class="p">)</span>
+        <span class="c1"># Test playbackError</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">stream</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">,</span>
+                                  <span class="n">item_id</span><span class="o">=</span><span class="n">item_id</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="n">item_id</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_metadata_after_load_stream_url"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_metadata_after_load_stream_url">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="n">streaming_radio_generator</span><span class="p">())</span>
+    <span class="k">def</span> <span class="nf">test_metadata_after_load_stream_url</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stream</span><span class="p">,</span> <span class="n">md</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-46950</span>
+<span class="sd">        Verify that a metadata event is received after using loadStreamUrl on various different streaming</span>
+<span class="sd">        formats.</span>
+<span class="sd">        We know Beats1 provides [&quot;currentItem&quot;][&quot;track&quot;] information and the other two stations provide</span>
+<span class="sd">        &quot;streamInfo&quot; values for each track.</span>
+<span class="sd">        :param stream:</span>
+<span class="sd">        :param url:</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">attempts</span> <span class="o">=</span> <span class="mi">5</span>
+        <span class="k">while</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">()</span> <span class="ow">and</span> <span class="n">attempts</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">stream</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">)</span>
+            <span class="c1"># TODO: This a is a crappy workaround in case one of the station fails to load.</span>
+            <span class="c1"># Need to find a more elegant solution to this, maybe modify verify_events to have option</span>
+            <span class="c1"># to not fail the test if it fails</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
+            <span class="n">attempts</span><span class="o">-=</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_metadata</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="c1"># Verify the streamInfo value if its not none</span>
+        <span class="n">streamInfo</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">test_events</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">streamInfo</span>
+        <span class="k">if</span> <span class="n">streamInfo</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotInOrFailCase</span><span class="p">(</span><span class="n">streamInfo</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;ZPSTR_CONNECTING&quot;</span><span class="p">,</span> <span class="s2">&quot;ZPSTR_BUFFERING&quot;</span><span class="p">),</span>
+                                       <span class="s2">&quot;The metadata event body.streamInfo field should not have an&quot;</span>
+                                       <span class="s2">&quot; intermediary state.&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_load_stream_url_missing_params"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_load_stream_url_missing_params">[docs]</a>    <span class="k">def</span> <span class="nf">test_load_stream_url_missing_params</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify the player returns an error when a client calls loadStreamUrl() without a streaming url</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Error</span><span class="p">,</span> <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">Error</span><span class="o">.</span><span class="n">INVALID_PARAM</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_previousPositionMillis_do_not_change_while_streaming"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_previousPositionMillis_do_not_change_while_streaming">[docs]</a>    <span class="k">def</span> <span class="nf">test_previousPositionMillis_do_not_change_while_streaming</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-78857</span>
+<span class="sd">        Verify that the previousPositionMillis and previousItemId are accurate when you play/pause</span>
+<span class="sd">        on a radio stream and as the client switches between a stream and cloudqueue playback.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># start cloudqueue playback</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">content_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()[</span><span class="s2">&quot;RelTime&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;0:00:02&quot;</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+
+        <span class="c1"># switch to a stream, the previous parameters should be where the cloudqueue playback</span>
+        <span class="c1"># was interrupted</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">,</span>
+                                  <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;BEATS1&quot;</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()[</span><span class="s2">&quot;RelTime&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;0:00:03&quot;</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">6</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;0&quot;</span> <span class="ow">and</span>
+                                                    <span class="nb">abs</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">previousPositionMillis</span> <span class="o">-</span> <span class="mi">2000</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1500</span><span class="p">))</span>
+
+        <span class="c1"># pause the stream and verify the previous parameters are when the stream was paused</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">pause</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">IDLE</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="nb">abs</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">previousPositionMillis</span> <span class="o">-</span> <span class="mi">4000</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1500</span><span class="p">))</span>
+
+        <span class="c1"># play the stream and verify the previous parameters are still from when the stream</span>
+        <span class="c1"># was paused</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">play</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()[</span><span class="s2">&quot;RelTime&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;0:00:04&quot;</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="nb">abs</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">previousPositionMillis</span> <span class="o">-</span> <span class="mi">4000</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1500</span><span class="p">))</span>
+
+        <span class="c1"># load the cloudqueue again and verify the previous parameters are from when the stream</span>
+        <span class="c1"># was interrupted</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                   <span class="n">content_type</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;2&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">item_id</span> <span class="o">==</span> <span class="s2">&quot;2&quot;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">previousItemId</span> <span class="o">==</span> <span class="s2">&quot;BEATS1&quot;</span> <span class="ow">and</span>
+                                                    <span class="nb">abs</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">previousPositionMillis</span> <span class="o">-</span> <span class="mi">4000</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1500</span><span class="p">))</span>
+
+        <span class="c1"># Added for SWPBL-68110</span>
+        <span class="c1"># Verify that we get a /timePlayed report for the cloudqueue track played in between</span>
+        <span class="n">log</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">wait_for_filtered_log</span><span class="p">(</span><span class="nb">type</span><span class="o">=</span><span class="s1">&#39;api&#39;</span><span class="p">,</span>
+                                                                  <span class="n">fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">l</span><span class="p">:</span> <span class="p">(</span><span class="n">l</span><span class="p">[</span><span class="s1">&#39;path&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;/timePlayed&#39;</span><span class="p">),</span>
+                                                                  <span class="n">timeout</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">log</span><span class="p">),</span>
+                                   <span class="s2">&quot;Should have gotten 1 /timePlayed report for the first cloudqueue track played&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_can_evict_session_while_playing_streaming_url"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_can_evict_session_while_playing_streaming_url">[docs]</a>    <span class="k">def</span> <span class="nf">test_can_evict_session_while_playing_streaming_url</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify a session that is currently playing a streaming URL can be evicted.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="s2">&quot;auto_new_session&quot;</span><span class="p">,</span> <span class="n">app_context</span><span class="o">=</span><span class="s2">&quot;one_time&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionErrorEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="o">==</span> <span class="n">SessionErrorEvent</span><span class="o">.</span><span class="n">SESSION_EVICTED</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStream_restores_avt_after_leave_session"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStream_restores_avt_after_leave_session">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_restores_avt_after_leave_session</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-70169</span>
+<span class="sd">        Verify that the AVT is restored if you leave the session after starting</span>
+<span class="sd">        playback with loadStreamUrl</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Preload an AV Transport URI to kick the logic that saves the previous AV Transport URI</span>
+        <span class="c1"># This reliably makes the player store the shared queue AV Transport URI on the next line. I found</span>
+        <span class="c1"># during testing that use_queue() was failing unexpectedly.</span>
+        <span class="n">my_metadata</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        &lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot;</span>
+<span class="s2">           xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot;</span>
+<span class="s2">           xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;</span>
+<span class="s2">           xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;</span>
+<span class="s2">         &lt;item id=&quot;-1&quot; parentID=&quot;-1&quot; restricted=&quot;true&quot;&gt;</span>
+<span class="s2">          &lt;dc:title&gt;custom radio&lt;/dc:title&gt;</span>
+<span class="s2">          &lt;upnp:class&gt;object.item.audioItem.audioBroadcast&lt;/upnp:class&gt;</span>
+<span class="s2">          &lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;SA_RINCON1543_X_#Svc1543-0-Token&lt;/desc&gt;</span>
+<span class="s2">         &lt;/item&gt;</span>
+<span class="s2">        &lt;/DIDL-Lite&gt;&quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="n">uri</span><span class="o">=</span><span class="s1">&#39;x-rincon-mp3radio://&#39;</span> <span class="o">+</span> <span class="n">CUSTOM_MP3_RADIO_STREAM</span><span class="p">,</span>
+                                                                             <span class="n">metadata</span><span class="o">=</span><span class="n">my_metadata</span><span class="p">,</span>
+                                                                             <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+                              <span class="s2">&quot;Attempt to activate AVT queue&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">(</span><span class="n">queue_id</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span> <span class="s2">&quot;Attempt to activate shared queue&quot;</span><span class="p">)</span>
+        <span class="n">avt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span>
+
+        <span class="c1"># Load a stream</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse_session_helper</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">test_fixture</span><span class="o">=</span><span class="bp">self</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+
+        <span class="c1"># Leave the session and verify that the avt was reverted</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">leave_session</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">wait_for_avtransport_uri</span><span class="p">(</span><span class="n">avt</span><span class="p">),</span>
+                                   <span class="s2">&quot;Player should revert AV Transport URI&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStreamUrl_is_not_restored_after_delegation"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStreamUrl_is_not_restored_after_delegation">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStreamUrl_is_not_restored_after_delegation</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-87729</span>
+<span class="sd">        Verify that the streamUrl is not restored after delegating and a failed loadCloudQueue</span>
+<span class="sd">        command.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Select a second ZP to use</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span> <span class="o">=</span> <span class="n">ifilter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">d</span><span class="p">:</span> <span class="p">(</span><span class="n">d</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()</span> <span class="ow">and</span> <span class="n">d</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span><span class="o">.</span><span class="n">next</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;No second playable ZP found&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Create a group with zp (gc) and zp2 using Muse createGroup()</span>
+        <span class="n">pids</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">];</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">createGroup</span><span class="p">(</span><span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span> <span class="n">playerIds</span><span class="o">=</span><span class="n">pids</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">GroupInfoEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group</span><span class="p">[</span><span class="s1">&#39;coordinatorId&#39;</span><span class="p">]</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">and</span>
+                                                    <span class="nb">len</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">group</span><span class="p">[</span><span class="s1">&#39;playerIds&#39;</span><span class="p">])</span> <span class="o">==</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Create a playback session</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span>
+                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                 <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,</span>
+                                 <span class="n">custom_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">((</span><span class="n">e</span><span class="o">.</span><span class="n">session_created</span> <span class="o">==</span> <span class="kc">True</span><span class="p">)</span> <span class="ow">and</span>
+                                                    <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span><span class="p">)))</span>
+
+        <span class="c1"># Subscribe to playback, call loadStreamUrl on zp, and verify playback starts</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">subscribe_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">BEATS1_MD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+
+        <span class="c1"># Save zp&#39;s AVTransport URI</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">original_avt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span>
+
+        <span class="c1"># Force zp to delegate to zp2</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">join_group</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+
+        <span class="c1"># Create a connection to zp2 and create session, group is zp&#39;s original group ID</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">make_connection</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gid2</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">GroupManagement</span><span class="o">.</span><span class="n">get_local_group_uuid</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid2</span><span class="p">,</span>
+                                               <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                               <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                               <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">,</span>
+                                               <span class="n">custom_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">((</span><span class="n">e</span><span class="o">.</span><span class="n">session_created</span> <span class="o">==</span> <span class="kc">True</span><span class="p">)</span> <span class="ow">and</span>
+                                                    <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span><span class="p">)))</span>
+
+        <span class="c1"># Call loadCloudQueue() on zp2 with a cloudqueue error</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">arm_error_script</span><span class="p">(</span><span class="n">call</span><span class="o">=</span><span class="s2">&quot;context&quot;</span><span class="p">,</span> <span class="n">error</span><span class="o">=</span><span class="mi">404</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                                 <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                                 <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                                 <span class="n">httpAuthorization</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                                 <span class="n">item_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                                 <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                                 <span class="n">track_metadata</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">second_muse_client</span><span class="p">)</span>
+
+        <span class="c1"># Check that playback stops on the second player</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(),</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># Verify that zp2&#39;s AVTransport URI is different from zp&#39;s original AVTransport URI</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp2</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_avtransport_uri</span><span class="p">()</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">original_avt</span><span class="p">,</span>
+                        <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Waiting for AVTransportURI mismatch on second player&quot;</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStream_md_station_service_imageUrl"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStream_md_station_service_imageUrl">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_md_station_service_imageUrl</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-64765</span>
+
+<span class="sd">        Test the case where station name and imageUrl are provided in stationMetadata service</span>
+<span class="sd">        object.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">image_url</span> <span class="o">=</span> <span class="s2">&quot;SOME_HTTP_LINK&quot;</span>
+        <span class="n">md</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+              <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Spotify&quot;</span><span class="p">,</span>
+              <span class="s2">&quot;imageUrl&quot;</span><span class="p">:</span> <span class="n">image_url</span><span class="p">}</span>
+
+        <span class="c1"># Test service imageUrl</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">CUSTOM_MP3_RADIO_STREAM</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;service&quot;</span><span class="p">:</span> <span class="n">md</span><span class="p">})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;service&#39;</span><span class="p">)</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;service&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;imageUrl&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;SOME_HTTP_LINK&#39;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;service&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;Spotify&#39;</span><span class="p">),</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="n">aauri</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_current_track_album_art</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span><span class="n">image_url</span><span class="p">,</span> <span class="n">aauri</span><span class="p">,</span> <span class="s2">&quot;Verify upnp albumArtURI value does not match imageURL &quot;</span>
+            <span class="s2">&quot;passed to loadStreamURL in stationMetadata.service&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStream_md_station_imageUrl"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStream_md_station_imageUrl">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_md_station_imageUrl</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-64765</span>
+
+<span class="sd">        Test the case where station name and imageUrl are provided in stationMetadata.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">image_url</span> <span class="o">=</span> <span class="s2">&quot;SOME_HTTP_LINK&quot;</span>
+        <span class="n">md</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Spotify&quot;</span><span class="p">,</span>
+              <span class="s2">&quot;imageUrl&quot;</span><span class="p">:</span> <span class="n">image_url</span><span class="p">}</span>
+
+        <span class="c1"># Test service imageUrl</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">CUSTOM_MP3_RADIO_STREAM</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;imageUrl&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;SOME_HTTP_LINK&#39;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;Spotify&#39;</span><span class="p">),</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+        <span class="n">aauri</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_current_track_album_art</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">image_url</span><span class="p">,</span> <span class="n">aauri</span><span class="p">,</span> <span class="s2">&quot;Verify upnp albumArtURI value matches imageURL &quot;</span>
+            <span class="s2">&quot;passed to loadStreamURL in stationMetadata&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStream_md_station_imageURL_with_OOB_metadata"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStream_md_station_imageURL_with_OOB_metadata">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_md_station_imageURL_with_OOB_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-64765</span>
+
+<span class="sd">        Test the case where station name and imageUrl are provided in stationMetadata</span>
+<span class="sd">        for a station that uses OOB metadata. Verify the player uses the OOB metadata</span>
+<span class="sd">        over the provided imageURL.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">image_url</span> <span class="o">=</span> <span class="s2">&quot;SOME_HTTP_LINK&quot;</span>
+        <span class="n">md</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Spotify&quot;</span><span class="p">,</span>
+              <span class="s2">&quot;imageUrl&quot;</span><span class="p">:</span> <span class="n">image_url</span><span class="p">}</span>
+        <span class="c1"># Test station imageUrl (OOB metadata)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="n">md</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;imageUrl&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;SOME_HTTP_LINK&#39;</span> <span class="ow">and</span>
+                                                    <span class="n">e</span><span class="o">.</span><span class="n">container</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;name&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="s1">&#39;Spotify&#39;</span><span class="p">),</span>
+                          <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="o">==</span> <span class="n">PlaybackState</span><span class="o">.</span><span class="n">PLAYING</span><span class="p">))</span>
+
+        <span class="c1"># Verify service uses OOB md... We can&#39;t know this URL ahead of time, so just verify it&#39;s different</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_current_track_album_art</span><span class="p">()</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">image_url</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LoadStreamUrl.test_loadStream_md_reflected_in_upnp_metadata"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.LoadStreamUrl.test_loadStream_md_reflected_in_upnp_metadata">[docs]</a>    <span class="k">def</span> <span class="nf">test_loadStream_md_reflected_in_upnp_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        SWPBL-80427</span>
+<span class="sd">        Verify that if a &quot;service&quot; object is passed in via the metadata, the xml in EnqueuedTransportURIMetaData</span>
+<span class="sd">        has a &quot;contentService&quot; object that has the same values.</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">md</span><span class="o">=</span> <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;12&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Spotify&quot;</span><span class="p">,</span>
+             <span class="s2">&quot;imageUrl&quot;</span><span class="p">:</span> <span class="s2">&quot;SOME_HTTP_LINK&quot;</span><span class="p">}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">load_stream_url</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                  <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">,</span>
+                                  <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                  <span class="n">stream_url</span><span class="o">=</span><span class="n">BEATS1</span><span class="p">,</span>
+                                  <span class="n">station_metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;service&quot;</span><span class="p">:</span> <span class="n">md</span><span class="p">})</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">muse</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="p">,</span> <span class="n">hhid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">muse_hhid</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">MetadataStatusEvent</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># play for a few seconds to let the system properties get populated</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetPositionInfo</span><span class="p">()[</span><span class="s2">&quot;RelTime&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;0:00:02&quot;</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+
+        <span class="c1"># get the metadata xml and verify the &quot;contentService&quot; object</span>
+        <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">utils</span><span class="o">.</span><span class="n">parse_xml</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;EnqueuedTransportURIMetaData&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">getroot</span><span class="p">():</span>
+            <span class="k">if</span> <span class="s2">&quot;DIDL-Lite&quot;</span> <span class="ow">in</span> <span class="n">child</span><span class="o">.</span><span class="n">tag</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">subchild</span> <span class="ow">in</span> <span class="n">child</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="s2">&quot;contentService&quot;</span> <span class="ow">in</span> <span class="n">subchild</span><span class="o">.</span><span class="n">tag</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">md</span><span class="p">,</span> <span class="n">subchild</span><span class="o">.</span><span class="n">attrib</span><span class="p">,</span>
+                                                   <span class="s2">&quot;Verify upnp EnqueuedTransportURIMetaData.contentService value&quot;</span><span class="p">)</span>
+                        <span class="k">break</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failed to find EnqueuedTransportURIMetaData.contentService in the xml&quot;</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="MuseLoadStreamUrlTests"><a class="viewcode-back" href="../../webserver.html#webserver.muse_session_loadStreamUrl.MuseLoadStreamUrlTests">[docs]</a><span class="k">class</span> <span class="nc">MuseLoadStreamUrlTests</span><span class="p">(</span><span class="n">LoadStreamUrl</span><span class="p">):</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;NIGHTLY_MUSE_SESSION_NAMESPACE&#39;</span><span class="p">]</span></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">logging</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;Muse Session.loadStreamURL Tests&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">MuseLoadStreamUrlTests</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

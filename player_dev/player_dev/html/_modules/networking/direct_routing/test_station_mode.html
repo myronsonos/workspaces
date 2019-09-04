@@ -1,0 +1,1034 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.direct_routing.test_station_mode &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.direct_routing.test_station_mode</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">operator</span> <span class="k">import</span> <span class="n">gt</span><span class="p">,</span> <span class="n">eq</span>
+<span class="kn">from</span> <span class="nn">random</span> <span class="k">import</span> <span class="n">shuffle</span>
+
+<span class="kn">import</span> <span class="nn">pyshark</span>
+<span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">from</span> <span class="nn">networking.direct_routing.base</span> <span class="k">import</span> <span class="n">DirectRoutingWorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">SimpleUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">INTERFACE_2GHZ</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">skip</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">wifi.openWrt</span> <span class="k">import</span> <span class="n">WirelessRadio</span>
+
+
+<span class="n">AP_DEV</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">AP_ENCRYPT</span> <span class="o">=</span> <span class="s1">&#39;psk2+ccmp&#39;</span>
+<span class="n">AP_PWD</span> <span class="o">=</span> <span class="s1">&#39;sonosrocks!!!&#39;</span>
+<span class="n">STA_STATE_IDLE</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">DIRECT_ROUTING_ENABLED_RSSI</span> <span class="o">=</span> <span class="mi">26</span>
+<span class="n">DIRECT_ROUTING_DISABLED_RSSI</span> <span class="o">=</span> <span class="mi">18</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Station mode multicast join messages should be sent 1 every 5 seconds</span>
+<span class="sd">by the GMs. (vs. sonosnet mode is 1 every 10 seconds).</span>
+<span class="sd">These broadcast packets can be missed in the cb-mcs9-2 screen room,</span>
+<span class="sd">so we&#39;re setting the pass threshhold in test_mc_group_join_msg_freq</span>
+<span class="sd">to ensure that it&#39;s at least sending more than when it&#39;s in</span>
+<span class="sd">sonosnet mode.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">MC_JOIN_MSG_TEST_TIME</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="n">MIN_MC_JOIN_MSG</span> <span class="o">=</span> <span class="mi">7</span>
+<span class="c1"># approximate minimum size for mc join messages</span>
+<span class="n">JOIN_MSG_MIN_SIZE</span> <span class="o">=</span> <span class="mi">100</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Station mode multicast group max age is set to 120 seconds.</span>
+<span class="sd">The output of showmacs forwarding db should have seconds left</span>
+<span class="sd">close to 120 seconds for each peer.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">MC_MAX_AGE</span> <span class="o">=</span> <span class="mi">120</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Minimum threshhold for the max group age seen when a member</span>
+<span class="sd">is still really in the group. Per:</span>
+<span class="sd">https://confluence.sonos.com/display/PDSW/Multicast+audio+when+talking+to+an+AP</span>
+<span class="sd">a group member sends out 1 group join broadcast every 5 seconds</span>
+<span class="sd">in station mode. So if none of these probes are missed, the max age output</span>
+<span class="sd">will show anywhere between 120 to 115/114.</span>
+<span class="sd">test_mc_group_join_max_age test case will have a tolerance of missing</span>
+<span class="sd">3 joins, but must see the 4th one. Therefore, the minimum</span>
+<span class="sd">&quot;max age&quot; seen must be at least 100.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">MIN_MC_AGE_THRESH</span> <span class="o">=</span> <span class="mi">100</span>
+<span class="c1"># approximate number of frames per second captured in group playback</span>
+<span class="n">GROUPED_PLAYBACK_FRAME_RATE</span> <span class="o">=</span> <span class="mi">12</span>
+
+
+<div class="viewcode-block" id="DirectRoutingSTA"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA">[docs]</a><span class="k">class</span> <span class="nc">DirectRoutingSTA</span><span class="p">(</span><span class="n">DirectRoutingWorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Description: Verification of direct routing in station mode.</span>
+
+<span class="sd">    ..note ::</span>
+
+<span class="sd">        To be run on automation test bed with combination</span>
+<span class="sd">        of shipping and legacy devices with wireless sniffer,</span>
+<span class="sd">        managed ethernet switch, and OpenWRT AP.</span>
+<span class="sd">        So, WIRELESS_NIGHTLY (cb-mcs9-2)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">_SONOSNET_STATE_OP</span> <span class="o">=</span> <span class="n">eq</span>
+    <span class="n">_STA_STATE_OP</span> <span class="o">=</span> <span class="n">gt</span>
+
+<div class="viewcode-block" id="DirectRoutingSTA.setUpFixture"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Remove other module types that share the same architecture.</span>
+<span class="sd">        Only need to test Fenway(S3), LL(S9), SH4(ZP80), PPC(S5),</span>
+<span class="sd">        encore for GC-GM pairs.</span>
+
+<span class="sd">        AP hw mode configured for DR disabled case in</span>
+<span class="sd">        test_station_mode_tx_rate_to_peers</span>
+
+<span class="sd">        Selects the wireless protocol to use, possible values are 11b, 11bg, 11g,</span>
+<span class="sd">        11gdt (G + dynamic turbo, madwifi only), 11gst (G turbo, broadcom only), 11a,</span>
+<span class="sd">        11adt (A + dynamic turbo, madwifi only), 11ast (A + static turbo, madwifi only),</span>
+<span class="sd">        11fh (frequency hopping), 11lrs (LRS mode, broadcom only), 11ng (11N+11G, 2.4GHz,</span>
+<span class="sd">        mac80211 only), 11na (11N+11A, 5GHz, mac80211 only) or auto.</span>
+<span class="sd">        Note: AP default =  driver default</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSTA</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_config_ap</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap_dev</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">set_hwmode</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_dev</span><span class="p">,</span> <span class="s1">&#39;11ng&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">commit_wifi_config_and_restart_radios</span><span class="p">()</span>
+        <span class="n">ap_hwmode</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">get_hwmode</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_dev</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">mac_address_2ghz</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+           <span class="n">ap_hwmode</span><span class="p">,</span> <span class="s1">&#39;11ng&#39;</span><span class="p">,</span>
+           <span class="s1">&#39;AP should be in hwmode 11ng, actual </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ap_hwmode</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;removing_wireless_credentials on self.my_devices&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_wireless_credentials</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Configuring test ZPs for station mode.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">n_zcs_from_gms</span> <span class="o">=</span> <span class="p">[</span><span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span> <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_n_capable</span><span class="p">()]</span>
+            <span class="n">bg_zcs_from_gms</span> <span class="o">=</span> <span class="p">[</span><span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span> <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span> <span class="o">=</span> <span class="p">[]</span>
+ 
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">n_zcs_from_gms</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">n_zcs_from_gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="o">.</span><span class="n">append</span><span class="p">([</span>
+                    <span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_playback_devices</span><span class="p">()</span> <span class="k">if</span>
+                    <span class="n">zc</span><span class="o">.</span><span class="n">is_n_capable</span><span class="p">()</span> <span class="ow">and</span> <span class="n">zc</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">bg_zcs_from_gms</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">bg_zcs_from_gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="o">.</span><span class="n">append</span><span class="p">([</span>
+                    <span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subnet</span><span class="o">.</span><span class="n">get_playback_devices</span><span class="p">()</span> <span class="k">if</span>
+                    <span class="n">zc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="ow">and</span> <span class="n">zc</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span>
+            <span class="n">shuffle</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_wireless_credentials</span><span class="p">(</span><span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span><span class="p">)),</span>
+            <span class="n">ssid</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">get_ap_ssid</span><span class="p">(),</span>
+            <span class="n">password</span><span class="o">=</span><span class="n">AP_PWD</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_station_mode</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.tearDownFixture"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSTA</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_wireless_credentials</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">disable_ap_wireless_network</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_config_ap</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Configure the OpenWRT AP for the test</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Configuring OpenWRT AP for test suite.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">configure_basic_wireless_network</span><span class="p">(</span><span class="n">password</span><span class="o">=</span><span class="n">AP_PWD</span><span class="p">,</span>
+            <span class="n">channel</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">network_channel</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DirectRoutingSTA.wait_for_diag_connectivity"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.wait_for_diag_connectivity">[docs]</a>    <span class="k">def</span> <span class="nf">wait_for_diag_connectivity</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Polls the /proc/ath_rincon/station diag page for up to 3 minutes via</span>
+<span class="sd">        http until a valid page is returned.  If the page is not ready within</span>
+<span class="sd">        the 3 minutes then a TimeoutError is raised.</span>
+
+<span class="sd">        :param zp: ZPs to check station mode connectivity</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :raises: TimeoutError</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">wait_for_status_page</span><span class="p">(</span><span class="n">wait_delay</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">wait_timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_ath0_dr_hex</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mac_hex</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the station mode</span>
+<span class="sd">        direct routing mac address.</span>
+<span class="sd">        For given serial 00:0E:58:00:00:00, return</span>
+<span class="sd">        02:0E:58:00:00:00 if the last byte of serial</span>
+<span class="sd">        is odd, otherwise 00:0E:58:00:00:01</span>
+
+<span class="sd">        :param mac_hex: mac address as hex string</span>
+<span class="sd">        :type mac_hex: :obj:`str`</span>
+<span class="sd">        :return: ath0 mac address</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">mac_hex</span> <span class="o">&amp;</span> <span class="mh">0xFF</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSTA</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_get_ath0_dr_hex</span><span class="p">(</span><span class="n">mac_hex</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">mac_hex</span> <span class="o">+</span> <span class="mh">0x020000000000</span>
+
+    <span class="k">def</span> <span class="nf">_get_zp_serial_mac</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the serial number</span>
+<span class="sd">        mac address for a given zp of the form:</span>
+<span class="sd">        00:0E:58:00:00:00</span>
+
+<span class="sd">        :param zp: zone component</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: serial number mac address</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_sn_mac</span> <span class="o">=</span> <span class="s1">&#39;:&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">a</span> <span class="o">+</span> <span class="n">b</span> <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span>
+                             <span class="nb">zip</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">[::</span><span class="mi">2</span><span class="p">],</span>
+                                 <span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">[</span><span class="mi">1</span><span class="p">::</span><span class="mi">2</span><span class="p">]))</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">zp_sn_mac</span>
+
+    <span class="k">def</span> <span class="nf">_count_data_sent</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">capture</span><span class="p">,</span> <span class="n">source_mac</span><span class="p">,</span> <span class="n">dest_mac</span><span class="p">,</span>
+                         <span class="n">qos</span><span class="p">,</span> <span class="n">bssid</span><span class="p">,</span> <span class="n">min_packet_size</span><span class="o">=</span><span class="mi">1000</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to count the number of qos data packets</span>
+<span class="sd">        found in the capture that matches the source &amp; destination mac</span>
+<span class="sd">        and bssid supplied and meets the min_packet_size.</span>
+
+<span class="sd">        :param capture: pyshark FileCapture class with</span>
+<span class="sd">            only_summaries == False (default)</span>
+<span class="sd">        :type capture: :class: `pyshark.capture.file_capture.FileCapture`</span>
+<span class="sd">        :param source_mac: source mac address</span>
+<span class="sd">        :type source_mac: :obj:`str`</span>
+<span class="sd">        :param dest_mac: destination mac address</span>
+<span class="sd">        :type dest_mac: :obj:`str`</span>
+<span class="sd">        :param qos: flag to indicate to check qos data vs. regular data</span>
+<span class="sd">        :type qos: :obj:`bool`</span>
+<span class="sd">        :param bssid: wlan.bssid in packet</span>
+<span class="sd">        :type bssid: :obj:`str`</span>
+<span class="sd">        :param min_packet_size: minimum packet size for packet to be</span>
+<span class="sd">            counted. For group audio, packet size is about 1168.</span>
+<span class="sd">        :type min_packet_size: :obj:`int` or 1000</span>
+<span class="sd">        :return: number of packets found sent to dest_mac and is</span>
+<span class="sd">            at least min_packet_size in byte length</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">packet</span> <span class="ow">in</span> <span class="n">capture</span><span class="p">:</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">da</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">dest_mac</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span>
+                    <span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">source_mac</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span>
+                    <span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">bssid</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">==</span> <span class="n">bssid</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">and</span>
+                    <span class="nb">int</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">length</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">min_packet_size</span><span class="p">):</span>
+                <span class="c1"># data packets routed through AP do not have qos</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">qos</span><span class="p">:</span>
+                    <span class="n">count</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">fc_type_subtype</span><span class="p">)</span> <span class="o">==</span> <span class="nb">int</span><span class="p">(</span><span class="mh">0x28</span><span class="p">)</span> <span class="ow">and</span>
+                            <span class="nb">int</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">qos_priority</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+                        <span class="n">count</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Qos set to </span><span class="si">{}</span><span class="s1"> in counting packets&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">qos</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Found </span><span class="si">{}</span><span class="s1"> data packets with size greater than &#39;</span>
+                         <span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> bytes sent to </span><span class="si">{}</span><span class="s1"> from </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                         <span class="s1">&#39;via bssid </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">count</span><span class="p">,</span>
+                                               <span class="n">min_packet_size</span><span class="p">,</span>
+                                               <span class="n">dest_mac</span><span class="p">,</span>
+                                               <span class="n">source_mac</span><span class="p">,</span>
+                                               <span class="n">bssid</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">count</span>
+
+    <span class="k">def</span> <span class="nf">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the send_list, no_send_list,</span>
+<span class="sd">        and via_ap_no_send_list when direct routing is enabled.</span>
+
+<span class="sd">        :param gms: zp group members</span>
+<span class="sd">        :type gms: :obj: `list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: dictionary of lists</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">via_ap_no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="n">send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">via_ap_no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">via_ap_no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;send_list&#39;</span><span class="p">:</span> <span class="n">send_list</span><span class="p">,</span>
+                <span class="s1">&#39;no_send_list&#39;</span><span class="p">:</span> <span class="n">no_send_list</span><span class="p">,</span>
+                <span class="s1">&#39;via_ap_no_send_list&#39;</span><span class="p">:</span> <span class="n">via_ap_no_send_list</span><span class="p">}</span>
+
+    <span class="c1"># noinspection PyUnusedLocal</span>
+    <span class="k">def</span> <span class="nf">_get_dr_disable_lists</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to return the send_list, no_send_list,</span>
+<span class="sd">        via_ap_no_send_list, via_ap_send_list, and zb_send_list</span>
+<span class="sd">        when direct routing is disabled.</span>
+
+<span class="sd">        :param gms: zp group members</span>
+<span class="sd">        :type gms: :obj: `list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: dictionary of lists</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">via_ap_no_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">via_ap_send_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gms</span><span class="p">:</span>
+            <span class="n">no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">via_ap_no_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">via_ap_send_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;send_list&#39;</span><span class="p">:</span> <span class="p">[],</span>
+                <span class="s1">&#39;no_send_list&#39;</span><span class="p">:</span> <span class="n">no_send_list</span><span class="p">,</span>
+                <span class="s1">&#39;via_ap_no_send_list&#39;</span><span class="p">:</span> <span class="n">via_ap_no_send_list</span><span class="p">,</span>
+                <span class="s1">&#39;via_ap_send_list&#39;</span><span class="p">:</span> <span class="n">via_ap_send_list</span><span class="p">}</span>
+
+    <span class="k">def</span> <span class="nf">_run_sniffer_analysis</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+            <span class="n">sniff_start_delay</span><span class="p">,</span> <span class="n">via_ap_send_list</span><span class="p">,</span> <span class="n">via_ap_no_send_list</span><span class="p">,</span> <span class="n">gc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to run analysis of generic multicast or</span>
+<span class="sd">        unicast group playback test with wireless sniffer verification points.</span>
+<span class="sd">        Start sniffer capture, filtering on packets sent only by the GC</span>
+<span class="sd">        via the AP or via direct route</span>
+<span class="sd">        Then verify that GC is sending audio packets wirelessly to the</span>
+<span class="sd">        send_list of destination mac ZPs, and not sending audio packets</span>
+<span class="sd">        wirelessly to the no_send_list of destination mac ZPs via direct</span>
+<span class="sd">        route.</span>
+<span class="sd">        Then verify that GC is sending audio packets wirelessly to the</span>
+<span class="sd">        send_list of destination mac ZPs, and not sending audio packets</span>
+<span class="sd">        wirelessly to the no_send_list of destination mac ZPs via AP.</span>
+
+<span class="sd">        :param name: name of test. also used for name of capture file.</span>
+<span class="sd">        :type name: :obj:`str`</span>
+<span class="sd">        :param gc_mac: group coordinator mac address</span>
+<span class="sd">        :type gc_mac: :obj:`str`</span>
+<span class="sd">        :param send_list: list of mac addresses sent by GC</span>
+<span class="sd">        :type send_list: :obj:`list`</span>
+<span class="sd">        :param no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">        :type no_send_list: :obj:`list`</span>
+<span class="sd">        :param sniff_start_delay: additional delay in seconds to start</span>
+<span class="sd">            sniffing after playback has started</span>
+<span class="sd">        :type sniff_start_delay: :obj:`int`</span>
+<span class="sd">        :param via_ap_send_list: list of mac addresses sent by GC through</span>
+<span class="sd">            the AP</span>
+<span class="sd">        :type via_ap_send_list: :obj:`list`</span>
+<span class="sd">        :param via_ap_no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">            through the AP</span>
+<span class="sd">        :type via_ap_no_send_list: :obj:`list`</span>
+<span class="sd">        :param gc: dut group coordinator</span>
+<span class="sd">        :type gc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        set capture filter to grab data packets sent by GC serial mac</span>
+<span class="sd">        (sent via AP) or by GC direct routing ath0 mac</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">gc_sn_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gc</span><span class="p">)</span>
+        <span class="n">cap_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;type data and &#39;</span>
+                      <span class="s1">&#39;(wlan addr2 </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                      <span class="s1">&#39;or wlan addr2 </span><span class="si">{}</span><span class="s1">)&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_mac</span><span class="p">,</span> <span class="n">gc_sn_mac</span><span class="p">)</span>
+        <span class="n">cap_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">sniff_start_delay</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">)</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">cap_file</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Filtered capture file </span><span class="si">{}</span><span class="s1"> with filter set to &#39;</span>
+                         <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cap_file</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">))</span>
+        <span class="c1"># verify that station mode GC direct routing mac is not sending audio</span>
+        <span class="c1"># to the zp macs listed in the no_send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">no_send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">)</span> <span class="o">&lt;</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">NON_PLAYBACK_PCK_THRESHOLD</span><span class="p">),</span>
+                <span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is NOT sending wirelessly to ZP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">))</span>
+        <span class="c1"># verify that station mode GC direct routing mac is sending audio</span>
+        <span class="c1"># to the zp macs listed in the no_send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span>
+                <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">)</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">PLAYBACK_PCKT_THRESHOLD</span><span class="p">,</span>
+                <span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is sending wirelessly to ZP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">gc_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">))</span>
+        <span class="c1"># verify that station mode GC is not sending audio</span>
+        <span class="c1"># via the AP to the zp macs listed in the via_ap_no_send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">via_ap_no_send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">gc_sn_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">)</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">NON_PLAYBACK_PCK_THRESHOLD</span><span class="p">,</span>
+                <span class="p">(</span><span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is NOT sending wirelessly to ZP </span><span class="si">{}</span><span class="s1"> via AP &#39;</span>
+                    <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_sn_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">)))</span>
+        <span class="c1"># verify that station mode GC is sending audio</span>
+        <span class="c1"># via the AP to the zp macs listed in the via_ap_no_send_list</span>
+        <span class="k">for</span> <span class="n">zp_mac</span> <span class="ow">in</span> <span class="n">via_ap_send_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span> <span class="n">gc_sn_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">)</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">PLAYBACK_PCKT_THRESHOLD</span><span class="p">,</span>
+                <span class="s1">&#39;Verify GC </span><span class="si">{}</span><span class="s1"> is sending wirelessly to ZP </span><span class="si">{}</span><span class="s1"> via AP </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">gc_sn_mac</span><span class="p">,</span> <span class="n">zp_mac</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">))</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="n">wire_list</span><span class="p">,</span> <span class="n">send_list</span><span class="p">,</span>
+            <span class="n">no_send_list</span><span class="p">,</span> <span class="n">dynamic_dr_list</span><span class="o">=</span><span class="p">[],</span> <span class="n">sniff_start_delay</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+            <span class="n">via_ap_send_list</span><span class="o">=</span><span class="p">[],</span> <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="p">[]):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Run basic group playback test.</span>
+
+<span class="sd">        :param gms: zp group memebers</span>
+<span class="sd">        :type gms: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param test_name: name of test. also used for name of capture file.</span>
+<span class="sd">        :type test_name: :obj:`str`</span>
+<span class="sd">        :param zp_wire_list: list of ZPs whose ethernet wire will be</span>
+<span class="sd">            enabled. All other ZPs in the testbeds/HH will have disabled</span>
+<span class="sd">            ethernet.</span>
+<span class="sd">        :type zp_wire_list: :obj:`list` of</span>
+<span class="sd">            :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param send_list: list of mac addresses sent by GC</span>
+<span class="sd">        :type send_list: :obj:`list`</span>
+<span class="sd">        :param no_send_list: list of mac addresses not sent by GC</span>
+<span class="sd">        :type no_send_list: :obj:`list`</span>
+<span class="sd">        :param dynamic_dr_list: list of :data:`DRInfo`</span>
+<span class="sd">            :class:`collections.namedtuple`. this is used to specify changing</span>
+<span class="sd">            the direct routing state of the group after playback has started.</span>
+<span class="sd">        :type dynamic_dr_list: :obj:`list` or []</span>
+<span class="sd">        :param sniff_start_delay: additional delay in seconds to start</span>
+<span class="sd">            sniffing after playback has started</span>
+<span class="sd">        :type sniff_start_delay: :obj:`int` or 0</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">zp_test_group</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="n">gms</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_devices_ready</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">begin_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">dr_set</span> <span class="ow">in</span> <span class="n">dynamic_dr_list</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">dr_set</span><span class="o">.</span><span class="n">settestpoint_cmds</span><span class="p">,</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span>
+                            <span class="n">dr_set</span><span class="o">.</span><span class="n">peer</span><span class="p">,</span>
+                            <span class="n">dr_set</span><span class="o">.</span><span class="n">is_dr_enabled</span><span class="p">,</span>
+                            <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="n">gc_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_sniffer_analysis</span><span class="p">(</span><span class="n">test_name</span><span class="p">,</span> <span class="n">gc_mac</span><span class="p">,</span>
+                                   <span class="n">send_list</span><span class="p">,</span> <span class="n">no_send_list</span><span class="p">,</span>
+                                   <span class="n">sniff_start_delay</span><span class="p">,</span>
+                                   <span class="n">via_ap_send_list</span><span class="o">=</span><span class="n">via_ap_send_list</span><span class="p">,</span>
+                                   <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="n">via_ap_no_send_list</span><span class="p">,</span>
+                                   <span class="n">gc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_watching_for_sync_error</span><span class="p">(</span><span class="n">zp_test_group</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_run_playback_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DirectRoutingSTA</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">_run_playback_dr_disabled</span><span class="p">(</span><span class="n">gc</span><span class="p">,</span> <span class="n">gms</span><span class="p">,</span>
+            <span class="n">test_name</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="p">[],</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_disable_lists</span><span class="p">(</span><span class="n">gms</span><span class="p">))</span>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_25_descend_to_18"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_25_descend_to_18">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_25_descend_to_18</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is enabled between the pairs when RSSI descends</span>
+<span class="sd">        from 26 to 19. When RSSI is 18, direct routing should be disabled.</span>
+<span class="sd">        P-11813</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_descend_rssi_test</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_18_ascend_to_25"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_18_ascend_to_25">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_18_ascend_to_25</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is disabled between the pairs when RSSI ascends</span>
+<span class="sd">        from 18 to 24 inclusive. Direct routing should be enabled when</span>
+<span class="sd">        RSSI reaches 25.</span>
+<span class="sd">        P-11812</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_ascend_rssi_test</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_dr_disabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_dr_disabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is disabled between the pairs when RSSI is 18.</span>
+<span class="sd">        Also checks that the uplink port has the correct mac for the AP</span>
+<span class="sd">        P-11809 and P-12001</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_dr_state_check</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_dr_enabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_dr_enabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_dr_enabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        A combinatorial test for each pair of devices to verify that</span>
+<span class="sd">        direct routing is enabled between the pairs when RSSI is 26.</span>
+<span class="sd">        Also checks that the uplink port has the correct mac for the AP</span>
+<span class="sd">        P-11807 and P-12001</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_dr_state_check</span><span class="p">(</span><span class="mi">26</span><span class="p">,</span> <span class="kc">True</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_uc_pb_dr_enabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_uc_pb_dr_enabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_pb_dr_enabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        a wireless GM for playback will use direct routing</span>
+<span class="sd">        when RSSI &gt; 26 between the GC an GM.</span>
+<span class="sd">        In Qmetry: P-11814: Playback - Unicast DR enabled</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_uc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                              <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">,</span> <span class="p">[],</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_uc_pb_dr_disabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_uc_pb_dr_disabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_uc_pb_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        a wireless GM for playback will not use direct routing</span>
+<span class="sd">        when RSSI less than 19 between the GC an GM.</span>
+<span class="sd">        In Qmetry: P-11815: Playback - Unicast DR disabled</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_rssi_18_uc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                                      <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_playback_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_uc_dynamic_disable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_uc_dynamic_disable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_uc_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with a wireless</span>
+<span class="sd">        GM for playback where the RSSI is initially greater than 25</span>
+<span class="sd">        (direct routing enabled) will disable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GM decreases to</span>
+<span class="sd">        less than 19.</span>
+<span class="sd">        In Qmetry: P-11817: Playback - Unicast DR dynamic disable</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_uc_dynamic_disable&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_uc_dynamic_enable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_uc_dynamic_enable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_uc_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with a wireless</span>
+<span class="sd">        GM for playback where the RSSI is initially less than 19</span>
+<span class="sd">        (direct routing disabled) will enable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GM increases to</span>
+<span class="sd">        greater than 25.</span>
+<span class="sd">        In Qmetry: P-11816: Playback - Unicast DR dynamic enable</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_uc_dynamic_enable&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">test_name</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_mc_pb_dr_enabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_mc_pb_dr_enabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_pb_dr_enabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback will use direct routing</span>
+<span class="sd">        when RSSI &gt; 26 between the GC and GMs.</span>
+<span class="sd">        In Qmetry: P-11801: GC + GMs (both DR enabled)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_mc_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                              <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+                                              <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="p">[],</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_enable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_mc_pb_dr_disabled"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_mc_pb_dr_disabled">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_pb_dr_disabled</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback will not use</span>
+<span class="sd">        direct routing when RSSI is less than 19 between the GC and GMs.</span>
+<span class="sd">        GC will route audio to the GMs via the AP.</span>
+<span class="sd">        In Qmetry: P-11802: GC + GMs (both DR=0)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_rssi_18_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;RSSI between GC </span><span class="si">{}</span><span class="s1"> and GMs </span><span class="si">{}</span><span class="s1"> &#39;</span>
+             <span class="s1">&#39;is less than 19&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">:</span>
+            <span class="n">cmd_list</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="s1">&#39;ath0 fixedrssi </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DIRECT_ROUTING_ENABLED_RSSI</span><span class="p">),</span>
+                <span class="s1">&#39;ath0 </span><span class="si">{}</span><span class="s1"> 8&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">))]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm</span><span class="p">,</span> <span class="kc">False</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="p">[],</span>
+             <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_dr_disable_lists</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_mc_pb_mixed_dr"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_mc_pb_mixed_dr">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_pb_mixed_dr</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless DUT GC when grouped with</span>
+<span class="sd">        2 wireless GMs for playback where one GM has RSSI</span>
+<span class="sd">        of less than 19 and the other GM has RSSI greater than 25,</span>
+<span class="sd">        then the GM will direct route to the GM with direct routing</span>
+<span class="sd">        enabled (&gt;25), and send via AP to the other GM (rssi 18).</span>
+<span class="sd">        In Qmetry: P-11803: GC + GMs (1 DR enabled, 1 DR disabled)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM with RSSI greater than 25: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GM with RSSI less than 19: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_GC</span><span class="si">{}</span><span class="s1">_dr3GM</span><span class="si">{}</span><span class="s1">_dr0GM</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="n">send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span>
+        <span class="n">no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="n">via_ap_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">])]</span>
+        <span class="n">via_ap_no_send_list</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">])]</span>
+        <span class="n">cmd_list</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;ath0 fixedrssi </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DIRECT_ROUTING_ENABLED_RSSI</span><span class="p">),</span>
+            <span class="s1">&#39;ath0 </span><span class="si">{}</span><span class="s1"> 8&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]))]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="kc">False</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">([],</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_group_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">,</span> <span class="p">[],</span> <span class="n">send_list</span><span class="p">,</span>
+            <span class="n">no_send_list</span><span class="p">,</span> <span class="n">via_ap_no_send_list</span><span class="o">=</span><span class="n">via_ap_no_send_list</span><span class="p">,</span>
+            <span class="n">via_ap_send_list</span><span class="o">=</span><span class="n">via_ap_send_list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_mc_dynamic_enable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_mc_dynamic_enable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_mc_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wireless</span>
+<span class="sd">        GMs for playback where the RSSI is initially less than 19</span>
+<span class="sd">        (direct routing disabled) will enable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GMs increase to</span>
+<span class="sd">        greater than 25.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_mc_dynamic_enable&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_enable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_rssi_mc_dynamic_disable"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_rssi_mc_dynamic_disable">[docs]</a>    <span class="k">def</span> <span class="nf">test_rssi_mc_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that a wireless GC when grouped with 2 wireless</span>
+<span class="sd">        GMs for playback where the RSSI is initially greater than 25</span>
+<span class="sd">        (direct routing enabled) will disable direct routing</span>
+<span class="sd">        dynamically as the RSSI between the GC and GMs decrease to</span>
+<span class="sd">        less than 19.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;sta_GC</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_GM</span><span class="si">{}</span><span class="s1">_rssi_mc_dynamic_disable&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_run_pb_rssi_dynamic_disable</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">test_name</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_mc_group_join_msg_freq"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_mc_group_join_msg_freq">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_group_join_msg_freq</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that when gms are grouped with a GC, each GM will</span>
+<span class="sd">        send out a multicast join message every 5 seconds.</span>
+<span class="sd">        In Qmetry: P-13553 Multicast group join messages frequency</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="n">test_name</span> <span class="o">=</span> <span class="s1">&#39;mc_group_join_msg_freq_gc_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">do_playback</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">cap_filter</span> <span class="o">=</span> <span class="s1">&#39;type data and len &lt; 200&#39;</span>
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan.fc.ds==1 &amp;&amp; wlan.fc.retry==0&#39;</span>
+        <span class="n">cap_file</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span><span class="n">test_name</span><span class="p">,</span>
+                                       <span class="n">sniff_start_delay</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                                       <span class="n">cap_filter</span><span class="o">=</span><span class="n">cap_filter</span><span class="p">,</span>
+                                       <span class="n">sniff_time</span><span class="o">=</span><span class="n">MC_JOIN_MSG_TEST_TIME</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Filtered capture file </span><span class="si">{}</span><span class="s1"> with filter set to &#39;</span>
+                         <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">cap_file</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">))</span>
+        <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">cap_file</span><span class="p">,</span> <span class="n">display_filter</span><span class="p">)</span>
+        <span class="n">dest_mac</span> <span class="o">=</span> <span class="s1">&#39;ff:ff:ff:ff:ff:ff&#39;</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">:</span>
+            <span class="n">gm_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span>
+            <span class="n">seen_mc_join_msg</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span>
+                                                     <span class="n">gm_mac</span><span class="p">,</span>
+                                                     <span class="n">dest_mac</span><span class="p">,</span>
+                                                     <span class="kc">False</span><span class="p">,</span>
+                                                     <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span><span class="p">,</span>
+                                                     <span class="n">JOIN_MSG_MIN_SIZE</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span><span class="p">(</span><span class="n">seen_mc_join_msg</span><span class="p">,</span>
+                                              <span class="n">MIN_MC_JOIN_MSG</span><span class="p">,</span>
+                                              <span class="s2">&quot;Verify GM </span><span class="si">{}</span><span class="s2"> is sending &quot;</span>
+                                              <span class="s2">&quot;multicast join &quot;</span>
+                                              <span class="s2">&quot;messages&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm</span><span class="p">))</span>
+            <span class="n">gm</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">leave_group_and_wait</span><span class="p">()</span>
+        <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_mc_group_join_max_age"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_mc_group_join_max_age">[docs]</a>    <span class="k">def</span> <span class="nf">test_mc_group_join_max_age</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that the multicast group join messages max age is 120 secs.</span>
+<span class="sd">        In Qmetry: P-13554 Multicast group join messages max age</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_mc_fwd_db_age_out</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">MC_MAX_AGE</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless DUT GC = </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">,</span> <span class="n">do_playback</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">expected_gm_macs</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_zp_serial_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">])</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        check that gc and gms have all entries of gms in forwarding</span>
+<span class="sd">        db with max age within 100 to 120.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">brctls</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">showmacs</span><span class="p">()</span><span class="o">.</span><span class="n">mc_db</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">expected_gm_macs</span><span class="p">),</span>
+                            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+            <span class="n">entries</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">brctls</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">showmacs</span><span class="p">()</span><span class="o">.</span><span class="n">mc_db</span>
+            <span class="n">gm_macs</span> <span class="o">=</span> <span class="nb">set</span><span class="p">([</span><span class="n">entry</span><span class="o">.</span><span class="n">member</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">gm_macs</span><span class="p">,</span> <span class="n">expected_gm_macs</span><span class="p">,</span>
+                    <span class="s2">&quot;For DUT ZP </span><span class="si">{}</span><span class="s2">: Expect that group member MACs will &quot;</span>
+                    <span class="s2">&quot;be in the multicast forwarding table&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="n">gms_secs_left</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">secs_left</span><span class="p">)</span>
+                             <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">entries</span> <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">mc_mac</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="nb">all</span><span class="p">(</span><span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">MIN_MC_AGE_THRESH</span><span class="p">,</span>
+                                                     <span class="p">(</span><span class="n">MC_MAX_AGE</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
+                                          <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">gms_secs_left</span><span class="p">),</span>
+                                      <span class="s1">&#39;For DUT ZP </span><span class="si">{}</span><span class="s1">: Check that secs left &#39;</span>
+                                      <span class="s1">&#39;is within </span><span class="si">{}</span><span class="s1"> to &#39;</span>
+                                      <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                                  <span class="n">MIN_MC_AGE_THRESH</span><span class="p">,</span>
+                                                  <span class="n">MC_MAX_AGE</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">gms</span><span class="p">:</span>
+            <span class="n">gm</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">leave_group_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DirectRoutingSTA.test_station_mode_tx_rate_to_peers"><a class="viewcode-back" href="../../../networking.direct_routing.html#networking.direct_routing.test_station_mode.DirectRoutingSTA.test_station_mode_tx_rate_to_peers">[docs]</a>    <span class="nd">@skip</span><span class="p">(</span><span class="s1">&#39;Disabled until SWPBL-63410 and SWPBL-66084 are fixed.&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_station_mode_tx_rate_to_peers</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify an 11n devices uses the correct tx rates when sending data to</span>
+<span class="sd">        station mode peers with direct routing enabled or disabled. Also</span>
+<span class="sd">        verifies that the correct mcs index is selcted for 11n to 11n gms given</span>
+<span class="sd">        the corresponding number of chains (2x2, 3x3)</span>
+
+<span class="sd">        Cases which could be covered but are left out for simplicity:</span>
+<span class="sd">        - 11n GC uses the highest sopported rate (26 mbps for 11n peers and 24</span>
+<span class="sd">            for 11g) of a peer if DR is enabled</span>
+<span class="sd">        - 11n GC uses mcs 3 for 3x3 11n GMs and mcs 9 for 2x2 11n GMs</span>
+<span class="sd">        - 11g GC uses 24 mbps for all peers if DR is enabled</span>
+<span class="sd">        - if DR is not enabled all GCs use the AP rate</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sniff_time</span> <span class="o">=</span> <span class="mi">5</span>
+        <span class="n">gc_dr_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">)</span>
+        <span class="n">gc_no_dr_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">mac_address</span>
+        <span class="n">gc_type</span> <span class="o">=</span> <span class="s1">&#39;11bg&#39;</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;11n&#39;</span>
+        <span class="n">dr_capture_name</span> <span class="o">=</span> <span class="s1">&#39;station_mode_tx_rate_to_peers&#39;</span>
+        <span class="n">no_dr_capture_name</span> <span class="o">=</span> <span class="s1">&#39;station_mode_tx_rate_to_ap&#39;</span>
+        <span class="n">cap_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;type data and len &gt; 400 and wlan addr2 </span><span class="si">{}</span><span class="s1"> or &#39;</span>
+                      <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_no_dr_mac</span><span class="p">,</span> <span class="n">gc_dr_mac</span><span class="p">))</span>
+        <span class="n">base_display_filter</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;radiotap.datarate == </span><span class="si">{}</span><span class="s1"> and &#39;</span>
+                               <span class="s1">&#39;frame.len &gt;= 1000 and &#39;</span>
+                               <span class="s1">&#39;wlan.da == </span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">)</span>
+        <span class="c1"># format alias to stay under 80 chars below</span>
+        <span class="n">cds</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_count_data_sent</span>
+        <span class="n">rate_11bg</span> <span class="o">=</span> <span class="mi">24</span>
+        <span class="n">rate_11n</span> <span class="o">=</span> <span class="mi">26</span>
+        <span class="n">mcs3</span> <span class="o">=</span> <span class="mi">3</span>
+        <span class="n">mcs9</span> <span class="o">=</span> <span class="mi">9</span>
+        <span class="n">mcs_index_to_2x2_11n_peer</span> <span class="o">=</span> <span class="n">mcs3</span>
+        <span class="n">mcs_index_to_3x3_11n_peer</span> <span class="o">=</span> <span class="n">mcs9</span>
+        <span class="n">rate_ap_high_rssi</span> <span class="o">=</span> <span class="n">rate_11bg</span>
+        <span class="n">rate_ap_low_rssi</span> <span class="o">=</span> <span class="mi">12</span>
+        <span class="c1"># one 11n and one 11g device covers both cases intended to be tested</span>
+        <span class="c1"># if also checking DR0 and DR1 for a single gm, in the even the gc is</span>
+        <span class="c1"># bg only it limits the rate and we have few bg only devices in the</span>
+        <span class="c1"># testbed so pair it with 11n gms</span>
+        <span class="n">gm_pair</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">tx_rate_peers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_station_mode</span><span class="p">(</span><span class="o">*</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="n">gm_pair</span><span class="p">)))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Wireless GMs with RSSI &#39;</span>
+                         <span class="s1">&#39;greater than 25: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm_pair</span><span class="p">))</span>
+        <span class="n">cmd_list</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;ath0 fixedrssi </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DIRECT_ROUTING_ENABLED_RSSI</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">)</span>
+        <span class="n">both_gm_dr_enabled_capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span>
+            <span class="n">dr_capture_name</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">cap_filter</span><span class="p">,</span> <span class="n">sniff_time</span><span class="p">)</span>
+        <span class="n">info_str</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;with direct routing </span><span class="si">{}</span><span class="s1">, should have captured at least </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                    <span class="s1">&#39;frames at tx rate </span><span class="si">{}</span><span class="s1"> mbps, from GC </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1"> to GM </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gm_pair</span><span class="p">:</span>
+            <span class="n">gm_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span>
+            <span class="n">gm_type</span> <span class="o">=</span> <span class="s1">&#39;11bg&#39;</span> <span class="k">if</span> <span class="n">gm</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;11n&#39;</span>
+            <span class="k">if</span> <span class="n">gc_type</span> <span class="o">==</span> <span class="s1">&#39;11bg&#39;</span> <span class="ow">or</span> <span class="n">gm</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">():</span>
+                <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11bg</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11n</span>
+                <span class="n">chaininfo</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">gm</span><span class="p">]</span><span class="o">.</span><span class="n">getrfchains</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">chaininfo</span><span class="p">[</span><span class="s2">&quot;tx&quot;</span><span class="p">][</span><span class="s2">&quot;count&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+                    <span class="n">mcs_index</span> <span class="o">=</span> <span class="n">mcs_index_to_2x2_11n_peer</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">mcs_index</span> <span class="o">=</span> <span class="n">mcs_index_to_3x3_11n_peer</span>
+            <span class="n">da_of_audio</span> <span class="o">=</span> <span class="n">gm_mac</span>
+            <span class="n">display_filter</span> <span class="o">=</span> <span class="n">base_display_filter</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rate</span><span class="p">,</span> <span class="n">da_of_audio</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">rate</span> <span class="o">==</span> <span class="n">rate_11n</span><span class="p">:</span>
+                <span class="n">display_filter</span> <span class="o">+=</span> <span class="s1">&#39; and radiotap.mcs.index == </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                                    <span class="n">mcs_index</span><span class="p">)</span>
+                <span class="n">verification_str</span> <span class="o">=</span> <span class="n">info_str</span> <span class="o">+</span> <span class="s1">&#39; at mcs index </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                                    <span class="n">mcs_index</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">verification_str</span> <span class="o">=</span> <span class="n">info_str</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">input_file</span><span class="o">=</span><span class="n">both_gm_dr_enabled_capture</span><span class="p">,</span>
+                                          <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+            <span class="n">num_expected_rate_frames_captured</span> <span class="o">=</span> <span class="n">cds</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span>
+                                                    <span class="n">gc_dr_mac</span><span class="p">,</span>
+                                                    <span class="n">gm_mac</span><span class="p">,</span>
+                                                    <span class="mi">0</span><span class="p">,</span>
+                                                    <span class="n">gm_mac</span><span class="p">)</span>
+            <span class="n">min_expected_num_frames</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">GROUPED_PLAYBACK_FRAME_RATE</span> <span class="o">*</span> <span class="n">sniff_time</span> <span class="o">*</span> <span class="mf">0.7</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+                <span class="n">num_expected_rate_frames_captured</span><span class="p">,</span>
+                <span class="n">min_expected_num_frames</span><span class="p">,</span>
+                <span class="n">verification_str</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;enabled&#39;</span><span class="p">,</span> <span class="n">min_expected_num_frames</span><span class="p">,</span>
+                                        <span class="n">rate</span><span class="p">,</span> <span class="n">gc_type</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_type</span><span class="p">,</span> <span class="n">gm</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="n">cmd_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;ath0 </span><span class="si">{}</span><span class="s1"> 8&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">])))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;Wireless GM with RSSI less than 19: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="kc">True</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_dr</span><span class="p">(</span><span class="n">cmd_list</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="kc">False</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">180</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">)</span>
+        <span class="n">one_gc_dr_enabled_capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span>
+            <span class="n">no_dr_capture_name</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">cap_filter</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_dr_mac</span><span class="p">,</span> <span class="n">gc_no_dr_mac</span><span class="p">),</span>
+            <span class="n">sniff_time</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gm_pair</span><span class="p">:</span>
+            <span class="n">gm_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span>
+            <span class="n">gm_type</span> <span class="o">=</span> <span class="s1">&#39;11bg&#39;</span> <span class="k">if</span> <span class="n">gm</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;11n&#39;</span>
+            <span class="k">if</span> <span class="n">gc_type</span> <span class="o">==</span> <span class="s1">&#39;11bg&#39;</span> <span class="ow">or</span> <span class="n">gm</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">():</span>
+                <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11bg</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11n</span>
+                <span class="n">chaininfo</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">gm</span><span class="p">]</span><span class="o">.</span><span class="n">getrfchains</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">chaininfo</span><span class="p">[</span><span class="s2">&quot;tx&quot;</span><span class="p">][</span><span class="s2">&quot;count&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+                    <span class="n">mcs_index</span> <span class="o">=</span> <span class="n">mcs_index_to_2x2_11n_peer</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">mcs_index</span> <span class="o">=</span> <span class="n">mcs_index_to_3x3_11n_peer</span>
+            <span class="k">if</span> <span class="n">gm</span> <span class="o">==</span> <span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+                <span class="n">dr_enabled</span> <span class="o">=</span> <span class="s1">&#39;disabled&#39;</span>
+                <span class="n">ta_of_audio</span> <span class="o">=</span> <span class="n">gc_no_dr_mac</span>
+                <span class="n">da_of_audio</span> <span class="o">=</span> <span class="n">gm</span><span class="o">.</span><span class="n">mac_address</span>
+                <span class="n">bssid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span>
+                <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11bg</span>
+                <span class="n">verification_str</span> <span class="o">=</span> <span class="n">info_str</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">dr_enabled</span> <span class="o">=</span> <span class="s1">&#39;enabled&#39;</span>
+                <span class="n">ta_of_audio</span> <span class="o">=</span> <span class="n">gc_dr_mac</span>
+                <span class="n">da_of_audio</span> <span class="o">=</span> <span class="n">gm_mac</span>
+                <span class="n">bssid</span> <span class="o">=</span> <span class="n">gm_mac</span>
+            <span class="n">display_filter</span> <span class="o">=</span> <span class="n">base_display_filter</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rate</span><span class="p">,</span> <span class="n">da_of_audio</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">rate</span> <span class="o">==</span> <span class="n">rate_11n</span><span class="p">:</span>
+                <span class="n">display_filter</span> <span class="o">+=</span> <span class="s1">&#39; and radiotap.mcs.index == </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                                    <span class="n">mcs_index</span><span class="p">)</span>
+                <span class="n">verification_str</span> <span class="o">=</span> <span class="n">info_str</span> <span class="o">+</span> <span class="s1">&#39; at mcs index </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                                                    <span class="n">mcs_index</span><span class="p">)</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">one_gc_dr_enabled_capture</span><span class="p">,</span>
+                                          <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+            <span class="n">num_expected_rate_frames_captured</span> <span class="o">=</span> <span class="n">cds</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span>
+                                                    <span class="n">ta_of_audio</span><span class="p">,</span>
+                                                    <span class="n">da_of_audio</span><span class="p">,</span>
+                                                    <span class="mi">0</span><span class="p">,</span>
+                                                    <span class="n">bssid</span><span class="p">)</span>
+            <span class="n">min_expected_num_frames</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">GROUPED_PLAYBACK_FRAME_RATE</span> <span class="o">*</span> <span class="n">sniff_time</span> <span class="o">*</span> <span class="mf">0.7</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrFailCase</span><span class="p">(</span>
+                <span class="n">num_expected_rate_frames_captured</span><span class="p">,</span>
+                <span class="n">min_expected_num_frames</span><span class="p">,</span>
+                <span class="n">verification_str</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dr_enabled</span><span class="p">,</span> <span class="n">min_expected_num_frames</span><span class="p">,</span>
+                                        <span class="n">rate</span><span class="p">,</span> <span class="n">gc_type</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_type</span><span class="p">,</span> <span class="n">gm</span><span class="p">))</span>
+        <span class="n">ap_dump</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">get_connected_stations</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_dev</span><span class="p">)</span>
+        <span class="n">gc_station_info</span> <span class="o">=</span> <span class="p">[</span><span class="n">station_info</span> <span class="k">for</span> <span class="n">station_info</span> <span class="ow">in</span> <span class="n">ap_dump</span> <span class="k">if</span>
+                           <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">station_info</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">ap_gc_rx_rate</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">gc_station_info</span><span class="o">.</span><span class="n">rx_bitrate</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">gc_reported_tx_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_station</span><span class="p">()</span><span class="o">.</span><span class="n">_sta_tx_rate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">rate_ap_high_rssi</span><span class="p">,</span> <span class="n">ap_gc_rx_rate</span><span class="p">,</span>
+            <span class="s1">&#39;when direct routing is disabled gc </span><span class="si">{}</span><span class="s1"> should use tx rate </span><span class="si">{}</span><span class="s1"> mbps, &#39;</span>
+            <span class="s1">&#39;ap reporting gc station using tx rate </span><span class="si">{}</span><span class="s1"> mbps&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                    <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">rate_ap_high_rssi</span><span class="p">,</span> <span class="n">ap_gc_rx_rate</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">rate_ap_high_rssi</span><span class="p">,</span> <span class="n">gc_reported_tx_rate</span><span class="p">,</span>
+            <span class="s1">&#39;when direct routing is disabled gc </span><span class="si">{}</span><span class="s1"> should use tx rate </span><span class="si">{}</span><span class="s1"> mbps, &#39;</span>
+            <span class="s1">&#39;gc station page reporting tx rate </span><span class="si">{}</span><span class="s1"> mbps&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">rate_ap_high_rssi</span><span class="p">,</span> <span class="n">gc_reported_tx_rate</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">cmd_list</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;ath0 fixedrssi </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">DIRECT_ROUTING_DISABLED_RSSI</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">]</span><span class="o">.</span><span class="n">settestpoint</span><span class="p">(</span><span class="o">*</span><span class="n">cmd_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;All wireless links with RSSI less than 19: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gm_pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="c1"># wait at least 60 seconds for the TX rate of the dut to the AP to</span>
+        <span class="c1"># change to the fall back rate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_group_and_start_playback</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_pair</span><span class="p">)</span>
+        <span class="n">wait_until_true</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_station</span><span class="p">()</span><span class="o">.</span><span class="n">_sta_tx_rate</span> <span class="o">==</span> <span class="n">rate_ap_low_rssi</span><span class="p">,</span>
+            <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+            <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">180</span><span class="p">,</span>
+            <span class="n">reason</span><span class="o">=</span><span class="p">(</span><span class="s1">&#39;dut </span><span class="si">{}</span><span class="s1"> should have changed tx rate to AP to 12 mbps after &#39;</span>
+                    <span class="s1">&#39;settings fixed RSSI below 19&#39;</span><span class="p">))</span>
+        <span class="n">low_ap_rssi_capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_start_sniffer</span><span class="p">(</span>
+            <span class="n">no_dr_capture_name</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">cap_filter</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">gc_dr_mac</span><span class="p">,</span> <span class="n">gc_no_dr_mac</span><span class="p">),</span>
+            <span class="n">sniff_time</span><span class="p">)</span>
+        <span class="n">info_str</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="s1">&#39;with direct routing disabled and RSSI to AP is below 19, should &#39;</span>
+            <span class="s1">&#39;not have captured </span><span class="si">{}</span><span class="s1"> frames at tx rate </span><span class="si">{}</span><span class="s1"> mbps, from GC </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1"> to &#39;</span>
+            <span class="s1">&#39;GM </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">gm</span> <span class="ow">in</span> <span class="n">gm_pair</span><span class="p">:</span>
+            <span class="n">gm_mac</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_ath0_dr_mac</span><span class="p">(</span><span class="n">gm</span><span class="p">)</span>
+            <span class="n">gm_type</span> <span class="o">=</span> <span class="s1">&#39;11bg&#39;</span> <span class="k">if</span> <span class="n">gm</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;11n&#39;</span>
+            <span class="n">dr_enabled</span> <span class="o">=</span> <span class="s1">&#39;disabled&#39;</span>
+            <span class="n">ta_of_audio</span> <span class="o">=</span> <span class="n">gc_no_dr_mac</span>
+            <span class="n">da_of_audio</span> <span class="o">=</span> <span class="n">gm</span><span class="o">.</span><span class="n">mac_address</span>
+            <span class="n">bssid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap_mac</span>
+            <span class="n">rate</span> <span class="o">=</span> <span class="n">rate_11bg</span>
+            <span class="n">display_filter</span> <span class="o">=</span> <span class="n">base_display_filter</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rate</span><span class="p">,</span> <span class="n">da_of_audio</span><span class="p">)</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">FileCapture</span><span class="p">(</span><span class="n">low_ap_rssi_capture</span><span class="p">,</span>
+                                          <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+            <span class="n">num_expected_rate_frames_captured</span> <span class="o">=</span> <span class="n">cds</span><span class="p">(</span><span class="n">capture</span><span class="p">,</span>
+                                                    <span class="n">ta_of_audio</span><span class="p">,</span>
+                                                    <span class="n">da_of_audio</span><span class="p">,</span>
+                                                    <span class="mi">0</span><span class="p">,</span>
+                                                    <span class="n">bssid</span><span class="p">)</span>
+            <span class="n">min_expected_num_frames</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">GROUPED_PLAYBACK_FRAME_RATE</span> <span class="o">*</span> <span class="n">sniff_time</span> <span class="o">*</span> <span class="mf">0.7</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span>
+                <span class="n">num_expected_rate_frames_captured</span><span class="p">,</span>
+                <span class="n">min_expected_num_frames</span><span class="p">,</span>
+                <span class="n">info_str</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">min_expected_num_frames</span><span class="p">,</span> <span class="n">rate</span><span class="p">,</span>
+                                <span class="n">gc_type</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">gm_type</span><span class="p">,</span> <span class="n">gm</span><span class="p">))</span>
+        <span class="n">ap_dump</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ap</span><span class="o">.</span><span class="n">get_connected_stations</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ap_dev</span><span class="p">)</span>
+        <span class="n">gc_station_info</span> <span class="o">=</span> <span class="p">[</span><span class="n">station_info</span> <span class="k">for</span> <span class="n">station_info</span> <span class="ow">in</span> <span class="n">ap_dump</span> <span class="k">if</span>
+                           <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">station_info</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">ap_gc_rx_rate</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">gc_station_info</span><span class="o">.</span><span class="n">rx_bitrate</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]))</span>
+        <span class="n">gc_reported_tx_rate</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_station</span><span class="p">()</span><span class="o">.</span><span class="n">_sta_tx_rate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">rate_ap_low_rssi</span><span class="p">,</span> <span class="n">ap_gc_rx_rate</span><span class="p">,</span>
+            <span class="s1">&#39;when direct routing is disabled and the RSSI to the AP is below &#39;</span>
+            <span class="s1">&#39;19, gc </span><span class="si">{}</span><span class="s1"> should use tx rate </span><span class="si">{}</span><span class="s1"> mbps to AP, ap reporting gc &#39;</span>
+            <span class="s1">&#39;station using tx rate </span><span class="si">{}</span><span class="s1"> mbps&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">rate_ap_low_rssi</span><span class="p">,</span>
+                                           <span class="n">ap_gc_rx_rate</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">rate_ap_low_rssi</span><span class="p">,</span> <span class="n">gc_reported_tx_rate</span><span class="p">,</span>
+            <span class="s1">&#39;when direct routing is disabled gc </span><span class="si">{}</span><span class="s1"> should use tx rate </span><span class="si">{}</span><span class="s1"> mbps, &#39;</span>
+            <span class="s1">&#39;gc station page reporting tx rate </span><span class="si">{}</span><span class="s1"> mbps&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="p">,</span> <span class="n">rate_ap_low_rssi</span><span class="p">,</span> <span class="n">gc_reported_tx_rate</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gc</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transition_zones_to_station_mode</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">zps</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">DirectRoutingSTA</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">DirectRoutingSTA</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">SimpleUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

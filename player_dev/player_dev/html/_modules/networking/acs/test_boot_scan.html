@@ -1,0 +1,340 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.acs.test_boot_scan &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.acs.test_boot_scan</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+
+<span class="kn">from</span> <span class="nn">custom_dicts</span> <span class="k">import</span> <span class="n">FrozenAttributeDict</span>
+<span class="kn">from</span> <span class="nn">networking.acs.base</span> <span class="k">import</span> <span class="n">AcsWorkflowTestFixure</span><span class="p">,</span> <span class="n">REGION_DATA</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.mdputil</span> <span class="k">import</span> <span class="n">MdpRegion</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="n">AcsFlags</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">MDP_REGION_USA</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">StopRunningTestException</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">wifi.channels</span> <span class="k">import</span> <span class="n">channel_frequency_to_number</span>
+
+
+<span class="c1"># All relevant 5GHz channels we use as per IEEE 802.11</span>
+<span class="n">SUPERSET_5GHZ</span> <span class="o">=</span> <span class="p">[</span><span class="mi">36</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">44</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+                 <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span> <span class="mi">120</span><span class="p">,</span> <span class="mi">124</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">,</span> <span class="mi">144</span><span class="p">,</span>
+                 <span class="mi">149</span><span class="p">,</span> <span class="mi">153</span><span class="p">,</span> <span class="mi">157</span><span class="p">,</span> <span class="mi">161</span><span class="p">,</span> <span class="mi">165</span><span class="p">]</span>
+
+<span class="c1"># Used for negative cases</span>
+<span class="n">NON_PERMITTED</span> <span class="o">=</span> <span class="p">[</span><span class="mi">32</span><span class="p">,</span> <span class="mi">68</span><span class="p">,</span> <span class="mi">170</span><span class="p">]</span>
+
+<span class="c1"># NOTE: We currently do not use ch 144 as it was recently made available other</span>
+<span class="c1"># than region 3: china we also don&#39;t support 120, 124, 128 in EU because we</span>
+<span class="c1"># don&#39;t have them in US as a result of the overlap with Doppler weather radar</span>
+<span class="c1"># and we only support the higher non DFS channels for china because the effort</span>
+<span class="c1"># does not yet merit otherwise</span>
+<span class="c1"># see https://jira.sonos.com/browse/SWPBL-19744</span>
+<span class="c1"># see https://jira.sonos.com/browse/SWPBL-21319</span>
+<span class="n">USED_CHANNELS</span> <span class="o">=</span> <span class="n">FrozenAttributeDict</span><span class="p">((</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span><span class="p">,</span> <span class="p">[</span><span class="mi">36</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">44</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span>
+        <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">,</span>
+        <span class="mi">149</span><span class="p">,</span> <span class="mi">153</span><span class="p">,</span> <span class="mi">157</span><span class="p">,</span> <span class="mi">161</span><span class="p">,</span> <span class="mi">165</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">EU</span><span class="p">,</span> <span class="p">[</span><span class="mi">36</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">44</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span> <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">CHINA</span><span class="p">,</span> <span class="p">[</span><span class="mi">149</span><span class="p">,</span> <span class="mi">153</span><span class="p">,</span> <span class="mi">157</span><span class="p">,</span> <span class="mi">161</span><span class="p">,</span> <span class="mi">165</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">JAPAN</span><span class="p">,</span> <span class="p">[</span><span class="mi">36</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">44</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span>
+        <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">])))</span>
+
+<span class="n">DFS_CHANNELS</span> <span class="o">=</span> <span class="n">FrozenAttributeDict</span><span class="p">((</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span><span class="p">,</span> <span class="p">[</span><span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span> <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">,</span> <span class="mi">144</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">EU</span><span class="p">,</span> <span class="p">[</span><span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span> <span class="mi">120</span><span class="p">,</span> <span class="mi">124</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">CHINA</span><span class="p">,</span> <span class="p">[</span><span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">]),</span>
+    <span class="p">(</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">JAPAN</span><span class="p">,</span> <span class="p">[</span><span class="mi">52</span><span class="p">,</span> <span class="mi">56</span><span class="p">,</span> <span class="mi">60</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span>
+        <span class="mi">100</span><span class="p">,</span> <span class="mi">104</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">112</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span>
+        <span class="mi">132</span><span class="p">,</span> <span class="mi">136</span><span class="p">,</span> <span class="mi">140</span><span class="p">])))</span>
+
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture">[docs]</a><span class="k">class</span> <span class="nc">AcsBootScanWorkflowFixture</span><span class="p">(</span><span class="n">AcsWorkflowTestFixure</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verifies the initial ACS scan and idle CAC scan immediately following a</span>
+<span class="sd">    reboot</span>
+
+<span class="sd">    .. seealso::</span>
+
+<span class="sd">        QMetry `P8990: Boot Time Scan &lt;https://qmetry.sonos.com/qmetry/Main.php?do=mytestCaseDetailsMain&amp;type=tm&amp;linkRedirect=yes&amp;typeId=11005&gt;`_</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;HT_ACS&quot;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture.setUpFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AcsBootScanWorkflowFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">master_configure_dev_files</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">[:]:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">does_configure_dev_exist</span><span class="p">():</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_configure_dev_file</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">master_configure_dev_files</span><span class="p">[</span><span class="n">master</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">master_configure_dev_files</span><span class="p">[</span><span class="n">master</span><span class="p">]</span> <span class="o">=</span> <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                    <span class="s1">&#39;cat /jffs/system/Configure.dev&#39;</span><span class="p">)</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                <span class="s1">&#39;echo &quot;/wifi/athconfig nolenable ath1 0&quot; &gt;&gt; &#39;</span>
+                <span class="s1">&#39;/jffs/system/Configure.dev&#39;</span><span class="p">)</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;chmod +x /jffs/system/Configure.dev&#39;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrStop</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">HTControl</span><span class="o">.</span><span class="n">get_toslink_connected</span><span class="p">(),</span>
+                <span class="s2">&quot;Verify HT Master </span><span class="si">{}</span><span class="s2"> toslink input is not active&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span> <span class="o">!=</span> <span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;MDP region on </span><span class="si">{}</span><span class="s2"> was not set to USA, &quot;</span>
+                    <span class="s2">&quot;resetting it prior to running tests&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span> <span class="o">=</span> <span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">force_serial_cli</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="c1"># prevent new serial connections from logging us out after new</span>
+        <span class="c1"># UPnP device is detected post reboot</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_serial_port_callback_from_devices_list</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture.tearDownFixture"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># re-add the callback just in case this ever gets grouped with multiple</span>
+        <span class="c1"># fixtures run in the same suite (i.e. run as part of discovery.py</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">add_serial_port_callback_to_devices_list</span><span class="p">()</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">AcsBootScanWorkflowFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">master</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ht_masters</span><span class="p">:</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span> <span class="o">=</span> <span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                    <span class="s1">&#39;echo &quot;</span><span class="si">{}</span><span class="s1">&quot; &gt; /jffs/system/Configure.dev&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">master_configure_dev_files</span><span class="p">[</span><span class="n">master</span><span class="p">]))</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture.verify_channels_scanned"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture.verify_channels_scanned">[docs]</a>    <span class="k">def</span> <span class="nf">verify_channels_scanned</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">channel_list</span><span class="p">,</span> <span class="n">region</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies that the number of channels passed in is almost equal to the</span>
+<span class="sd">        total USA ACS channels (20).</span>
+
+<span class="sd">        .. note::</span>
+
+<span class="sd">            Almost equals is used here because during boot we must use a serial</span>
+<span class="sd">            Cli connection which has a longer polling timeout to prevent false</span>
+<span class="sd">            detection of being &quot;prompt ready&quot; during boot.  This longer time</span>
+<span class="sd">            causes us to consistently miss ~3 channels every boot scan.</span>
+
+<span class="sd">        :param channel_list: a list of channels that were scanned</span>
+<span class="sd">        :type channel_list: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyAlmostEqualOrStop</span><span class="p">(</span><span class="n">region</span><span class="p">[</span><span class="s1">&#39;expected_channels&#39;</span><span class="p">],</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">channel_list</span><span class="p">),</span>
+            <span class="s2">&quot;Verify number of ACS channels scanned during boot&quot;</span><span class="p">,</span>
+            <span class="n">delta</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture.verify_acs_chans_per_region"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture.verify_acs_chans_per_region">[docs]</a>    <span class="k">def</span> <span class="nf">verify_acs_chans_per_region</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">,</span> <span class="n">region_data</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies both positive and negative cases for available HT channels in</span>
+<span class="sd">        each region for all primaries based on IEEE 802.11 lists and performs a</span>
+<span class="sd">        single smoke test boot scan against each to verify operation one each</span>
+<span class="sd">        region</span>
+
+<span class="sd">        :param ht_master: the primary to verify the channels of against region</span>
+<span class="sd">        :type ht_master: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param region_data: region in which to verify the channels of</span>
+<span class="sd">        ht_master in</span>
+<span class="sd">        :type region_data: :class:`~custom_dicts.FrozenAttributeDict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">channel</span> <span class="ow">in</span> <span class="n">SUPERSET_5GHZ</span> <span class="o">+</span> <span class="n">NON_PERMITTED</span><span class="p">:</span>
+            <span class="n">radar_mitigation_attempts</span> <span class="o">=</span> <span class="mi">2</span>
+            <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">radar_mitigation_attempts</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                    <span class="s2">&quot;setting </span><span class="si">{}</span><span class="s2"> channel to </span><span class="si">{}</span><span class="s2"> for </span><span class="si">{!r}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">ht_master</span><span class="p">,</span> <span class="n">channel</span><span class="p">,</span> <span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">))</span>
+                <span class="n">res</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;wifi/athconfig setchannel </span><span class="si">{}</span><span class="s1"> &#39;</span>
+                        <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">,</span> <span class="n">channel</span><span class="p">))</span>
+                <span class="k">if</span> <span class="n">res</span> <span class="o">==</span> <span class="s1">&#39;ioctl failed&#39;</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1"> setchannel to </span><span class="si">{}</span><span class="s1"> returned &#39;</span>
+                            <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">channel</span><span class="p">,</span> <span class="n">res</span><span class="p">))</span>
+                    <span class="c1"># check if there was unexpected radar on channel and retry</span>
+                    <span class="k">if</span> <span class="n">channel</span> <span class="ow">in</span> <span class="n">USED_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">]:</span>
+                        <span class="k">if</span> <span class="n">attempt</span> <span class="o">==</span> <span class="n">radar_mitigation_attempts</span><span class="p">:</span>
+                            <span class="k">raise</span> <span class="n">StopRunningTestException</span><span class="p">(</span>
+                                <span class="s1">&#39;suspect unexpected radar detected while &#39;</span>
+                                <span class="s1">&#39;verifying chans per region on </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                    <span class="n">ht_master</span><span class="p">))</span>
+                        <span class="n">radar_logs</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span>
+                            <span class="s2">&quot;dmesg | grep &#39;dfs: radar detected on </span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                                <span class="n">channel</span><span class="p">))</span>
+                        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">radar_logs</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                            <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">()</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                            <span class="n">channel</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">USED_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">],</span>
+                            <span class="s1">&#39;ioctl failure expected for unused channel </span><span class="si">{}</span><span class="s1"> in &#39;</span>
+                            <span class="s1">&#39;</span><span class="si">{!r}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">channel</span><span class="p">,</span> <span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">))</span>
+            <span class="c1"># sleep as continuously hitting the ioctls can fail</span>
+            <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="mf">0.2</span><span class="p">)</span>
+        <span class="c1"># verify all the channels in the table match their expectations</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s1">&#39;verifying valid channels and flags for </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">))</span>
+        <span class="n">verified_channels</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">acs_channels_table</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_acs_channel_table</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">channel</span> <span class="ow">in</span> <span class="n">acs_channels_table</span><span class="p">:</span>
+            <span class="n">channel_number</span> <span class="o">=</span> <span class="n">channel_frequency_to_number</span><span class="p">(</span>
+                <span class="n">channel</span><span class="o">.</span><span class="n">frequency</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">channel_number</span> <span class="ow">in</span> <span class="n">SUPERSET_5GHZ</span><span class="p">,</span>
+                <span class="s1">&#39;channel </span><span class="si">{}</span><span class="s1"> of master should be in 5GHz channel &#39;</span>
+                <span class="s1">&#39;superset&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">channel_number</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">channel_number</span> <span class="ow">in</span> <span class="n">USED_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">],</span>
+                <span class="s1">&#39;channel </span><span class="si">{}</span><span class="s1"> of master should be in used_channel for &#39;</span>
+                <span class="s1">&#39;</span><span class="si">{!r}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">channel_number</span><span class="p">,</span> <span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="nb">bool</span><span class="p">(</span><span class="n">channel</span><span class="o">.</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">AcsFlags</span><span class="o">.</span><span class="n">DFS</span><span class="p">)</span> <span class="o">==</span>
+                <span class="p">(</span><span class="n">channel_number</span> <span class="ow">in</span> <span class="n">DFS_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">]),</span>
+                <span class="s1">&#39;channel </span><span class="si">{}</span><span class="s1"> dfs status should match dfs_channels&#39;</span>
+                <span class="s1">&#39; per region </span><span class="si">{!r}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">channel</span><span class="p">,</span> <span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">))</span>
+            <span class="n">verified_channels</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">channel_frequency_to_number</span><span class="p">(</span>
+                <span class="n">channel</span><span class="o">.</span><span class="n">frequency</span><span class="p">))</span>
+        <span class="c1"># verify all expected channels are in the table and as expected</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="nb">sorted</span><span class="p">(</span><span class="n">verified_channels</span><span class="p">)</span> <span class="o">==</span> <span class="n">USED_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">],</span>
+            <span class="s1">&#39;zone </span><span class="si">{}</span><span class="s1"> 5GHz channels reported should match expected, &#39;</span>
+            <span class="s1">&#39;difference: </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">USED_CHANNELS</span><span class="p">[</span><span class="n">region_data</span><span class="o">.</span><span class="n">region</span><span class="p">])</span> <span class="o">-</span>
+                    <span class="nb">set</span><span class="p">(</span><span class="n">verified_channels</span><span class="p">)))))</span></div>
+
+<div class="viewcode-block" id="AcsBootScanWorkflowFixture.test_scan"><a class="viewcode-back" href="../../../networking.acs.html#networking.acs.test_boot_scan.AcsBootScanWorkflowFixture.test_scan">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;ht_masters&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_scan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">region_info</span> <span class="ow">in</span> <span class="n">REGION_DATA</span><span class="p">:</span>
+            <span class="n">expect_cac</span> <span class="o">=</span> <span class="p">(</span><span class="kc">False</span> <span class="k">if</span> <span class="n">region_info</span><span class="o">.</span><span class="n">region</span> <span class="o">==</span> <span class="n">MdpRegion</span><span class="o">.</span><span class="n">CHINA</span> <span class="k">else</span>
+                <span class="kc">True</span><span class="p">)</span>
+
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">mdp</span><span class="o">.</span><span class="n">region</span> <span class="o">=</span> <span class="n">region_info</span><span class="o">.</span><span class="n">region</span>
+            <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">reboot</span><span class="p">(</span><span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_acs_scan</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">expect_cac</span><span class="p">,</span> <span class="n">region_info</span><span class="p">,</span>
+                <span class="n">is_boot_scan</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_acs_chans_per_region</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">region_info</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">AcsBootScanWorkflowFixture</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">AcsBootScanWorkflowFixture</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  <li><a href="../../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

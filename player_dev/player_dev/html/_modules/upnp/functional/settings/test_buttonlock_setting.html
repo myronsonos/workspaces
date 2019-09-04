@@ -1,0 +1,740 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.settings.test_buttonlock_setting &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.settings.test_buttonlock_setting</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">functools</span> <span class="k">import</span> <span class="n">partial</span>
+<span class="kn">from</span> <span class="nn">random</span> <span class="k">import</span> <span class="n">choice</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">urllib2</span> <span class="k">import</span> <span class="n">urlopen</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span><span class="n">ZP120</span><span class="p">,</span> <span class="n">SUB</span><span class="p">,</span> <span class="n">BR200</span><span class="p">,</span> <span class="n">WD100</span><span class="p">,</span> <span class="n">ZB100</span><span class="p">,</span> <span class="n">NON_PLAYBACK_DEVICES</span><span class="p">,</span>
+                                      <span class="n">PLAYBACK_DEVICES_JOIN_BUTTON_NO_CAP_TOUCH</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span><span class="p">,</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span><span class="p">,</span> <span class="n">bool_to_onoff</span>
+<span class="kn">from</span> <span class="nn">sonos.log_inspector.anacapa_trace</span> <span class="k">import</span> <span class="n">AnacapaTraceLogInspector</span>
+
+<span class="n">ACCESSORY_DEVICES</span> <span class="o">=</span> <span class="p">[</span><span class="n">ZB100</span><span class="p">,</span> <span class="n">BR200</span><span class="p">,</span> <span class="n">WD100</span><span class="p">]</span>
+
+
+<div class="viewcode-block" id="Nonlocal"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.Nonlocal">[docs]</a><span class="k">class</span> <span class="nc">Nonlocal</span><span class="p">:</span>
+    <span class="c1"># 2.7 Mutable object to mimick the 3.0+ &#39;nonlocal&#39; assignment</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="ButtonLockSettingFixture"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture">[docs]</a><span class="k">class</span> <span class="nc">ButtonLockSettingFixture</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Tests the functional level of the ButtonLock upnp method</span>
+<span class="sd">    in the DeviceProperties service against all room combinations.</span>
+
+<span class="sd">    Verify settings retained when unbonding rooms and can still</span>
+<span class="sd">    toggle individually. Verify when ButtonLock is active,</span>
+<span class="sd">    the player does indeed ignore vol / mute presses.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;SETTINGS&#39;</span><span class="p">]</span>
+
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    List of diagnostic log levels to be applied to each ZP under test</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="n">diag_level_list</span> <span class="o">=</span> <span class="p">[(</span><span class="s1">&#39;dp_impl&#39;</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;buttons&#39;</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;upnp&#39;</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;udplog&#39;</span><span class="p">,</span> <span class="mi">4</span><span class="p">)]</span>
+
+    <span class="n">volume_start</span> <span class="o">=</span> <span class="mi">10</span>
+    <span class="n">volume_threshold</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="n">hold_time</span> <span class="o">=</span> <span class="mi">6</span>
+
+    <span class="n">test_track</span> <span class="o">=</span> <span class="s1">&#39;x-file-cifs://camb-sqa-nas2/automation/cpu/MaggieFarm/MaggieFarm.mp3&#39;</span>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ButtonLockSettingFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># Capture one set of test sats</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sat_devices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_satellite_capable_devices</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">())</span>
+        <span class="c1"># Capture one set of stereo pair players</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stereo_pair_devices</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_stereo_pairable_devices</span><span class="p">()</span><span class="o">.</span><span class="n">next</span><span class="p">())</span>
+        <span class="c1"># Capture a Connect:Amp sat</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connect_amp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="n">ZP120</span><span class="p">)</span>
+        <span class="c1"># Capture a Sub</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sub</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_testbed_device_by_model</span><span class="p">(</span><span class="n">SUB</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generate_button_lock_devices</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">has_built_in_speakers</span><span class="p">():</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_off</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ButtonLockSettingFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">tearDownFixture</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generate_button_lock_devices</span><span class="p">():</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetButtonLockState</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_on</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generate_button_lock_devices</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_diag_levels</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">toggle_button_lock</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<span class="c1"># START TESTS!</span>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.test_buttonlock_standalone"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.test_buttonlock_standalone">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_buttonlock_standalone</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests standalone players go into ButtonLock mode when toggled, and that</span>
+<span class="sd">        ButtonLock mode correctly disables volume/play/mute while keeping</span>
+<span class="sd">        join and diag mode functional.</span>
+<span class="sd">        :param zp: ZP under test (anything but bridge or boost or sub)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_button_lock</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.test_buttonlock_led_pair_sub"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.test_buttonlock_led_pair_sub">[docs]</a>    <span class="k">def</span> <span class="nf">test_buttonlock_led_pair_sub</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests a stereo pair and sub go into ButtonLock mode when toggled, and that</span>
+<span class="sd">        ButtonLock mode correctly disables volume/play/mute while keeping</span>
+<span class="sd">        join and diag mode functional for the room. Also tests LES state on/off</span>
+<span class="sd">        and sync.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">left</span><span class="p">,</span> <span class="n">right</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stereo_pair_devices</span>
+        <span class="n">members</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">sub</span><span class="p">,</span> <span class="n">right</span><span class="p">]</span>
+        <span class="n">bonding_method</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span>
+            <span class="n">left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_stereo_bonded_zone_sub_to_this_device</span><span class="p">,</span> <span class="o">*</span><span class="n">members</span><span class="p">)</span>
+        <span class="c1"># Test synchronization of buttonlock and LED to room members</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_bonded_room_buttonlock_led_sync</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">members</span><span class="p">,</span> <span class="n">bonding_method</span><span class="p">)</span>
+        <span class="c1"># Test buttonlock functionality</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_button_lock</span><span class="p">(</span><span class="n">left</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+        <span class="n">left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.test_buttonlock_led_ht_sats_sub"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.test_buttonlock_led_ht_sats_sub">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_ht_master_capable_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_buttonlock_led_ht_sats_sub</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests ht Master and its members go into ButtonLock mode when toggled, and</span>
+<span class="sd">        that ButtonLock mode correctly disables volume/play/mute while keeping</span>
+<span class="sd">        join and diag mode functional for the room. Also tests LED state on/off</span>
+<span class="sd">        and sync.</span>
+<span class="sd">        :param ht_device: HT Master under test (S9, S11)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">members</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">sub</span><span class="p">]</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">sat_devices</span>
+        <span class="n">bonding_method</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">ht_device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_51_config</span><span class="p">,</span> <span class="o">*</span><span class="n">members</span><span class="p">)</span>
+        <span class="c1"># Test synchronization of buttonlock and LED to room members</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_bonded_room_buttonlock_led_sync</span><span class="p">(</span><span class="n">ht_device</span><span class="p">,</span> <span class="n">members</span><span class="p">,</span> <span class="n">bonding_method</span><span class="p">)</span>
+        <span class="c1"># Test buttonlock functionality</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_button_lock</span><span class="p">(</span><span class="n">ht_device</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+        <span class="n">ht_device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<span class="c1"># END TESTS!</span>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.generate_button_lock_devices"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.generate_button_lock_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_button_lock_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Generates a list of ZPs that support the ButtonLock feature.</span>
+<span class="sd">        :return: ZP capable of supporting ButtonLock</span>
+<span class="sd">        :rtype :class:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ACCESSORY_DEVICES</span><span class="p">:</span>
+                <span class="k">yield</span> <span class="n">zp</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.update_diag_levels"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.update_diag_levels">[docs]</a>    <span class="k">def</span> <span class="nf">update_diag_levels</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets the required diag levels on the given ZP to the list. This</span>
+<span class="sd">        should be called when setting up the test, as well as on</span>
+<span class="sd">        any ZP that had anacapa bounce.</span>
+<span class="sd">        saved in diag_level_list</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` zp:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">module</span><span class="p">,</span> <span class="n">level</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">diag_level_list</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">set_diag_level</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">level</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.start_udp_logger"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.start_udp_logger">[docs]</a>    <span class="k">def</span> <span class="nf">start_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Enable the UDP Log output on a given list of ZPs</span>
+<span class="sd">        :param zps: ZPs that need to event Anacapa.trace log messages over UDP</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting UDP Logger on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">start_udp_log</span><span class="p">()</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger START port error on ZP </span><span class="si">{}</span><span class="s2">.&quot;</span>
+                                     <span class="s2">&quot; </span><span class="se">\n</span><span class="s2">Error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">e</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">(</span><span class="s2">&quot;Failed to start UDP logger on a device.&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.stop_udp_logger"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.stop_udp_logger">[docs]</a>    <span class="k">def</span> <span class="nf">stop_udp_logger</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">zps</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disable the UDP Log output on a given list of ZPs</span>
+<span class="sd">        :param zps: ZPs that need to stop eventing Anacapa.trace log messages over UDP</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">stop_udp_log</span><span class="p">()</span>
+            <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">critical</span><span class="p">(</span><span class="s2">&quot;UDPLogger STOP port error: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop_suite</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.safe_associate"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.safe_associate">[docs]</a>    <span class="nd">@retry</span><span class="p">(</span><span class="n">expected_exception</span><span class="o">=</span><span class="ne">Exception</span><span class="p">,</span> <span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">safe_associate</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">mac</span><span class="o">=</span><span class="s2">&quot;00:00:00:00:00:00&quot;</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets a Safe Associate CR mac on the player. If Mac is all 00, ZP will not</span>
+<span class="sd">        associate to anything on button press. Useful for safe testing of &#39;Join&#39;</span>
+<span class="sd">        operations.</span>
+<span class="sd">        :param zp: ZP to set a safe association CR mac on</span>
+<span class="sd">        :param mac: The mac address of the CR to be safely associated to</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting safe associate cr mac to </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2">.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">mac</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">))</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:1400/set-cr-netstart-dest-mac?mac=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">mac</span><span class="p">)</span>
+        <span class="n">urlopen</span><span class="p">(</span><span class="n">url</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.prep_room"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.prep_room">[docs]</a>    <span class="k">def</span> <span class="nf">prep_room</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Prepares a room for button lock testing. Sets a track into AVT,</span>
+<span class="sd">        sets Volume to 10, and begins playback.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member zps</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">start_udp_logger</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_diag_levels</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetAVTransportURI_and_wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_track</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.toggle_led"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.toggle_led">[docs]</a>    <span class="k">def</span> <span class="nf">toggle_led</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggles the LED indicator state on or off on a given room with members.</span>
+<span class="sd">        Verifies the UPNP command executed correctly.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param state: True to enable LED. False to disable.</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># Verify able to send UPNP command to set the LEDState</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetLEDState</span><span class="p">(</span><span class="n">state</span><span class="p">),</span>
+                <span class="s2">&quot;LED state should be settable.&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;SetLEDState had UPNP Exception </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                      <span class="s2">&quot;when toggling to True&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">upnp_error</span><span class="p">))</span>
+
+        <span class="c1"># Verify the toggle took place on all members of the room.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_led</span><span class="p">(</span><span class="n">all_zps</span><span class="p">,</span> <span class="n">state</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.toggle_button_lock"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.toggle_button_lock">[docs]</a>    <span class="k">def</span> <span class="nf">toggle_button_lock</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggles button lock on or off on a given room with members.</span>
+<span class="sd">        Verifies the toggle adjusted in UPNP land, upnp eventing, and localsettings.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param state: True to enable ButtonLock. False to disable.</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="c1"># Verify able to send UPNP command to set the ButtonLockState</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+                <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetButtonLockState</span><span class="p">(</span><span class="n">state</span><span class="p">),</span>
+                <span class="s2">&quot;Button Lock state should be settable.&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;SetButtonLockState had UPNP Exception </span><span class="si">{}</span><span class="s2"> &quot;</span>
+                      <span class="s2">&quot;when toggling to True&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">upnp_error</span><span class="p">))</span>
+
+        <span class="c1"># Verify the toggle took place on all members of the room.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_button_lock</span><span class="p">(</span><span class="n">all_zps</span><span class="p">,</span> <span class="n">state</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.verify_led"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.verify_led">[docs]</a>    <span class="k">def</span> <span class="nf">verify_led</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies led setting is in a given state for a list of ZPs</span>
+<span class="sd">        :param zps: List of ZPs to be tested</span>
+<span class="sd">        :param state: True to verify LED ON state. False otherwise.</span>
+<span class="sd">        :param wait_for_toggle: True to wait for LED to toggle to state</span>
+<span class="sd">          False to immediately validate LED state.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Capture state bool as an &#39;On&#39; or &#39;Off&#39; value</span>
+        <span class="n">state_str</span> <span class="o">=</span> <span class="n">bool_to_onoff</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">wait_for_toggle</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetLEDState</span><span class="p">()</span> <span class="o">==</span> <span class="n">state</span><span class="p">,</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timeout waiting for LED to toggle &quot;</span>
+                           <span class="s2">&quot;to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Verify All ZPs synced to the new UPNP value</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetLEDState</span><span class="p">(),</span> <span class="n">state</span><span class="p">,</span>
+                    <span class="s2">&quot;Button Lock State should be set to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+            <span class="c1"># Verify able to update UPNP Service state variable</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;LEDState&quot;</span><span class="p">)</span>
+                         <span class="o">==</span> <span class="n">state_str</span><span class="p">),</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Timeout waiting for LEDState state variable to update. &#39;</span>
+                       <span class="s1">&#39;LEDState should have &#39;</span>
+                       <span class="s1">&#39;been </span><span class="si">{}</span><span class="s1"> for </span><span class="si">{}</span><span class="s1">.&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+            <span class="c1"># Verify localsettings.txt entry for LEDState</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;LED&#39;</span><span class="p">),</span> <span class="n">state_str</span><span class="p">,</span>
+                <span class="s2">&quot;LED in LocalSettings should be set &quot;</span>
+                <span class="s2">&quot;to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="ButtonLockSettingFixture.verify_button_lock"><a class="viewcode-back" href="../../../../upnp.functional.settings.html#upnp.functional.settings.test_buttonlock_setting.ButtonLockSettingFixture.verify_button_lock">[docs]</a>    <span class="k">def</span> <span class="nf">verify_button_lock</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies button lock setting is in a given state for a list of ZPs</span>
+<span class="sd">        :param zps: List of ZPs to be tested</span>
+<span class="sd">        :param state: True to verify in ButtonLock state. False otherwise.</span>
+<span class="sd">        :param wait_for_toggle: True to wait for buttonlock to toggle to state</span>
+<span class="sd">          False to immediately validate buttonlock state.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Capture state bool as an &#39;On&#39; or &#39;Off&#39; value</span>
+        <span class="n">state_str</span> <span class="o">=</span> <span class="n">bool_to_onoff</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">wait_for_toggle</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetButtonLockState</span><span class="p">()</span> <span class="o">==</span> <span class="n">state</span><span class="p">,</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timeout waiting for ButtonLock to toggle &quot;</span>
+                           <span class="s2">&quot;to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Verify All ZPs synced to the new UPNP value</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                    <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetButtonLockState</span><span class="p">(),</span> <span class="n">state</span><span class="p">,</span>
+                    <span class="s2">&quot;Button Lock State should be set to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+            <span class="c1"># Verify able to update UPNP Service state variable</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;ButtonLockState&quot;</span><span class="p">)</span>
+                         <span class="o">==</span> <span class="n">state_str</span><span class="p">),</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Timeout waiting for ButtonLockState state variable to update. &#39;</span>
+                       <span class="s1">&#39;ButtonLockState should have &#39;</span>
+                       <span class="s1">&#39;been </span><span class="si">{}</span><span class="s1"> for </span><span class="si">{}</span><span class="s1">.&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span>
+
+            <span class="c1"># Verify localsettings.txt entry for ButtonLockState</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_localsettings_as_dict</span><span class="p">()</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;ButtonLock&#39;</span><span class="p">),</span> <span class="n">state_str</span><span class="p">,</span>
+                <span class="s2">&quot;Button Lock State in LocalSettings should be set &quot;</span>
+                <span class="s2">&quot;to </span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">,</span> <span class="n">zp</span><span class="p">))</span></div>
+
+    <span class="k">def</span> <span class="nf">_test_bonded_room_buttonlock_led_sync</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="p">,</span> <span class="n">bonding_method</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests ButtonLock and LED on a bonded room. Verifies room synchronization</span>
+<span class="sd">        when bonding and when losing / regaining players. Verifies button presses</span>
+<span class="sd">        are or are not disabled depending on ButtonLock state.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        :param bonding_method: Method to call to bond players together</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Use a random True or False value to test initial button lock state</span>
+        <span class="n">buttonlock_led_state</span> <span class="o">=</span> <span class="n">choice</span><span class="p">([</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">])</span>
+        <span class="n">member_buttonlock_led_state</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">buttonlock_led_state</span>
+
+        <span class="c1"># Bond a room with buttonlock and LED on/off.</span>
+        <span class="c1">#   The members will sync their buttonlock and LED state when done bonding.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">toggle_led</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">toggle_button_lock</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">members</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">toggle_led</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">member_buttonlock_led_state</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">toggle_button_lock</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">member_buttonlock_led_state</span><span class="p">)</span>
+
+        <span class="c1"># Bond room</span>
+        <span class="n">bonding_method</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_diag_levels</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="o">*</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="c1"># Verify members and master have LED synced</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_led</span><span class="p">([</span><span class="n">master</span><span class="p">]</span> <span class="o">+</span> <span class="n">members</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">,</span>
+                        <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Verify members and master have ButtonLock synced</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_button_lock</span><span class="p">([</span><span class="n">master</span><span class="p">]</span> <span class="o">+</span> <span class="n">members</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">,</span>
+                                <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Test toggling member ZPs out of sync, then reboot the SUB / master.</span>
+        <span class="c1">#   When the sub / master comes back online, all members should be synchronized.</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">sub</span><span class="p">,</span> <span class="n">master</span><span class="p">]:</span>
+            <span class="c1"># Toggle ButtonLock and LED out of sync again on member ZPS</span>
+            <span class="k">for</span> <span class="n">member</span> <span class="ow">in</span> <span class="n">members</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">toggle_led</span><span class="p">(</span><span class="n">member</span><span class="p">,</span> <span class="n">member_buttonlock_led_state</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">toggle_button_lock</span><span class="p">(</span><span class="n">member</span><span class="p">,</span> <span class="n">member_buttonlock_led_state</span><span class="p">)</span>
+            <span class="c1"># Reboot the SUB and verify all bonded members have ButtonLock synced</span>
+            <span class="c1">#   when it comes back online.</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">update_diag_levels</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_led</span><span class="p">([</span><span class="n">master</span><span class="p">]</span> <span class="o">+</span> <span class="n">members</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">,</span>
+                            <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_button_lock</span><span class="p">([</span><span class="n">master</span><span class="p">]</span> <span class="o">+</span> <span class="n">members</span><span class="p">,</span> <span class="n">buttonlock_led_state</span><span class="p">,</span>
+                                    <span class="n">wait_for_toggle</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_test_button_lock</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Toggles ButtonLock on a ZP and optional members on and then</span>
+<span class="sd">        attempts to use volume, mute, and play controls, expecting the controls to</span>
+<span class="sd">        not function.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prep_room</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+        <span class="c1"># Test ButtonLock ON</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_button_lock_in_state</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+        <span class="c1"># Test ButtonLock OFF</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_button_lock_in_state</span><span class="p">(</span><span class="kc">False</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_test_button_lock_in_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests button lock in an ON or OFF state, and verifies all expectations</span>
+<span class="sd">        while in said state</span>
+<span class="sd">        :param state: True to test ON state. False to test OFF state.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Capture if we should expect button commands to work or not.</span>
+        <span class="c1">#   If state is True (On) then we expect buttons to not work.</span>
+        <span class="n">should_change</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">state</span>
+        <span class="c1"># Toggle ButtonLock</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">toggle_button_lock</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">state</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">)</span>
+        <span class="c1"># Verify volume, functionality</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_volume</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">,</span>
+                          <span class="n">direction</span><span class="o">=</span><span class="s1">&#39;up&#39;</span><span class="p">,</span> <span class="n">should_adjust</span><span class="o">=</span><span class="n">should_change</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_volume</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">,</span>
+                          <span class="n">direction</span><span class="o">=</span><span class="s1">&#39;down&#39;</span><span class="p">,</span> <span class="n">should_adjust</span><span class="o">=</span><span class="n">should_change</span><span class="p">)</span>
+        <span class="c1"># Verify Play/Pause functionality</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_play_pause</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">,</span> <span class="n">should_pause</span><span class="o">=</span><span class="n">should_change</span><span class="p">)</span>
+        <span class="c1"># Verify Button Press (Join) always works whether in or out of ButtonLock</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_join_button_press</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">,</span> <span class="n">should_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Verify Diag Mode always works whether in or out of ButtonLock</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_test_diag_mode</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="n">members</span><span class="p">,</span> <span class="n">should_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_test_join_button_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">should_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests the Join button press can(&#39;t) be enabled be enabled depending on the</span>
+<span class="sd">        current ButtonLock status. We should always expect Join to work if button</span>
+<span class="sd">        lock is on or off.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        :param should_enable: True if Join should work when pressed</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">netstart_string</span> <span class="o">=</span> <span class="s2">&quot;&lt;buttons,0&gt; signaling netstartd succeeded&quot;</span>
+
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">safe_associate</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+            <span class="c1"># Start watching for button presses</span>
+            <span class="n">zp_log_inspector</span> <span class="o">=</span> <span class="n">AnacapaTraceLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+
+            <span class="c1"># Perform the &#39;join&#39; operation</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">button_press</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">button_press</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">should_enable</span><span class="p">:</span>
+                <span class="c1"># Verify the button press took place</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">netstart_string</span><span class="p">,</span>
+                                            <span class="mi">25</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span> <span class="s2">&quot;Expect to detect &#39;join&#39; &quot;</span>
+                                            <span class="s2">&quot;button press: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Verify button press is in a not detected state</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">netstart_string</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                                           <span class="s2">&quot;Expect button press &#39;join&#39; operation &quot;</span>
+                                           <span class="s2">&quot;to not be detected: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_test_diag_mode</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">should_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that the Diag Mode button press can(&#39;t) be enabled depending</span>
+<span class="sd">        on the current ButtonLock status.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member ZPs</span>
+<span class="sd">        :param should_enable: True if diag mode is expected to function</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">enter_diag_mode_string</span> <span class="o">=</span> <span class="s1">&#39;&lt;buttons,3&gt; inline action \(.. \- LED_DIAG_MODE_START\)&#39;</span>
+        <span class="n">exit_diag_mode_string</span> <span class="o">=</span> <span class="s1">&#39;&lt;buttons,3&gt; inline action \(.. \- LED_DIAG_MODE_STOP\)&#39;</span>
+
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">safe_associate</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+
+            <span class="c1"># Start watching for diag mode</span>
+            <span class="n">zp_log_inspector</span> <span class="o">=</span> <span class="n">AnacapaTraceLogInspector</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+
+            <span class="c1"># Enter diag mode</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">button_diag</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">should_enable</span><span class="p">:</span>
+                <span class="c1"># Verify diag mode entered.</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">enter_diag_mode_string</span><span class="p">,</span>
+                                            <span class="mi">45</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span> <span class="s2">&quot;Expect to enter diag mode: &quot;</span>
+                                            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+                <span class="c1"># Let buttons module settle down</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+                <span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+
+                <span class="c1"># Exit diag mode</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">button_press</span><span class="p">()</span>
+
+                <span class="c1"># Verify diag mode exited</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">exit_diag_mode_string</span><span class="p">,</span>
+                                            <span class="mi">20</span><span class="p">,</span> <span class="n">delay</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span> <span class="s2">&quot;Expect to exit diag mode: &quot;</span>
+                                            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Verify not in diag mode</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">enter_diag_mode_string</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                                           <span class="s2">&quot;Expect diag mode to &quot;</span>
+                                           <span class="s2">&quot;not start: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">mark_last_log_entry</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">zp_log_inspector</span><span class="o">.</span><span class="n">wait_for_next</span><span class="p">(</span><span class="n">exit_diag_mode_string</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span>
+                                           <span class="s2">&quot;Expect diag mode to &quot;</span>
+                                           <span class="s2">&quot;not stop: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_test_play_pause</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">should_pause</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that play-pause control can(&#39;)t change depending on the current</span>
+<span class="sd">        ButtonLock status.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member zps</span>
+<span class="sd">        :param should_pause: True if pause is expected to function</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="c1"># Test play/pause is enabled or disabled on all ZPs in the room.</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+            <span class="c1"># Skip any non-playback device member tests since they do not have a play/pause button</span>
+            <span class="c1"># Also skip any playback devices that do not have play/pause control</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="p">(</span><span class="n">NON_PLAYBACK_DEVICES</span> <span class="o">+</span> <span class="n">PLAYBACK_DEVICES_JOIN_BUTTON_NO_CAP_TOUCH</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No play/pause control on ZP </span><span class="si">{}</span><span class="s2">, skipping regardless of ButtonLock status&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># Begin playback of track</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+
+            <span class="c1"># Tap the play/pause button</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_mute</span><span class="p">()</span>
+
+            <span class="c1"># Wait for adjustment to take place</span>
+            <span class="k">if</span> <span class="n">should_pause</span><span class="p">:</span>
+                <span class="c1"># Wait until the AVTransport is actually paused.</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_paused</span><span class="p">(),</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s1">&#39;Timeout waiting for Room to pause. </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Wait for 3 seconds to let any unexpected events through</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+
+            <span class="c1"># Stop playback of track</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_test_volume</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">master</span><span class="p">,</span> <span class="n">members</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                     <span class="n">direction</span><span class="o">=</span><span class="s1">&#39;up&#39;</span><span class="p">,</span> <span class="n">should_adjust</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Tests that volume control can(&#39;t) change depending on the current</span>
+<span class="sd">        ButtonLock status.</span>
+<span class="sd">        :param master: Room coordinator</span>
+<span class="sd">        :param members: Member zps</span>
+<span class="sd">        :param direction: up or down volume</span>
+<span class="sd">        :param should_adjust: True if the volume is expected to adjust.</span>
+<span class="sd">          False if otherwise.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">all_zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">master</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">members</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">all_zps</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">members</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">dut_zp</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+            <span class="c1"># Skip any non-playback device member tests since they do not have vol buttons;</span>
+            <span class="c1"># Also skip any playback devices that do not have vol control</span>
+            <span class="k">if</span> <span class="n">dut_zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="p">(</span><span class="n">NON_PLAYBACK_DEVICES</span> <span class="o">+</span> <span class="n">PLAYBACK_DEVICES_JOIN_BUTTON_NO_CAP_TOUCH</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No vol control on ZP </span><span class="si">{}</span><span class="s2">, skipping regardless of ButtonLock status&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">dut_zp</span><span class="p">))</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># Set a base volume on the room</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">volume_start</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;up&#39;</span><span class="p">:</span>
+                <span class="n">vol_command</span> <span class="o">=</span> <span class="n">dut_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_up</span>
+                <span class="n">adjusted_volume</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">volume_start</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">volume_threshold</span>
+                <span class="n">verifier</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrFailCase</span>
+
+                <span class="k">def</span> <span class="nf">volume_comparator</span><span class="p">(</span><span class="n">current_vol</span><span class="p">):</span>
+                    <span class="c1"># Volume adjusted up</span>
+                    <span class="k">return</span> <span class="n">current_vol</span> <span class="o">&gt;=</span> <span class="n">adjusted_volume</span>
+
+            <span class="k">elif</span> <span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;down&#39;</span><span class="p">:</span>
+                <span class="n">vol_command</span> <span class="o">=</span> <span class="n">dut_zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">volume_down</span>
+                <span class="n">adjusted_volume</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">volume_start</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">volume_threshold</span>
+                <span class="n">verifier</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span>
+
+                <span class="k">def</span> <span class="nf">volume_comparator</span><span class="p">(</span><span class="n">current_vol</span><span class="p">):</span>
+                    <span class="c1"># Volume adjusted down</span>
+                    <span class="k">return</span> <span class="n">current_vol</span> <span class="o">&lt;=</span> <span class="n">adjusted_volume</span>
+
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s1">&#39;Must be up or down&#39;</span><span class="p">)</span>
+
+            <span class="c1"># Execute vol up or down command.</span>
+            <span class="n">vol_command</span><span class="p">()</span>
+
+            <span class="k">if</span> <span class="n">should_adjust</span><span class="p">:</span>
+                <span class="c1"># Wait for volume adjustment to event through the Room</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">volume_comparator</span><span class="p">(</span><span class="n">master</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">()),</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Timeout waiting for volume change on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># Sleep 3 seconds to let any unexpected events through</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">member</span> <span class="ow">in</span> <span class="n">all_zps</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">should_adjust</span><span class="p">:</span>
+                    <span class="c1"># Verify volume adjustment</span>
+                    <span class="n">verifier</span><span class="p">(</span>
+                        <span class="n">member</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">(),</span> <span class="n">adjusted_volume</span><span class="p">,</span>
+                        <span class="s2">&quot;Expect volume to be &quot;</span>
+                        <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">=</span><span class="si">{}</span><span class="s2"> on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="s1">&#39;&gt;&#39;</span> <span class="k">if</span> <span class="n">direction</span> <span class="o">==</span> <span class="s1">&#39;up&#39;</span> <span class="k">else</span> <span class="s1">&#39;&lt;&#39;</span><span class="p">,</span>
+                                                <span class="n">adjusted_volume</span><span class="p">,</span> <span class="n">member</span><span class="p">))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="c1"># Verify volume did not adjust</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+                        <span class="n">member</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">GetVolume</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">volume_start</span><span class="p">,</span>
+                        <span class="s2">&quot;Expect volume to be unchanged &quot;</span>
+                        <span class="s2">&quot;(</span><span class="si">{}</span><span class="s2">) on ZP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">volume_start</span><span class="p">,</span> <span class="n">member</span><span class="p">))</span></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;ButtonLockSettingFixture&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">ButtonLockSettingFixture</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

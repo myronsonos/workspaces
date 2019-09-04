@@ -1,0 +1,408 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.longpress.longpress_ht &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.longpress.longpress_ht</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">copy</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+
+<span class="kn">from</span> <span class="nn">audio_playback.mplayer_playback</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">MplayerAc3Playback</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">HIDEOUT</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="ne">TimeoutError</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.longpress.longpress_base</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">HT_AUTOSTOP_THRESHOLD</span><span class="p">,</span>
+    <span class="n">HT_AUTOSTOP_ENGAGE_TIMEOUT</span><span class="p">,</span>
+    <span class="n">LongPressBase</span><span class="p">,</span> <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">,</span>
+    <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">,</span> <span class="n">LongPressAction</span><span class="p">)</span>
+
+<span class="n">TV_TRACK</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;/srv/samba/Automation/long_tracks/AC-3/&#39;</span>
+            <span class="s1">&#39;X-Men Days of Future Past.ac3&#39;</span><span class="p">)</span>
+<span class="n">EXCLUDE_HT_MODEL_COMPONENT</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">HIDEOUT</span><span class="p">,</span> <span class="p">)</span>
+
+
+<div class="viewcode-block" id="LongPressHT"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT">[docs]</a><span class="k">class</span> <span class="nc">LongPressHT</span><span class="p">(</span><span class="n">LongPressBase</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify long press functionality on HT players - SWPBL-82156</span>
+<span class="sd">    Confirm long press on HT player (master or satellite) rotates</span>
+<span class="sd">    to last played source. When rotation is exhausted, HT becomes</span>
+<span class="sd">    stand-alone.</span>
+<span class="sd">    Confirm non-HT players can group to last played HT source.</span>
+<span class="sd">    Confirm only HT master can start a stopped Dolby stream.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="LongPressHT.generate_ht_devices"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.generate_ht_devices">[docs]</a>    <span class="k">def</span> <span class="nf">generate_ht_devices</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">ht_config</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_master_satellite_capable_devices</span><span class="p">(</span><span class="n">stop_on_fail</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+            <span class="k">yield</span> <span class="p">(</span><span class="n">ht_config</span><span class="p">,)</span></div>
+
+<div class="viewcode-block" id="LongPressHT.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">LongPressHT</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="c1"># Make sure we have enough players to accomodate</span>
+        <span class="c1"># the desired number of audio sources specified</span>
+        <span class="n">ht_players</span> <span class="o">=</span> <span class="mi">3</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_zp120</span><span class="p">():</span>
+                <span class="n">ht_players</span> <span class="o">=</span> <span class="n">ht_players</span> <span class="o">-</span> <span class="mi">1</span>
+                <span class="k">break</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">)</span> <span class="o">-</span> <span class="n">ht_players</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">num_audio_sources</span><span class="p">,</span>
+            <span class="s2">&quot;Don&#39;t have enough players to source audio&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressHT.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">):</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="LongPressHT.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">):</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">]</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">stop_persistent_log</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_players</span><span class="p">]</span>
+        <span class="n">master</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">ht_config</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_auto_stop</span><span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="LongPressHT.confirm_ht_master_playing_tos_content"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.confirm_ht_master_playing_tos_content">[docs]</a>    <span class="nd">@retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+           <span class="n">expected_exception</span><span class="o">=</span><span class="ne">TimeoutError</span><span class="p">,</span>
+           <span class="n">retry_delay</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">confirm_ht_master_playing_tos_content</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                                              <span class="n">ht_master</span><span class="p">,</span>
+                                              <span class="n">mplayer_h</span><span class="p">,</span>
+                                              <span class="n">last_played</span><span class="p">,</span>
+                                              <span class="n">saved_last_played</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Assures all expected zone players in the last_played dictionary</span>
+<span class="sd">        have received the HT master playing event.</span>
+<span class="sd">        In the event not all zone players have received the event, the</span>
+<span class="sd">        Dolby content on the HT master is stopped and then started.</span>
+<span class="sd">        :param :class:`sonos.client.internal.SonosZoneComponent` ht_master:</span>
+<span class="sd">        :param :class:`audio_playback.mplayer_playback.MplayerPlayback` mplayer_h:</span>
+<span class="sd">        :param dict last_played: Dictionary of zone serial map to last playing</span>
+<span class="sd">        zone player UDN</span>
+<span class="sd">        :param dict saved_last_played: A deep copy of last_played</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_played</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Failed to receive HT master PLAYING/RESUME &quot;</span>
+                <span class="s2">&quot;event </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_played</span><span class="p">))</span>
+            <span class="n">mplayer_h</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Stopping and restarting mplayer&quot;</span><span class="p">)</span>
+            <span class="c1"># Need to sleep for HTASilenceThresholdAutoStopSec seconds</span>
+            <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="n">HT_AUTOSTOP_THRESHOLD</span> <span class="o">+</span> <span class="mi">5</span><span class="p">)</span>
+            <span class="n">last_played</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">saved_last_played</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Resetting last played list to </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_played</span><span class="p">))</span>
+            <span class="n">mplayer_h</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+            <span class="k">raise</span></div>
+
+<div class="viewcode-block" id="LongPressHT.start_dolby_playback"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.start_dolby_playback">[docs]</a>    <span class="k">def</span> <span class="nf">start_dolby_playback</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">,</span> <span class="n">zones</span><span class="p">,</span>
+                             <span class="n">longpress_rotation</span><span class="p">,</span> <span class="n">player_to_uri</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        1. Sets auto play on HT master and starts Dolby playback.</span>
+<span class="sd">        2. Confirm the players listed in zones associate with the</span>
+<span class="sd">        HT as member on long press</span>
+<span class="sd">        3. Confirm a long press &quot;steals&quot; the AVT URI of the last</span>
+<span class="sd">        stopped/paused player.</span>
+<span class="sd">        Purposely the HT is the last stopped source, but that can</span>
+<span class="sd">        not be &quot;stolen&quot;; no other player other than HT master can</span>
+<span class="sd">        resume a stopped HT stream.</span>
+<span class="sd">        :param tuple ht_config: The players comprising the HT 5.0 config</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent` zones:</span>
+<span class="sd">        The players which are sourcing music</span>
+<span class="sd">        :param list :class:`sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        lonpress_rotation: A list of players which are sourcing music</span>
+<span class="sd">        :param dict player_to_uri: A dictionary of players&#39; serial numbers</span>
+<span class="sd">        mapped to music source URI</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ht_master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span> <span class="o">=</span> <span class="n">ht_config</span>
+        <span class="n">physical_ht_config</span> <span class="o">=</span> <span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">)</span> <span class="k">if</span> <span class="n">zp_l</span> <span class="o">==</span> <span class="n">zp_r</span> <span class="k">else</span> <span class="n">ht_config</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayRoomUUID</span><span class="p">(</span><span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">)</span>
+        <span class="n">last_played</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                          <span class="n">zones</span><span class="p">,</span>
+                                          <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">,</span>
+                                          <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_played</span><span class="p">)</span>
+        <span class="n">saved_last_played</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">last_played</span><span class="p">)</span>
+        <span class="n">last_clear_avt</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># Pick a random player to resume play and then pause/stop</span>
+        <span class="c1"># Last player in in zones confirms &quot;steal&quot;</span>
+        <span class="n">resume_play_zp</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">zones</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Chosen player to resume/stop play &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">))</span>
+        <span class="n">players_to_verify_resume</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">physical_ht_config</span><span class="p">)</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">zones</span><span class="p">[:])</span>
+        <span class="n">players_to_verify_resume</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Players to verify resume/stop&quot;</span>
+            <span class="s2">&quot; play &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">players_to_verify_resume</span><span class="p">))</span>
+        <span class="k">with</span> <span class="n">MplayerAc3Playback</span><span class="p">(</span><span class="n">TV_TRACK</span><span class="p">)</span> <span class="k">as</span> <span class="n">mplayer_h</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_ht_master_playing</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">confirm_ht_master_playing_tos_content</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                                       <span class="n">mplayer_h</span><span class="p">,</span>
+                                                       <span class="n">last_played</span><span class="p">,</span>
+                                                       <span class="n">saved_last_played</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="s2">&quot;All expected zones received HT start </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zones</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_PLAYED_REGEX_MSGS</span><span class="p">)</span>
+            <span class="c1"># Update the long press list since HT is &quot;last played&quot;</span>
+            <span class="n">longpress_rotation</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">zones</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verify_long_press</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span>
+                                       <span class="n">longpress_rotation</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+                                       <span class="n">zp</span><span class="p">,</span> <span class="n">player_to_uri</span><span class="p">[</span><span class="n">zp</span><span class="p">],</span>
+                                       <span class="n">invoke_play</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+                <span class="c1"># We need to remove the zp from the long press rotation list</span>
+                <span class="c1"># since we don&#39;t resume play on this player</span>
+                <span class="n">longpress_rotation</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;Long press rotation after&quot;</span>
+                <span class="s2">&quot; TV Dolby test </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">longpress_rotation</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="mi">1</span><span class="p">,</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">longpress_rotation</span><span class="p">),</span>
+                <span class="s2">&quot;Expect a single zone player in long press rotation list&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+                <span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span>
+                <span class="n">longpress_rotation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span>
+                <span class="s2">&quot;Expect HT master long press rotation list&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">resume_playback</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">,</span> <span class="n">players_to_verify_resume</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pause_playback</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">,</span> <span class="n">players_to_verify_resume</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Last paused player &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">))</span>
+            <span class="n">longpress_rotation</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">resume_play_zp</span><span class="p">)</span>
+            <span class="c1"># Prepare to confirm the auto stop event</span>
+            <span class="n">last_clear_avt</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">register_watch</span><span class="p">(</span>
+                <span class="n">ht_master</span><span class="p">,</span>
+                <span class="n">zones</span><span class="p">,</span>
+                <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">cb_confirm_last_clear_avt</span><span class="p">)</span>
+        <span class="c1"># Remove HT master from rotation list</span>
+        <span class="n">longpress_rotation</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">ht_master</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">last_clear_avt</span><span class="p">),</span>
+            <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">&quot;Expect at least one zone to confirm HT auto stop&quot;</span><span class="p">)</span>
+        <span class="c1"># Wait for expected zones to confirm HT master auto stopped</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wait_until_true</span><span class="p">(</span>
+                <span class="k">lambda</span><span class="p">:</span> <span class="ow">not</span> <span class="n">last_clear_avt</span><span class="p">,</span>
+                <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+                <span class="n">timeout_seconds</span><span class="o">=</span><span class="n">HT_AUTOSTOP_ENGAGE_TIMEOUT</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span>
+                <span class="s2">&quot;Failed to receive report HT master&quot;</span>
+                <span class="s2">&quot; has auto stopped &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_clear_avt</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">unregister_watch</span><span class="p">(</span><span class="n">zones</span><span class="p">,</span> <span class="n">LAST_CLEAR_AVT_REGEX_MSGS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;All expected zones have report HT master auto stopped&quot;</span><span class="p">)</span>
+        <span class="c1"># Verify a long press will choose a non-HT source to resume play</span>
+        <span class="c1"># We&#39;re skipping the paused/stopped player</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">long_press_action</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">LongPressAction</span><span class="o">.</span><span class="n">STEAL_AVT</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span>
+            <span class="n">resume_play_zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">udn</span><span class="p">,</span>
+            <span class="s2">&quot;Expect &lt;</span><span class="si">{}</span><span class="s2">&gt; to &#39;steal&#39; paused/stopped content from &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">resume_play_zp</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">is_playing</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span>
+            <span class="s2">&quot;Expect &lt;</span><span class="si">{}</span><span class="s2">&gt; to resume paused/stopped content&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span>
+            <span class="n">player_to_uri</span><span class="p">[</span><span class="n">resume_play_zp</span><span class="p">],</span>
+            <span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">GetMediaInfo</span><span class="p">()[</span><span class="s1">&#39;CurrentURI&#39;</span><span class="p">],</span>
+            <span class="s2">&quot;Expect &lt;</span><span class="si">{}</span><span class="s2">&gt; CurrentURI to match&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zones</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span></div>
+
+<div class="viewcode-block" id="LongPressHT.test_ht_long_press"><a class="viewcode-back" href="../../../../upnp.functional.longpress.html#upnp.functional.longpress.longpress_ht.LongPressHT.test_ht_long_press">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_ht_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_ht_long_press</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_config</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verifies long press functionality on HT players.</span>
+<span class="sd">        1. Creates HT 5.0 configuaration</span>
+<span class="sd">        2. Configures HT master for auto stop</span>
+<span class="sd">        3. Casts music source on available players</span>
+<span class="sd">        4. Verifies long press on HT players</span>
+<span class="sd">        5. Casts Dolby stream on HT</span>
+<span class="sd">        6. Verifies last played as HT</span>
+<span class="sd">        7. Verifies last paused/stopped when HT Dolby is stopped</span>
+<span class="sd">        :param tuple ht_config: A tuple of zone players comprising</span>
+<span class="sd">        the HT 5.0 setup</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span> <span class="o">=</span> <span class="n">ht_config</span>
+        <span class="n">physical_ht_config</span> <span class="o">=</span> <span class="p">(</span><span class="n">master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">)</span> <span class="k">if</span> <span class="n">zp_l</span> <span class="o">==</span> <span class="n">zp_r</span> <span class="k">else</span> <span class="n">ht_config</span>
+        <span class="k">if</span> <span class="nb">any</span><span class="p">([</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">EXCLUDE_HT_MODEL_COMPONENT</span>
+                <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">physical_ht_config</span><span class="p">]):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Skipping test ... found </span><span class="si">{}</span><span class="s2"> an excluded &quot;</span>
+                      <span class="s2">&quot;player component in </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">EXCLUDE_HT_MODEL_COMPONENT</span><span class="p">,</span>
+                                                      <span class="n">physical_ht_config</span><span class="p">))</span>
+        <span class="n">available_players</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">players_to_source_music</span><span class="p">(</span><span class="n">physical_ht_config</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> available players: &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">available_players</span><span class="p">),</span> <span class="n">available_players</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Creating HT 5.0 config master &lt;</span><span class="si">{}</span><span class="s2">&gt; L &lt;</span><span class="si">{}</span><span class="s2">&gt; R &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">))</span>
+        <span class="n">master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+            <span class="n">master</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">(),</span>
+            <span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; is expected to HT master&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">master</span><span class="p">))</span>
+        <span class="k">for</span> <span class="n">sat</span> <span class="ow">in</span> <span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span>
+                <span class="n">sat</span><span class="o">.</span><span class="n">is_satellite</span><span class="p">(),</span>
+                <span class="s2">&quot;&lt;</span><span class="si">{}</span><span class="s2">&gt; is  expected to be satellite&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sat</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_auto_stop</span><span class="p">(</span><span class="n">master</span><span class="p">)</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">start_persistent_log</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">physical_ht_config</span><span class="p">]</span>
+        <span class="c1"># Start playback on non HT players</span>
+        <span class="n">players_to_start_audio</span> <span class="o">=</span> <span class="n">available_players</span><span class="p">[:</span><span class="bp">self</span><span class="o">.</span><span class="n">num_audio_sources</span><span class="p">]</span>
+        <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">start_persistent_log</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">players_to_start_audio</span><span class="p">]</span>
+        <span class="n">player_to_uri</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">assign_uri_to_players</span><span class="p">(</span><span class="n">players_to_start_audio</span><span class="p">)</span>
+        <span class="n">longpress_rotation</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">players_to_start_audio</span>
+                              <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_playback</span><span class="p">(</span>
+                                      <span class="n">zp</span><span class="p">,</span>
+                                      <span class="n">physical_ht_config</span><span class="p">,</span>
+                                      <span class="n">uri</span><span class="o">=</span><span class="n">player_to_uri</span><span class="p">[</span><span class="n">zp</span><span class="p">])]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;Players with audio </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">longpress_rotation</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+        <span class="c1"># Pass a list of most recently played zones</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">physical_ht_config</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_long_press</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">longpress_rotation</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">master</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="c1"># Wait for master to report AVTransport.STOPPED_STATE before</span>
+            <span class="c1"># proceeding to next zone player</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">wait_until_true</span><span class="p">(</span>
+                    <span class="k">lambda</span><span class="p">:</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">is_stopped</span><span class="p">(),</span>
+                    <span class="n">iteration_delay</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                    <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">15</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">TimeoutError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Master &lt;</span><span class="si">{}</span><span class="s2">&gt; reports unexpected state </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">master</span><span class="p">,</span> <span class="n">master</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">get_transport_state</span><span class="p">()))</span>
+        <span class="c1"># Start HT Dolby playback and confirm players which are</span>
+        <span class="c1"># playing audio content now notice the last played as the HT master</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start_dolby_playback</span><span class="p">(</span><span class="n">ht_config</span><span class="p">,</span>
+                                  <span class="n">players_to_start_audio</span><span class="p">,</span>
+                                  <span class="n">longpress_rotation</span><span class="p">,</span>
+                                  <span class="n">player_to_uri</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">LongPressHT</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">LongPressHT</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

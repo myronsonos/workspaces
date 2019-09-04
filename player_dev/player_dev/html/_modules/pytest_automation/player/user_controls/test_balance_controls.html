@@ -1,0 +1,388 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.user_controls.test_balance_controls &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.user_controls.test_balance_controls</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test verifies the functionality of the balance control available in</span>
+<span class="sd">rendering control by measuring the RMS levels across audiotap channels for</span>
+<span class="sd">both standalone players which support balance control and stereo pair</span>
+<span class="sd">configurations.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">audio_util</span> <span class="k">import</span> <span class="n">rms_helper</span>
+<span class="kn">from</span> <span class="nn">sleep</span> <span class="k">import</span> <span class="n">guaranteed_sleep</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">MODEL_NUMBER_TO_ORIENTATION</span><span class="p">,</span> <span class="n">VERTICAL</span><span class="p">,</span> \
+    <span class="n">HORIZONTAL</span>
+<span class="kn">from</span> <span class="nn">conftest</span> <span class="k">import</span> <span class="n">ITERATION_DELAY_SEC</span><span class="p">,</span> <span class="n">prime_playback</span>
+
+<span class="c1"># the left right channel indices in the dspout audiotaps for each relevant</span>
+<span class="c1"># model</span>
+<span class="n">CHANNEL_MAPS_BY_MODEL</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;ZP120&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;ZP90&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;S6&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">2</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;S5&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">4</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;S3&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;S16&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;LF&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+        <span class="s2">&quot;RF&quot;</span><span class="p">:</span> <span class="mi">1</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="n">REMOVE_AUDIOTAP_FILES</span> <span class="o">=</span> <span class="kc">False</span>
+
+<span class="n">DEVICES_WITH_BALANCE_DEPENDENT_ORIENTATIONS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;S3&quot;</span><span class="p">,</span> <span class="s2">&quot;S6&quot;</span><span class="p">]</span>
+
+<span class="c1"># the max acceptable variation in the RMS levels for two channels that are</span>
+<span class="c1"># supposed to be identical (in dB SPL)</span>
+<span class="n">EQ_BALANCE_DIFF_THRESH_DB_SPL</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s1">&#39;disable_audio_output&#39;</span><span class="p">)</span>
+<span class="p">]</span>
+
+
+<div class="viewcode-block" id="verify_rms_levels_stereo_pair"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.verify_rms_levels_stereo_pair">[docs]</a><span class="k">def</span> <span class="nf">verify_rms_levels_stereo_pair</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that the RMS levels captured via audiotap have the expected</span>
+<span class="sd">    relationship given the balance levels that have been applied.</span>
+<span class="sd">    :param list zps: the list of zone players [left, right]</span>
+<span class="sd">    :param dict rms_levels: the RMS levels, grouped by serial number and</span>
+<span class="sd">    channel</span>
+<span class="sd">    :param list balance_levels: the balance levels [left, right]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">left_levels</span> <span class="o">=</span> <span class="n">rms_levels</span><span class="p">[</span><span class="n">zps</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span>
+    <span class="n">right_levels</span> <span class="o">=</span> <span class="n">rms_levels</span><span class="p">[</span><span class="n">zps</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Given balance levels: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">balance_levels</span><span class="p">))</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Left Channel RMS Levels: </span><span class="si">{}</span><span class="se">\n</span><span class="s2">&quot;</span>
+                       <span class="s2">&quot;Right Channel RMS Levels: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_levels</span><span class="p">,</span>
+                                                             <span class="n">right_levels</span><span class="p">))</span>
+
+    <span class="c1"># if left is greater than right in settings</span>
+    <span class="k">if</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+        <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">left_levels</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">],</span> \
+                <span class="s2">&quot;Left levels should be greater than right levels for &quot;</span> \
+                <span class="s2">&quot;channel: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">ch</span><span class="p">,</span> <span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">],</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">])</span>
+
+    <span class="c1"># else if right is greater than left</span>
+    <span class="k">elif</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+        <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">left_levels</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">],</span> \
+                <span class="s2">&quot;Left levels should be less than right levels for &quot;</span> \
+                <span class="s2">&quot;channel: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">ch</span><span class="p">,</span> <span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">],</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">])</span>
+
+    <span class="c1"># else if they&#39;re equal</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">for</span> <span class="n">ch</span> <span class="ow">in</span> <span class="n">left_levels</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">]</span> <span class="o">-</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">])</span> <span class="o">&lt;</span> \
+                   <span class="n">EQ_BALANCE_DIFF_THRESH_DB_SPL</span><span class="p">,</span> \
+                   <span class="s2">&quot;Left levels should be equal to right levels for &quot;</span> \
+                   <span class="s2">&quot;channel: </span><span class="si">{}</span><span class="s2">,</span><span class="se">\n</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">ch</span><span class="p">,</span> <span class="n">left_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">],</span> <span class="n">right_levels</span><span class="p">[</span><span class="n">ch</span><span class="p">])</span></div>
+
+
+<div class="viewcode-block" id="verify_rms_levels_standalone"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.verify_rms_levels_standalone">[docs]</a><span class="k">def</span> <span class="nf">verify_rms_levels_standalone</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that the RMS levels captured via audiotap have the expected</span>
+<span class="sd">    relationship given the balance levels that have been applied.</span>
+<span class="sd">    :param zp: the zone player under test</span>
+<span class="sd">    :param dict rms_levels: the RMS levels, grouped by serial number and</span>
+<span class="sd">    channel</span>
+<span class="sd">    :param list balance_levels: the balance levels [left, right]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">left_ch</span> <span class="o">=</span> <span class="n">rms_levels</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">][</span>
+        <span class="n">CHANNEL_MAPS_BY_MODEL</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">][</span><span class="s2">&quot;LF&quot;</span><span class="p">]]</span>
+    <span class="n">right_ch</span> <span class="o">=</span> <span class="n">rms_levels</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">][</span>
+        <span class="n">CHANNEL_MAPS_BY_MODEL</span><span class="p">[</span><span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">][</span><span class="s2">&quot;RF&quot;</span><span class="p">]]</span>
+
+    <span class="c1"># if the player is vertically oriented, we expect the channels to be equal</span>
+    <span class="n">is_non_horizontal</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">MODEL_NUMBER_TO_ORIENTATION</span><span class="p">:</span>
+        <span class="n">orientation</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_device_orientation</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">orientation</span> <span class="o">!=</span> <span class="n">HORIZONTAL</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Device orientation is </span><span class="si">{}</span><span class="s2">!&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">orientation</span><span class="p">))</span>
+            <span class="n">is_non_horizontal</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Device orientation is horizontal!&quot;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Device does not support orientation&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">is_non_horizontal</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">left_ch</span> <span class="o">-</span> <span class="n">right_ch</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">EQ_BALANCE_DIFF_THRESH_DB_SPL</span><span class="p">,</span> \
+            <span class="s2">&quot;Left channel should be equal to right channel: &quot;</span> \
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_ch</span><span class="p">,</span> <span class="n">right_ch</span><span class="p">)</span>
+        <span class="k">return</span>
+
+    <span class="c1"># else... we check that the balance is expected based on the levels</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Left: </span><span class="si">{}</span><span class="s2"> Right:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_ch</span><span class="p">,</span> <span class="n">right_ch</span><span class="p">))</span>
+    <span class="c1"># if left is greater than right</span>
+    <span class="k">if</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+        <span class="k">assert</span> <span class="n">left_ch</span> <span class="o">&gt;</span> <span class="n">right_ch</span><span class="p">,</span> \
+            <span class="s2">&quot;Left channel should be greater than right channel: &quot;</span> \
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_ch</span><span class="p">,</span> <span class="n">right_ch</span><span class="p">)</span>
+
+    <span class="c1"># if right is greater than left</span>
+    <span class="k">elif</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]:</span>
+        <span class="k">assert</span> <span class="n">left_ch</span> <span class="o">&lt;</span> <span class="n">right_ch</span><span class="p">,</span> \
+            <span class="s2">&quot;Left channel should be less than right channel: &quot;</span> \
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_ch</span><span class="p">,</span> <span class="n">right_ch</span><span class="p">)</span>
+
+    <span class="c1"># if equal</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">left_ch</span> <span class="o">-</span> <span class="n">right_ch</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">EQ_BALANCE_DIFF_THRESH_DB_SPL</span><span class="p">,</span> \
+            <span class="s2">&quot;Left channel should be equal to right channel: &quot;</span> \
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">left_ch</span><span class="p">,</span> <span class="n">right_ch</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="verify_rms_levels"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.verify_rms_levels">[docs]</a><span class="k">def</span> <span class="nf">verify_rms_levels</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Common verification method used for verifying RMS levels relative to</span>
+<span class="sd">    balance settings</span>
+<span class="sd">    :param list zps: list of ZPs under test</span>
+<span class="sd">    :param dict rms_levels: the RMS levels, grouped by serial number and</span>
+<span class="sd">    channel</span>
+<span class="sd">    :param list balance_levels: the balance levels [left, right]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">zps</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">verify_rms_levels_stereo_pair</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">verify_rms_levels_standalone</span><span class="p">(</span><span class="n">zps</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="run_configs_captures_verifications"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.run_configs_captures_verifications">[docs]</a><span class="k">def</span> <span class="nf">run_configs_captures_verifications</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">uri</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Primary test method, which sets the ZP levels, calls the audiotap</span>
+<span class="sd">    capture mechanisms, and calls the verification mechanism</span>
+<span class="sd">    :param list zps: list of ZPs under test</span>
+<span class="sd">    :param str uri: the URI of the audio to be played</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">zps</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="mi">30</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetEQ</span><span class="p">(</span><span class="s2">&quot;VolumeScalingFactor&quot;</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="n">max_vol</span> <span class="o">=</span> <span class="mi">100</span>
+    <span class="n">min_vol</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="c1"># apply the following sequences of channel levels [left, right]</span>
+    <span class="n">balance_levels_settings</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">[</span><span class="n">max_vol</span><span class="p">,</span> <span class="n">max_vol</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">max_vol</span><span class="p">,</span> <span class="n">min_vol</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">min_vol</span><span class="p">,</span> <span class="n">max_vol</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">max_vol</span><span class="p">,</span> <span class="n">max_vol</span><span class="p">]</span>
+    <span class="p">]</span>
+
+    <span class="n">rms_levs</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">balance_levels</span> <span class="ow">in</span> <span class="n">balance_levels_settings</span><span class="p">:</span>
+
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting left-right balance to </span><span class="si">{}</span><span class="s2"> and </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+
+        <span class="c1"># set levels (configure)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">volume</span><span class="o">=</span><span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">channel</span><span class="o">=</span><span class="s1">&#39;LF&#39;</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">volume</span><span class="o">=</span><span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">channel</span><span class="o">=</span><span class="s1">&#39;RF&#39;</span><span class="p">)</span>
+
+        <span class="n">prime_playback</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">uri</span><span class="p">)</span>
+
+        <span class="c1"># note the levels in the audiotap filename</span>
+        <span class="n">note</span> <span class="o">=</span> <span class="s2">&quot;left=</span><span class="si">{}</span><span class="s2">_right=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+
+        <span class="n">expect_all_nonzero_taps</span> <span class="o">=</span> \
+            <span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="c1"># capture</span>
+        <span class="n">rms_levels</span> <span class="o">=</span> <span class="n">rms_helper</span><span class="o">.</span><span class="n">get_rms_levels_from_music_playback</span><span class="p">(</span>
+            <span class="n">zp</span><span class="o">=</span><span class="n">zp</span><span class="p">,</span> <span class="n">zps</span><span class="o">=</span><span class="n">zps</span><span class="p">,</span> <span class="n">uri</span><span class="o">=</span><span class="n">uri</span><span class="p">,</span> <span class="n">notes</span><span class="o">=</span><span class="n">note</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+            <span class="n">remove_audiotap_files</span><span class="o">=</span><span class="n">REMOVE_AUDIOTAP_FILES</span><span class="p">,</span>
+            <span class="n">retry_if_tap_entirely_zeros</span><span class="o">=</span><span class="n">expect_all_nonzero_taps</span><span class="p">)</span>
+
+        <span class="n">k</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">_</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">balance_levels</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">balance_levels</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">rms_levs</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">rms_levels</span>
+
+        <span class="c1"># verify</span>
+        <span class="n">verify_rms_levels</span><span class="p">(</span><span class="n">zps</span><span class="p">,</span> <span class="n">rms_levels</span><span class="p">,</span> <span class="n">balance_levels</span><span class="p">)</span>
+
+        <span class="n">guaranteed_sleep</span><span class="p">(</span><span class="n">ITERATION_DELAY_SEC</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;RMS levels for all runs: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">rms_levs</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="test_balance_control_standalone"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.test_balance_control_standalone">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">standalone</span>
+<span class="k">def</span> <span class="nf">test_balance_control_standalone</span><span class="p">(</span><span class="n">unique_balance_capable_device</span><span class="p">,</span>
+                                    <span class="n">track_uri</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test all standalone players which support balance control</span>
+<span class="sd">    :param unique_balance_capable_device: a configured player with balance</span>
+<span class="sd">    control</span>
+<span class="sd">    :param track_uri: URI of test track</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">unique_balance_capable_device</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="o">==</span> <span class="s1">&#39;sh4&#39;</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Cannot take DSP audiotaps on sh4... skipping&quot;</span><span class="p">)</span>
+        <span class="k">return</span>
+    <span class="n">run_configs_captures_verifications</span><span class="p">([</span><span class="n">unique_balance_capable_device</span><span class="p">],</span>
+                                       <span class="n">track_uri</span><span class="p">)</span>
+
+    <span class="c1"># by default, we will test in the horizontal orientation, but we should</span>
+    <span class="c1"># also check the vertical orientation for the relevant players, ensuring</span>
+    <span class="c1">#  that the balance doesn&#39;t change when vertically oriented</span>
+    <span class="n">mn</span> <span class="o">=</span> <span class="n">unique_balance_capable_device</span><span class="o">.</span><span class="n">modelNumber</span>
+    <span class="k">if</span> <span class="n">mn</span> <span class="ow">in</span> <span class="n">MODEL_NUMBER_TO_ORIENTATION</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;PASSED for horizontal orientation&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">orientation</span> <span class="ow">in</span> <span class="n">MODEL_NUMBER_TO_ORIENTATION</span><span class="p">[</span><span class="n">mn</span><span class="p">]:</span>
+            <span class="k">if</span> <span class="n">orientation</span> <span class="o">==</span> <span class="n">HORIZONTAL</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Testing </span><span class="si">{}</span><span class="s2"> configuration&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">orientation</span><span class="p">))</span>
+            <span class="n">unique_balance_capable_device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">set_device_orientation</span><span class="p">(</span>
+                <span class="n">orientation</span><span class="p">)</span>
+            <span class="n">run_configs_captures_verifications</span><span class="p">(</span>
+                <span class="p">[</span><span class="n">unique_balance_capable_device</span><span class="p">],</span> <span class="n">track_uri</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="test_balance_control_stereo_pair"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_balance_controls.test_balance_control_stereo_pair">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">pair</span>
+<span class="k">def</span> <span class="nf">test_balance_control_stereo_pair</span><span class="p">(</span>
+        <span class="n">user_controls_test_configured_stereo_pair</span><span class="p">,</span> <span class="n">track_uri</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test all stereo pair player setups which support balance control</span>
+<span class="sd">    :param user_controls_test_configured_stereo_pair: an already bonded and</span>
+<span class="sd">    already configured stereo pair, a list of the left, right zone player</span>
+<span class="sd">    :param track_uri: URI of test track</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">run_configs_captures_verifications</span><span class="p">(</span>
+        <span class="n">user_controls_test_configured_stereo_pair</span><span class="p">,</span> <span class="n">track_uri</span><span class="p">)</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

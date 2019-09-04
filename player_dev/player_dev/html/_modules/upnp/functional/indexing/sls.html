@@ -1,0 +1,766 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.indexing.sls &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.indexing.sls</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">paramiko</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">tempfile</span>
+<span class="kn">import</span> <span class="nn">urllib</span>
+<span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">sonos.client.downloadmanager</span> <span class="k">import</span> <span class="n">DownloadManager</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">XMLAccessor</span>
+<span class="kn">from</span> <span class="nn">Crypto.Hash</span> <span class="k">import</span> <span class="n">HMAC</span><span class="p">,</span> <span class="n">SHA256</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">The default SSH port should be defined in paramiko</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">DEFAULT_SSH_PORT</span> <span class="o">=</span> <span class="mi">22</span>
+
+
+<div class="viewcode-block" id="DownloadMDCR"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.DownloadMDCR">[docs]</a><span class="k">class</span> <span class="nc">DownloadMDCR</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class to download MDCR disk image to server.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">upd_url</span><span class="p">,</span> <span class="n">version</span><span class="p">,</span> <span class="n">server</span><span class="p">,</span> <span class="n">user</span><span class="p">,</span> <span class="n">password</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span>
+            <span class="n">make_log_name</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">upd_url</span> <span class="o">=</span> <span class="n">upd_url</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">version</span> <span class="o">=</span> <span class="n">version</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mdcr_img</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">version</span> <span class="o">+</span> <span class="s1">&#39;-1-4.dmg&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server</span> <span class="o">=</span> <span class="n">server</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">user</span> <span class="o">=</span> <span class="n">user</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">password</span> <span class="o">=</span> <span class="n">password</span>
+
+<div class="viewcode-block" id="DownloadMDCR.download"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.DownloadMDCR.download">[docs]</a>    <span class="k">def</span> <span class="nf">download</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given an update URL, the MDCR disk image file is selected and</span>
+<span class="sd">        copied from the server to the local machine where this script</span>
+<span class="sd">        is being executed.</span>
+
+<span class="sd">        :return: Name of the local disk image file or None on failure.</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">upd_url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">upd_url</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">mdcr_img</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">(</span><span class="n">suffix</span><span class="o">=</span><span class="s1">&#39;.dmg&#39;</span><span class="p">)</span>
+        <span class="n">DownloadManager</span><span class="o">.</span><span class="n">download_file</span><span class="p">(</span><span class="n">upd_url</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span><span class="o">.</span><span class="n">name</span></div>
+
+    <span class="k">def</span> <span class="nf">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span> <span class="nf">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">type</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">traceback</span><span class="p">):</span>
+        <span class="k">return</span>
+
+<div class="viewcode-block" id="DownloadMDCR.push_img"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.DownloadMDCR.push_img">[docs]</a>    <span class="k">def</span> <span class="nf">push_img</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sends the disk image file from the local machine to the remote server.</span>
+
+<span class="sd">        :return: Name of the local disk image file.</span>
+<span class="sd">        :raises: ValueError if size of local and remote files not the same.</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">transport</span> <span class="o">=</span> <span class="n">paramiko</span><span class="o">.</span><span class="n">Transport</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span> <span class="n">DEFAULT_SSH_PORT</span><span class="p">))</span>
+        <span class="n">transport</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
+        <span class="n">sftp</span> <span class="o">=</span> <span class="n">paramiko</span><span class="o">.</span><span class="n">SFTPClient</span><span class="o">.</span><span class="n">from_transport</span><span class="p">(</span><span class="n">transport</span><span class="p">)</span>
+        <span class="n">remfile</span> <span class="o">=</span> <span class="n">sftp</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s1">&#39;/tmp/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">mdcr_img</span><span class="p">))</span>
+        <span class="n">sftp</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">transport</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">remfile</span><span class="o">.</span><span class="n">st_size</span> <span class="o">!=</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span><span class="o">.</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">st_size</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Remote size </span><span class="si">{}</span><span class="s2"> != local size </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">remfile</span><span class="o">.</span><span class="n">st_size</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">temp_dmg_file</span><span class="o">.</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">st_size</span><span class="p">))</span>
+        <span class="k">return</span> <span class="s1">&#39;/tmp/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">mdcr_img</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="SonosLibraryServer"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer">[docs]</a><span class="k">class</span> <span class="nc">SonosLibraryServer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class to implement methods for starting/stopping the Sonos Library server.</span>
+<span class="sd">    The class uses the DownloadMDCR class to update the server with the disk</span>
+<span class="sd">    image under test. It provides methods for attaching/detaching the disk image.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">PLIST_FILE</span> <span class="o">=</span> <span class="s1">&#39;/tmp/com.sonos.SonosLibraryServer.plist&#39;</span>
+    <span class="n">SERVER_LIST_CMD</span> <span class="o">=</span> <span class="s1">&#39;launchctl list |grep com.sonos.SonosLibraryServer&#39;</span>
+    <span class="n">SERVER_LOAD_CMD</span> <span class="o">=</span> <span class="s1">&#39;launchctl load -S Background </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">PLIST_FILE</span><span class="p">)</span>
+    <span class="n">SERVER_UNLOAD_CMD</span> <span class="o">=</span> <span class="s1">&#39;launchctl unload -S Background </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">PLIST_FILE</span><span class="p">)</span>
+    <span class="n">SERVER_MOUNT_DIR</span> <span class="o">=</span> <span class="s1">&#39;/tmp/sls-mount&#39;</span>
+    <span class="n">ATTACH_CMD</span> <span class="o">=</span> <span class="s1">&#39;yes | hdiutil attach -mountpoint </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1"> &gt; /dev/null&#39;</span>
+    <span class="n">DETACH_CMD</span> <span class="o">=</span> <span class="s1">&#39;hdiutil detach </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SERVER_MOUNT_DIR</span><span class="p">)</span>
+    <span class="n">SONOS_LIB_SERVER_PORT</span> <span class="o">=</span> <span class="mi">3445</span>
+    <span class="n">SONOS_LIB_SERVER_SHARE</span> <span class="o">=</span> <span class="s1">&#39;/Users/Shared/Sonos/Shares.plist&#39;</span>
+    <span class="n">PLIST</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;&lt;?xml version=</span><span class="se">\&quot;</span><span class="s2">1.0</span><span class="se">\&quot;</span><span class="s2"> encoding=</span><span class="se">\&quot;</span><span class="s2">UTF-8</span><span class="se">\&quot;</span><span class="s2">?&gt;</span>
+<span class="s2">&lt;!DOCTYPE plist PUBLIC </span><span class="se">\&quot;</span><span class="s2">-//Apple//DTD PLIST 1.0//EN</span><span class="se">\&quot;</span><span class="s2"> </span><span class="se">\&quot;</span><span class="s2">http://www.apple.com/DTDs/PropertyList-1.0.dtd</span><span class="se">\&quot;</span><span class="s2">&gt;</span>
+<span class="s2">&lt;plist version=</span><span class="se">\&quot;</span><span class="s2">1.0</span><span class="se">\&quot;</span><span class="s2">&gt;</span>
+<span class="s2">&lt;dict&gt;</span>
+<span class="s2">    &lt;key&gt;Label&lt;/key&gt;</span>
+<span class="s2">    &lt;string&gt;com.sonos.SonosLibraryServer&lt;/string&gt;</span>
+<span class="s2">    &lt;key&gt;ProgramArguments&lt;/key&gt;</span>
+<span class="s2">    &lt;array&gt;</span>
+<span class="s2">    &lt;string&gt;/tmp/sls-mount/Sonos.app/Contents/Resources/SonosLibraryServer&lt;/string&gt;</span>
+<span class="s2">    &lt;/array&gt;</span>
+<span class="s2">    &lt;key&gt;RunAtLoad&lt;/key&gt;</span>
+<span class="s2">    &lt;true/&gt;</span>
+<span class="s2">    &lt;key&gt;LimitLoadToSessionType&lt;/key&gt;</span>
+<span class="s2">    &lt;array&gt;</span>
+<span class="s2">     &lt;string&gt;Background&lt;/string&gt;</span>
+<span class="s2">    &lt;/array&gt;</span>
+<span class="s2">&lt;/dict&gt;</span>
+<span class="s2">&lt;/plist&gt;</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Text written to /Users/Shared/Sonos/Shares.plist file.</span>
+<span class="sd">    The content of the file specifies the share name and the share path</span>
+<span class="sd">    that will be used by the Sonos Library Server.</span>
+<span class="sd">    The MUSIC_SHARE_PLIST is the default file.</span>
+<span class="sd">    The &quot;Path&quot; is the absolute path location and must exist on the</span>
+<span class="sd">    system the Sonos Library server will be running.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">MUSIC_SHARE_PLIST</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;</span>
+<span class="s2">&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;</span>
+<span class="s2">&lt;plist version=&quot;1.0&quot;&gt;</span>
+<span class="s2">&lt;dict&gt;</span>
+<span class="s2">	&lt;key&gt;Music&lt;/key&gt;</span>
+<span class="s2">	&lt;dict&gt;</span>
+<span class="s2">		&lt;key&gt;Path&lt;/key&gt;</span>
+<span class="s2">		&lt;string&gt;/Users/SQA/Music&lt;/string&gt;</span>
+<span class="s2">	&lt;/dict&gt;</span>
+<span class="s2">&lt;/dict&gt;</span>
+<span class="s2">&lt;/plist&gt;</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Shared key between zone players and Sonos Library Server for authenticating</span>
+<span class="sd">    access to HTTP pages.</span>
+<span class="sd">    Reference oc/zone/zoneplayer/mntmgr.cxx:GenerateMountAuthorization()</span>
+<span class="sd">    Reference all/mdcr/SonosLibraryServer/SonosLibraryServer/ShareConnection.m</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">SHARED_KEY</span> <span class="o">=</span> <span class="n">reduce</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">x</span> <span class="o">+</span> <span class="n">y</span><span class="p">,</span>
+                       <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">struct</span><span class="o">.</span><span class="n">pack</span><span class="p">(</span><span class="s1">&#39;B&#39;</span><span class="p">,</span> <span class="n">x</span><span class="p">),</span>
+                           <span class="p">[</span>
+                <span class="mh">0x6f</span><span class="p">,</span> <span class="mh">0xe4</span><span class="p">,</span> <span class="mh">0x31</span><span class="p">,</span> <span class="mh">0x83</span><span class="p">,</span> <span class="mh">0x8f</span><span class="p">,</span> <span class="mh">0xe4</span><span class="p">,</span> <span class="mh">0x05</span><span class="p">,</span> <span class="mh">0x02</span><span class="p">,</span>
+                <span class="mh">0x57</span><span class="p">,</span> <span class="mh">0xd0</span><span class="p">,</span> <span class="mh">0x09</span><span class="p">,</span> <span class="mh">0x11</span><span class="p">,</span> <span class="mh">0xff</span><span class="p">,</span> <span class="mh">0xd0</span><span class="p">,</span> <span class="mh">0x01</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span>
+                <span class="mh">0xf0</span><span class="p">,</span> <span class="mh">0xe4</span><span class="p">,</span> <span class="mh">0x05</span><span class="p">,</span> <span class="mh">0xa0</span><span class="p">,</span> <span class="mh">0x0f</span><span class="p">,</span> <span class="mh">0xe5</span><span class="p">,</span> <span class="mh">0xa1</span><span class="p">,</span> <span class="mh">0x03</span><span class="p">,</span>
+                <span class="mh">0x3f</span><span class="p">,</span> <span class="mh">0xd1</span><span class="p">,</span> <span class="mh">0x01</span><span class="p">,</span> <span class="mh">0x04</span><span class="p">,</span> <span class="mh">0x12</span><span class="p">,</span> <span class="mh">0xd2</span><span class="p">,</span> <span class="mh">0x09</span><span class="p">,</span> <span class="mh">0x00</span><span class="p">,</span>
+                <span class="p">]))</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Location of the decryption binary on the tools server</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">DECRYPT_BINARY_URL</span> <span class="o">=</span> <span class="s1">&#39;http://cb-tools-1/~user/tools/MDCR/DecryptCredentials&#39;</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Remote executable name on target platform</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">REMOTE_DECRYPT_EXEC_NAME</span> <span class="o">=</span> <span class="s1">&#39;/tmp/DecryptCredentials&#39;</span>
+
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Characters which the zone player does not URL encode.</span>
+<span class="sd">    Reference oc/common/src/upnputils.cxx:urlEncodeAsUrl()</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">URL_ENCODE_EXCLUDE_CHARS</span> <span class="o">=</span> <span class="s2">&quot;$-_.+!*&#39;(),/&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">server_cfg</span><span class="p">,</span> <span class="n">build_cfg</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets up the environment required to run the Sonos Libarary server.</span>
+
+<span class="sd">        :param obj server_cfg:`sonos.environment.WorkflowExecutionConfiguration`</span>
+<span class="sd">        :param obj build_cfg:`sonos.environment.WorkflowExecutionConfiguration`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server</span> <span class="o">=</span> <span class="n">server_cfg</span><span class="o">.</span><span class="n">server</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">user</span> <span class="o">=</span> <span class="n">server_cfg</span><span class="o">.</span><span class="n">user</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">password</span> <span class="o">=</span> <span class="n">server_cfg</span><span class="o">.</span><span class="n">password</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">upd_url</span> <span class="o">=</span> <span class="n">build_cfg</span><span class="o">.</span><span class="n">download_url</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">upd_version</span> <span class="o">=</span> <span class="n">build_cfg</span><span class="o">.</span><span class="n">version_number</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">branch</span> <span class="o">=</span> <span class="n">build_cfg</span><span class="o">.</span><span class="n">branch_name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">upd_img</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_url</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span>
+            <span class="n">make_log_name</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transport</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_connect</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_setup_sftp</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_get_credentials</span><span class="p">()</span>
+
+<div class="viewcode-block" id="SonosLibraryServer.download_img"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.download_img">[docs]</a>    <span class="k">def</span> <span class="nf">download_img</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Updates the remote server with the image from the URL.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="n">DownloadMDCR</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">upd_url</span><span class="p">,</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">upd_version</span><span class="p">,</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">user</span><span class="p">,</span>
+                          <span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">)</span> <span class="k">as</span> <span class="n">d</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">download</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">upd_img</span> <span class="o">=</span> <span class="n">d</span><span class="o">.</span><span class="n">push_img</span><span class="p">()</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;server image location: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">upd_img</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.set_paramiko_log_level"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.set_paramiko_log_level">[docs]</a>    <span class="k">def</span> <span class="nf">set_paramiko_log_level</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">level</span><span class="p">):</span>
+        <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">&quot;paramiko&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">level</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_connect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initiate SSH connection to server, setting the minimum log level.</span>
+<span class="sd">        Return SSHClient object class.</span>
+
+<span class="sd">        :return: SSHClient class</span>
+<span class="sd">        :rtype: :obj:class:`paramiko.SSHClient`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_paramiko_log_level</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">ERROR</span><span class="p">)</span>
+        <span class="n">ssh</span> <span class="o">=</span> <span class="n">paramiko</span><span class="o">.</span><span class="n">SSHClient</span><span class="p">()</span>
+        <span class="n">ssh</span><span class="o">.</span><span class="n">set_missing_host_key_policy</span><span class="p">(</span><span class="n">paramiko</span><span class="o">.</span><span class="n">AutoAddPolicy</span><span class="p">())</span>
+        <span class="n">ssh</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span>
+                    <span class="n">username</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">user</span><span class="p">,</span>
+                    <span class="n">password</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ssh</span>
+
+    <span class="k">def</span> <span class="nf">_setup_sftp</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initiate SFTP session to server.</span>
+
+<span class="sd">        :return: SFTPClient class</span>
+<span class="sd">        :rtype: :obj:class:`paramiko.SFTPClient`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transport</span> <span class="o">=</span> <span class="n">paramiko</span><span class="o">.</span><span class="n">Transport</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span> <span class="n">DEFAULT_SSH_PORT</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transport</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="n">username</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">user</span><span class="p">,</span> <span class="n">password</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">password</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">paramiko</span><span class="o">.</span><span class="n">SFTPClient</span><span class="o">.</span><span class="n">from_transport</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">transport</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_credentials</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decrypts and stores the credentials for accessing the shares.</span>
+<span class="sd">        Installs the decryption binary on remote system, executes the</span>
+<span class="sd">        command to decrypt the credentials, parses the output stores</span>
+<span class="sd">        the credentials and removes the remote decrypt binary.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cred_user</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cred_pass</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">tmpFile</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">()</span>
+        <span class="n">DownloadManager</span><span class="o">.</span><span class="n">download_file</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">DECRYPT_BINARY_URL</span><span class="p">,</span> <span class="n">tmpFile</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">tmpFile</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+                      <span class="bp">self</span><span class="o">.</span><span class="n">REMOTE_DECRYPT_EXEC_NAME</span><span class="p">,</span>
+                      <span class="n">confirm</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">chmod</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">REMOTE_DECRYPT_EXEC_NAME</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="s1">&#39;777&#39;</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">REMOTE_DECRYPT_EXEC_NAME</span><span class="p">)</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">status</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;No credentials - stderr output &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">serr</span><span class="p">))</span>
+        <span class="n">cred_search</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="s1">&#39;name=(.*)</span><span class="se">\n</span><span class="s1">.*pass=(.*)</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">,</span>
+                                <span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">(),</span>
+                                <span class="n">re</span><span class="o">.</span><span class="n">MULTILINE</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">cred_search</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cred_user</span> <span class="o">=</span> <span class="n">cred_search</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cred_pass</span> <span class="o">=</span> <span class="n">cred_search</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span>
+                <span class="s2">&quot;Couldn&#39;t find credentials - stderr output &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">serr</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">REMOTE_DECRYPT_EXEC_NAME</span><span class="p">)</span>
+
+<div class="viewcode-block" id="SonosLibraryServer.update_plist"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.update_plist">[docs]</a>    <span class="k">def</span> <span class="nf">update_plist</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Updates the required .plist file on the server.</span>
+<span class="sd">        The .plist contains arguments required to be passed to the</span>
+<span class="sd">        launchctl deamon such as path of the Sonos Library server</span>
+<span class="sd">        executable.</span>
+
+<span class="sd">        :raises: ValueError if size of local and remote files not the same.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">tmp_file</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">()</span>
+        <span class="n">tmp_file</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">PLIST</span><span class="p">)</span>
+        <span class="n">tmp_file</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+        <span class="n">tmp_file</span><span class="o">.</span><span class="n">seek</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">remfile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">tmp_file</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">PLIST_FILE</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">remfile</span><span class="o">.</span><span class="n">st_size</span> <span class="o">!=</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="n">tmp_file</span><span class="o">.</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">st_size</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Remote size </span><span class="si">{}</span><span class="s2"> != local size </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">remfile</span><span class="o">.</span><span class="n">st_size</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">stat</span><span class="p">(</span><span class="n">tmp_file</span><span class="o">.</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">st_size</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.attach_img"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.attach_img">[docs]</a>    <span class="k">def</span> <span class="nf">attach_img</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Attach the disk file image on the local file system.</span>
+
+<span class="sd">        Returns boolean True if the image has been attached or False on error</span>
+
+<span class="sd">        :return: Has the image been attached ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="s1">&#39;mkdir -p </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_MOUNT_DIR</span><span class="p">))</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">status</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;attach_img: couldn&#39;t create </span><span class="si">{}</span><span class="s2"> : </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_MOUNT_DIR</span><span class="p">,</span> <span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">()))</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ATTACH_CMD</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_MOUNT_DIR</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">upd_img</span><span class="p">))</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">status</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;attach_img: </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">upd_img</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_img_attached</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.detach_img"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.detach_img">[docs]</a>    <span class="k">def</span> <span class="nf">detach_img</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Detach the disk file image from the local file system.</span>
+
+<span class="sd">        Returns boolean True if the image has been detached or False on error</span>
+
+<span class="sd">        :return: Has the image been detached ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">detached</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">DETACH_CMD</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="n">sout</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+            <span class="k">if</span> <span class="s1">&#39;unmounted&#39;</span> <span class="ow">in</span> <span class="n">out</span> <span class="ow">and</span> <span class="s1">&#39;ejected&#39;</span> <span class="ow">in</span> <span class="n">out</span><span class="p">:</span>
+                <span class="n">detached</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">elif</span> <span class="s1">&#39;No such file or directory&#39;</span> <span class="ow">in</span> <span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">():</span>
+            <span class="n">detached</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">detached</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.setup_img"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.setup_img">[docs]</a>    <span class="k">def</span> <span class="nf">setup_img</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Downloads MDCR image to server, stops previous incarnation of the</span>
+<span class="sd">        server and attaches the new image.</span>
+
+<span class="sd">        Returns boolean True if the image has been attached or False on error</span>
+
+<span class="sd">        :return: Has the image been attached ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">download_img</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">update_plist</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stop_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">detach_img</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">attach_img</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.stop_server"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.stop_server">[docs]</a>    <span class="k">def</span> <span class="nf">stop_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Stop the Sonos library server.</span>
+
+<span class="sd">        Returns boolean True if the Sonos library server has</span>
+<span class="sd">        stopped else False.</span>
+
+<span class="sd">        :return: Has the Sonos library server stopped ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">pid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_server_running</span><span class="p">()</span>
+        <span class="k">if</span> <span class="o">-</span><span class="mi">1</span> <span class="o">==</span> <span class="n">pid</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Stopping server with pid </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pid</span><span class="p">))</span>
+        <span class="n">stopped</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_UNLOAD_CMD</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">stopped</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;server with pid </span><span class="si">{}</span><span class="s2"> stopped&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pid</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Couldn&#39;t stop server: standard error contents&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="n">stopped</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.start_server"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.start_server">[docs]</a>    <span class="k">def</span> <span class="nf">start_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Start the Sonos library server.</span>
+
+<span class="sd">        Returns boolean True if the Sonos library server started else False.</span>
+
+<span class="sd">        :return: Has the Sonos library server started ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">stop_server</span><span class="p">():</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="n">started</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_LOAD_CMD</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">started</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;server running with pid </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">is_server_running</span><span class="p">()))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Couldn&#39;t start server: standard error contents&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">serr</span><span class="o">.</span><span class="n">read</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="n">started</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.is_server_running"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.is_server_running">[docs]</a>    <span class="k">def</span> <span class="nf">is_server_running</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks if the Sonos library server is running.</span>
+
+<span class="sd">        Returns the numeric process identifier of the Sonos library server</span>
+<span class="sd">        or zero if the server is not running.</span>
+
+<span class="sd">        :return: Process identifier number of Sonos library server</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVER_LIST_CMD</span><span class="p">)</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">sout</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="n">m</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">ur</span><span class="s1">&#39;^(\S+)\s+(\S+)\s+com.sonos.SonosLibraryServer&#39;</span><span class="p">,</span>
+                      <span class="n">out</span><span class="p">,</span>
+                      <span class="n">re</span><span class="o">.</span><span class="n">MULTILINE</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">m</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">m</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">isdigit</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">m</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Detected server running with pid </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Detected renmant server&quot;</span><span class="p">)</span>
+                <span class="c1"># return anything but -1</span>
+                <span class="k">return</span> <span class="mi">0</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_pid</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.get_server_shares"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.get_server_shares">[docs]</a>    <span class="k">def</span> <span class="nf">get_server_shares</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        It parses the self.SONOS_LIB_SERVER_SHARE from the remote machine</span>
+<span class="sd">        where the Sonos Libarary server is active looking for the share</span>
+<span class="sd">        name the server is serving the HTTP requests.</span>
+
+<span class="sd">        Parses the SONOS_LIB_SERVER_SHARE and creates a list</span>
+<span class="sd">        of tuples (share name, absolute path). Returns an empy list</span>
+<span class="sd">        if there&#39;re no shares on the file.</span>
+
+<span class="sd">        TODO Per Eric B. It might be better to just fetch shares from XML</span>
+<span class="sd">        TODO everytime we want to get this list. That way we are always getting</span>
+<span class="sd">        TODO the latest share information, as I imagine we have tests</span>
+<span class="sd">        TODO that modify shares to validate the server is working properly.</span>
+<span class="sd">        TODO This can easily be done by converting get_server_shares into</span>
+<span class="sd">        TODO a property getter.</span>
+<span class="sd">        TODO self.server_shares[]</span>
+<span class="sd">        TODO @property</span>
+<span class="sd">        TODO def server_shares(self):</span>
+<span class="sd">        TODO     ...</span>
+
+<span class="sd">        :return: list of tuples comprised of share name and absolute path</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">remfile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_SHARE</span><span class="p">,</span> <span class="s1">&#39;r&#39;</span><span class="p">)</span>
+        <span class="n">text</span> <span class="o">=</span> <span class="n">remfile</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">text</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">u</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="sa">u</span><span class="s1">&#39;</span><span class="se">\t</span><span class="s1">&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">))</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s1">&#39;dict&#39;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Did not find a share in </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_SHARE</span><span class="p">))</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span>
+        <span class="n">items</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;dict&#39;</span><span class="p">)</span>
+        <span class="n">shares</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">paths</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">item</span><span class="o">.</span><span class="n">value</span><span class="p">:</span>
+                <span class="n">shares</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="p">(</span><span class="nb">hasattr</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="s1">&#39;string&#39;</span><span class="p">)):</span>
+                <span class="n">paths</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;string&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">shares</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">shares</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">paths</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span> <span class="o">=</span> <span class="p">[(</span><span class="n">shares</span><span class="p">[</span><span class="n">item</span><span class="p">],</span> <span class="n">paths</span><span class="p">[</span><span class="n">item</span><span class="p">])</span>
+                                  <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">shares</span><span class="p">))]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Server server_shares </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.get_share_path"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.get_share_path">[docs]</a>    <span class="k">def</span> <span class="nf">get_share_path</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the URL of the share specified by the index.</span>
+<span class="sd">        For example, if &#39;Music&#39; is the share with index zero (0)</span>
+<span class="sd">        then it will return http://&lt;ip&gt;:3445/Music where the ip</span>
+<span class="sd">        is the internet address of the server.</span>
+
+<span class="sd">        :param int index: Desired share index the server.</span>
+<span class="sd">        :raises: IndexError if index out of range.</span>
+<span class="sd">        :return: The URL of the desired share.</span>
+<span class="sd">        :rtype: :str:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_url</span> <span class="o">+</span> <span class="s1">&#39;/&#39;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.send_http_request_with_auth"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.send_http_request_with_auth">[docs]</a>    <span class="k">def</span> <span class="nf">send_http_request_with_auth</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Access to Sonos Library Server HTTP pages using credentials.</span>
+<span class="sd">        The provided path in addition to the root path the server is providing</span>
+<span class="sd">        (http://&lt;server:3445/Share where Share is the name of the key in the PLIST)</span>
+<span class="sd">        along with the credentials (name/password) are encoded to generate a hash</span>
+<span class="sd">        which is used in the Authentication key word of the requests headers.</span>
+<span class="sd">        It returns the response from the Sonos Library Server.</span>
+
+<span class="sd">        :param str path: partial URL</span>
+<span class="sd">        :param dict headers: Dictionary of key:value pairs for headers in requests</span>
+<span class="sd">        :param int timeout: Timeout in seconds</span>
+<span class="sd">        :param str query: Query ?before= or ?after= not URL encoded</span>
+<span class="sd">        :return: requests.Response object</span>
+<span class="sd">        :rtype: :obj:`~requests.Response`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Initialize the required headers dictionary if it&#39;s not provided by user</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="n">headers</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="c1"># If query mode, the query is not url encoded that is</span>
+        <span class="c1"># ?after=   or  ?before=</span>
+        <span class="c1"># the ? and = characters are not to be url encoded - ugly!!!!</span>
+        <span class="n">slash</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span>
+        <span class="k">if</span> <span class="n">query</span><span class="p">:</span>
+            <span class="n">root</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">updated_path</span> <span class="o">=</span> <span class="n">root</span> <span class="o">+</span> <span class="n">query</span> <span class="o">+</span> <span class="n">path</span>
+            <span class="n">quoted_root</span> <span class="o">=</span> <span class="n">urllib</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">URL_ENCODE_EXCLUDE_CHARS</span><span class="p">)</span>
+            <span class="n">quoted_path</span> <span class="o">=</span> <span class="n">urllib</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">URL_ENCODE_EXCLUDE_CHARS</span><span class="p">)</span>
+            <span class="n">quoted_updated_path</span> <span class="o">=</span> <span class="n">quoted_root</span> <span class="o">+</span> <span class="n">query</span> <span class="o">+</span> <span class="n">quoted_path</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">updated_path</span> <span class="o">=</span> <span class="s1">&#39;/&#39;</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_shares</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">slash</span> <span class="o">+</span> <span class="n">path</span>
+            <span class="n">quoted_updated_path</span> <span class="o">=</span> <span class="n">urllib</span><span class="o">.</span><span class="n">quote</span><span class="p">(</span><span class="n">updated_path</span><span class="p">,</span>
+                                               <span class="bp">self</span><span class="o">.</span><span class="n">URL_ENCODE_EXCLUDE_CHARS</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Using path &#39;</span><span class="si">{}</span><span class="s2">&#39; quoted path &#39;</span><span class="si">{}</span><span class="s2">&#39;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">updated_path</span><span class="p">,</span> <span class="n">quoted_updated_path</span><span class="p">))</span>
+        <span class="n">s</span> <span class="o">=</span> <span class="n">HMAC</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SHARED_KEY</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">SHA256</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">quoted_updated_path</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cred_user</span><span class="p">)</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cred_pass</span><span class="p">)</span>
+        <span class="n">genhash</span> <span class="o">=</span> <span class="n">s</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span><span class="o">.</span><span class="n">upper</span><span class="p">()</span>
+        <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;Authorization&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="s1">&#39;hash &#39;</span> <span class="o">+</span> <span class="n">genhash</span>
+        <span class="n">full_path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">server_url</span> <span class="o">+</span> <span class="n">quoted_updated_path</span>
+        <span class="k">return</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">full_path</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_wait_for_ready</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">,</span> <span class="n">retries</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Attempts to access the specified HTTP page returning True</span>
+<span class="sd">        if the server responds. In the event the TCP port has not</span>
+<span class="sd">        been opened for HTTP requests (Connection refused), it</span>
+<span class="sd">        waits one second and retries to access the page again.</span>
+<span class="sd">        Returns False when the retries have been exhausted without</span>
+<span class="sd">        a response from the server.</span>
+
+<span class="sd">        :param str path: server URL page</span>
+<span class="sd">        :param int retries: number of attempts to access URL page</span>
+<span class="sd">        :return: is the server ready ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">refused</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">url</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span>
+                                       <span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_PORT</span><span class="p">,</span>
+                                       <span class="n">path</span><span class="p">)</span>
+        <span class="n">attempts</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">while</span> <span class="n">refused</span> <span class="ow">and</span> <span class="n">attempts</span> <span class="o">&lt;</span> <span class="n">retries</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+            <span class="k">except</span> <span class="n">requests</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">ConnectionError</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> connection refused&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">url</span><span class="p">))</span>
+                <span class="n">refused</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+                <span class="n">attempts</span> <span class="o">=</span> <span class="mi">1</span> <span class="o">+</span> <span class="n">attempts</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">refused</span> <span class="o">=</span> <span class="kc">False</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;server responded on </span><span class="si">{}</span><span class="s2"> on </span><span class="si">{}</span><span class="s2"> attempt&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="n">url</span><span class="p">,</span> <span class="n">attempts</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+        <span class="k">return</span> <span class="ow">not</span> <span class="n">refused</span>
+
+<div class="viewcode-block" id="SonosLibraryServer.is_server_ready"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.is_server_ready">[docs]</a>    <span class="k">def</span> <span class="nf">is_server_ready</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns True if the HTTP server responds to HTTP requests else False.</span>
+<span class="sd">        If the server is ready, the variable self.server_url is updated to</span>
+<span class="sd">        the full URL of the server&#39;s shared path.</span>
+<span class="sd">        The request uses the first share, path tuple in the list returned</span>
+<span class="sd">        from parsing the the .plist file.</span>
+
+<span class="sd">        :return: is the server ready ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">shares</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_server_shares</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">shares</span><span class="p">:</span>
+            <span class="p">(</span><span class="n">share</span><span class="p">,</span> <span class="n">path</span><span class="p">)</span> <span class="o">=</span> <span class="n">shares</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_wait_for_ready</span><span class="p">(</span><span class="n">share</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">ret</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">server_url</span> <span class="o">=</span> <span class="s2">&quot;http://</span><span class="si">{}</span><span class="s2">:</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">server</span><span class="p">,</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_PORT</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ret</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.is_img_attached"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.is_img_attached">[docs]</a>    <span class="k">def</span> <span class="nf">is_img_attached</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Checks if the well-known mount point is attached to a disk image.</span>
+
+<span class="sd">        Returns False if mount point is not attached else True</span>
+
+<span class="sd">        :return: Is the disk image attached ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">attached</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">sin</span><span class="p">,</span> <span class="n">sout</span><span class="p">,</span> <span class="n">serr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">exec_command</span><span class="p">(</span><span class="s1">&#39;hdiutil info&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">sout</span><span class="o">.</span><span class="n">channel</span><span class="o">.</span><span class="n">recv_exit_status</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">SERVER_MOUNT_DIR</span> <span class="ow">in</span> <span class="n">sout</span><span class="o">.</span><span class="n">read</span><span class="p">()):</span>
+            <span class="n">attached</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">attached</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.install_test_share"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.install_test_share">[docs]</a>    <span class="k">def</span> <span class="nf">install_test_share</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">text</span><span class="o">=</span><span class="n">MUSIC_SHARE_PLIST</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Writes the contents of the provided text onto the public</span>
+<span class="sd">        self.SONOS_LIB_SERVER_SHARE file. If the text keyword</span>
+<span class="sd">        argument is not provided, it uses the contents of the</span>
+<span class="sd">        default PLIST MUSIC_SHARE_PLIST.</span>
+<span class="sd">        :param str text: Content to write</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">remfile</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_SHARE</span><span class="p">,</span> <span class="s1">&#39;w+&#39;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">IOError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Couldn&#39;t write </span><span class="si">{}</span><span class="s2">: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">SONOS_LIB_SERVER_SHARE</span><span class="p">,</span> <span class="n">e</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">remfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+            <span class="n">remfile</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+            <span class="n">remfile</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.start"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.start">[docs]</a>    <span class="k">def</span> <span class="nf">start</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Activates the Sonos Library server.</span>
+
+<span class="sd">        :return: Was server activation successful ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Server started </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_server_ready</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Server ready </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">res</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+<div class="viewcode-block" id="SonosLibraryServer.shutdown"><a class="viewcode-back" href="../../../../upnp.functional.indexing.html#upnp.functional.indexing.sls.SonosLibraryServer.shutdown">[docs]</a>    <span class="k">def</span> <span class="nf">shutdown</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Terminates Sonos Library server and detaches the disk image.</span>
+<span class="sd">        Terminates the SSH and SFTP sessions to remote machine.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">stopped</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stop_server</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Server stopped </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">stopped</span><span class="p">))</span>
+        <span class="n">detached</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">detach_img</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Image detached </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">detached</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">install_test_share</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ssh</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sftp</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transport</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

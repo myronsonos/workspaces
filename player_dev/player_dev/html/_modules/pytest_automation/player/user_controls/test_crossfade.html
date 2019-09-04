@@ -1,0 +1,886 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.player.user_controls.test_crossfade &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.player.user_controls.test_crossfade</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">This test module aims at testing the crossfade functionality on the players</span>
+<span class="sd">by analyzing the audio output of the players&#39; DSPOUT audiotaps.</span>
+
+<span class="sd">The core of the test executes by queueing up 2 tracks in the players&#39; queue.</span>
+<span class="sd">One of the tracks has a sine tone playing at one frequency.</span>
+<span class="sd">The other track has a sine tone playing at a different frequency.</span>
+<span class="sd">Each of the tracks is &gt; 30s in durations, so as to provide enough audio for</span>
+<span class="sd">crossfade to execute.</span>
+
+<span class="sd">The tracks are played back with and without crossfade enabled.</span>
+<span class="sd">The analysis involves taking FFT windows throughout time slices of the</span>
+<span class="sd">entire audiotap duration, which should be around 1 minute without crossfade</span>
+<span class="sd">enabled and around 45s with crossfade enabled (15s of first, 15s of both,</span>
+<span class="sd">15s of second).</span>
+
+<span class="sd">The FFTs without crossfade should only one window where both tones are</span>
+<span class="sd">present in the frequency spectrum of the audio.</span>
+<span class="sd">The FFTs with crossfade should show 15s of the first tone, 15s where the</span>
+<span class="sd">first tone progressively attenuates and the second tone progressively</span>
+<span class="sd">increments, and 15s of the second tone.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">from</span> <span class="nn">audio_util</span> <span class="k">import</span> <span class="n">fft_helper</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="k">import</span> <span class="n">Process</span><span class="p">,</span> <span class="n">Queue</span>
+<span class="kn">import</span> <span class="nn">itertools</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">os</span>
+
+<span class="c1"># duration for total audiotap capture w/ and w/o xfade enabled</span>
+<span class="n">SINGLE_FILE_DURATION_SEC</span> <span class="o">=</span> <span class="mi">35</span>
+<span class="n">XFADE_MAX_DURATION_SEC</span> <span class="o">=</span> <span class="mi">12</span>
+<span class="n">XFADE_MIN_DURATION_SEC</span> <span class="o">=</span> <span class="mi">5</span>
+<span class="n">XFADE_ENABLED_TOTAL_DURATION_SEC</span> <span class="o">=</span> <span class="p">(</span><span class="mi">2</span> <span class="o">*</span> <span class="n">SINGLE_FILE_DURATION_SEC</span> <span class="o">-</span>
+                                    <span class="n">XFADE_MIN_DURATION_SEC</span><span class="p">)</span>
+<span class="n">XFADE_DISABLED_TOTAL_DURATION_SEC</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">SINGLE_FILE_DURATION_SEC</span>
+
+<span class="n">FIRST_TONE_MAX_DURATION</span> <span class="o">=</span> <span class="n">SINGLE_FILE_DURATION_SEC</span>
+<span class="n">FIRST_TONE_MIN_DURATION</span> <span class="o">=</span> <span class="n">SINGLE_FILE_DURATION_SEC</span> <span class="o">-</span> <span class="n">XFADE_MAX_DURATION_SEC</span>
+
+<span class="n">LOCAL_SERVER_PATH</span> <span class="o">=</span> <span class="s1">&#39;/srv/samba/Automation/UserControlsTest&#39;</span>
+<span class="n">LOCAL_PATH</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="vm">__file__</span><span class="p">))</span>
+
+<span class="n">PLAYBACK_TONES</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;1000Hz.wav&#39;</span><span class="p">,</span> <span class="s1">&#39;700Hz.wav&#39;</span><span class="p">,</span>
+                  <span class="s1">&#39;1000Hz.ogg&#39;</span><span class="p">,</span> <span class="s1">&#39;700Hz.ogg&#39;</span><span class="p">,</span>
+                  <span class="s1">&#39;1000Hz.m4a&#39;</span><span class="p">,</span> <span class="s1">&#39;700Hz.m4a&#39;</span>
+                  <span class="p">]</span>
+
+<span class="n">SAMPLE_RATE</span> <span class="o">=</span> <span class="mi">44100</span>
+<span class="n">TEST_VOLUME</span> <span class="o">=</span> <span class="mi">5</span>
+
+<span class="n">SKIP_SECONDS_SPECTROGRAM_START</span> <span class="o">=</span> <span class="mi">3</span>
+<span class="n">SKIP_SECONDS_SPECTROGRAM_END</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="c1"># the number of dB of difference between two distinct tones below which we</span>
+<span class="c1"># conclude that crossfade is enabled</span>
+<span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span> <span class="o">=</span> <span class="mi">30</span>
+
+<span class="c1"># the number of dB that a given tone can change (increase or decrease) in a</span>
+<span class="c1"># second, above which we will note that crossfade is engaged</span>
+<span class="n">TONE_DECREASE_THRESHOLD_DB</span> <span class="o">=</span> <span class="mi">1</span>
+
+
+<div class="viewcode-block" id="get_codec_transition_list"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.get_codec_transition_list">[docs]</a><span class="k">def</span> <span class="nf">get_codec_transition_list</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    function to compute a list of codec transitions to be tested for crossfade</span>
+<span class="sd">    :return: list of codec transitions</span>
+<span class="sd">    example list: [(&#39;1000Hz.wav&#39;,&#39;700Hz.wav&#39;),(&#39;1000Hz.wav&#39;,&#39;700.ogg&#39;)]</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">codec_list</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">itertools</span><span class="o">.</span><span class="n">permutations</span><span class="p">(</span><span class="n">PLAYBACK_TONES</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+    <span class="n">final_list</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">codec_transition_list</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="k">for</span> <span class="n">pair</span> <span class="ow">in</span> <span class="n">codec_list</span><span class="p">:</span>
+        <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">codec_1</span> <span class="o">=</span> <span class="n">pair</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)</span>
+        <span class="n">tone_2_hz</span><span class="p">,</span> <span class="n">codec_2</span> <span class="o">=</span> <span class="n">pair</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">tone_1_hz</span> <span class="o">==</span> <span class="n">tone_2_hz</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">codec_1</span><span class="p">,</span> <span class="n">codec_2</span><span class="p">)</span> <span class="ow">in</span> <span class="n">codec_transition_list</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">final_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pair</span><span class="p">)</span>
+            <span class="n">codec_transition_list</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">codec_1</span><span class="p">,</span> <span class="n">codec_2</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">final_list</span></div>
+
+
+<div class="viewcode-block" id="add_dbs"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.add_dbs">[docs]</a><span class="k">def</span> <span class="nf">add_dbs</span><span class="p">(</span><span class="n">dbs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    function to add an array of dB values and return their sum.</span>
+<span class="sd">    # NOTE: this is for incohenrent signals&#39; dB</span>
+<span class="sd">    :param dbs: list of floats</span>
+<span class="sd">    :return: float - the sum (in dB) of the dB values listed in the given list</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># In case the values in dbs are 0, log10(0) would raise a RuntimeWarning</span>
+    <span class="c1"># specifying a divide by zero event.</span>
+    <span class="c1"># These warnings make the log look cluttered. As such, ignore log10</span>
+    <span class="c1"># divide warnings if any</span>
+    <span class="n">np</span><span class="o">.</span><span class="n">seterr</span><span class="p">(</span><span class="n">divide</span><span class="o">=</span><span class="s1">&#39;ignore&#39;</span><span class="p">)</span>
+
+    <span class="c1"># if only 1 dB value, return it</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">dbs</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">dbs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">tot</span> <span class="o">=</span> <span class="n">dbs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">db</span> <span class="ow">in</span> <span class="n">dbs</span><span class="p">[</span><span class="mi">1</span><span class="p">:]:</span>
+        <span class="n">tot</span> <span class="o">=</span> <span class="mi">10</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">log10</span><span class="p">(</span><span class="mi">10</span><span class="o">**</span><span class="p">(</span><span class="n">tot</span><span class="o">/</span><span class="mf">10.0</span><span class="p">)</span> <span class="o">+</span> <span class="mi">10</span><span class="o">**</span><span class="p">(</span><span class="n">db</span><span class="o">/</span><span class="mf">10.0</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">tot</span></div>
+
+
+<div class="viewcode-block" id="get_index_for_freq"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.get_index_for_freq">[docs]</a><span class="k">def</span> <span class="nf">get_index_for_freq</span><span class="p">(</span><span class="n">freqs</span><span class="p">,</span> <span class="n">target_f</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Get the index of the frequency bin that fall within target_f +-</span>
+<span class="sd">    deviation</span>
+<span class="sd">    :param freqs: the list of frequencies in Hz for the given window in the</span>
+<span class="sd">    spectrogram</span>
+<span class="sd">    :param target_f: the target frequency to obtain the energy for, given in Hz</span>
+<span class="sd">    :return: list with one entry - the frequency that comes closest to target_f</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">closest_bin</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="c1"># arbitary starting diff</span>
+    <span class="n">diff</span> <span class="o">=</span> <span class="mi">10000</span>
+
+    <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">freqs</span><span class="p">):</span>
+        <span class="n">abs_diff</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">f</span> <span class="o">-</span> <span class="n">target_f</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">abs_diff</span> <span class="o">&lt;</span> <span class="n">diff</span><span class="p">:</span>
+            <span class="n">diff</span> <span class="o">=</span> <span class="n">abs_diff</span>
+            <span class="n">closest_bin</span> <span class="o">=</span> <span class="n">idx</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">closest_bin</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="get_indices_of_not_these_frequencies"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.get_indices_of_not_these_frequencies">[docs]</a><span class="k">def</span> <span class="nf">get_indices_of_not_these_frequencies</span><span class="p">(</span><span class="n">freqs</span><span class="p">,</span> <span class="n">target_fs</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Get the indices of the frequency bins that are not any of the target_fs</span>
+<span class="sd">    :param freqs: the list of frequencies in Hz for the given window in the</span>
+<span class="sd">    spectrogram</span>
+<span class="sd">    :param target_fs: the target frequencies to obtain the energy for,</span>
+<span class="sd">    given in Hz</span>
+<span class="sd">    :return: list of indices in freqs which are not any of the target</span>
+<span class="sd">    frequencies</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">target_fs_bins</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">target_f</span> <span class="ow">in</span> <span class="n">target_fs</span><span class="p">:</span>
+        <span class="n">target_fs_bins</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">get_index_for_freq</span><span class="p">(</span><span class="n">freqs</span><span class="p">,</span> <span class="n">target_f</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="n">indices</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">idx</span><span class="p">,</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">freqs</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">idx</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">target_fs_bins</span><span class="p">:</span>
+            <span class="n">indices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">indices</span></div>
+
+
+<div class="viewcode-block" id="get_energy_levels_for_frequencies_in_spectrograms"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.get_energy_levels_for_frequencies_in_spectrograms">[docs]</a><span class="k">def</span> <span class="nf">get_energy_levels_for_frequencies_in_spectrograms</span><span class="p">(</span><span class="n">freqs</span><span class="p">,</span> <span class="n">spectrograms</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    given a set of target frequencies and a set of spectrograms for several</span>
+<span class="sd">    players, return the energy levels each second for each target frequency</span>
+<span class="sd">    for each player.</span>
+<span class="sd">    :param freqs: list of frequencies that we&#39;re interested in obtaining the</span>
+<span class="sd">    energy levels over time</span>
+<span class="sd">    :param spectrograms: a dictionary of form</span>
+<span class="sd">    {</span>
+<span class="sd">        &quot;player serial number&quot;:</span>
+<span class="sd">        {</span>
+<span class="sd">            &quot;freqs&quot;: [the list of frequencies for the FFT on the player],</span>
+<span class="sd">            &quot;mags&quot; [</span>
+<span class="sd">                [list of magnitude values for each freq at time t=0],</span>
+<span class="sd">                [list of magnitude values for each freq at time t=1],</span>
+<span class="sd">                ...</span>
+<span class="sd">                [list of magnitude values for each freq at time t=N]</span>
+<span class="sd">            ]</span>
+<span class="sd">        },</span>
+<span class="sd">        ...</span>
+<span class="sd">    }</span>
+<span class="sd">    :return: dictionary detailing the energy over time for each frequency of</span>
+<span class="sd">    interest and all other frequencies (noise):</span>
+<span class="sd">    {</span>
+<span class="sd">        &quot;player serial number&quot;:</span>
+<span class="sd">        {</span>
+<span class="sd">            &quot;frequency #1&quot;: [</span>
+<span class="sd">                magnitude at time t=0,</span>
+<span class="sd">                magnitude at time t=1,</span>
+<span class="sd">                ...</span>
+<span class="sd">                magnitude at time t=N</span>
+<span class="sd">            ],</span>
+<span class="sd">            &quot;frequency #2&quot;: [</span>
+<span class="sd">                ...</span>
+<span class="sd">            ],</span>
+<span class="sd">            ...</span>
+<span class="sd">            &quot;noise&quot;: [</span>
+<span class="sd">                ....</span>
+<span class="sd">            ]</span>
+<span class="sd">        }</span>
+<span class="sd">    }</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">energy_over_time</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="c1"># store the list of bins for each frequency for each SN up front so that</span>
+    <span class="c1">#  we don&#39;t have to do a look up each time (slow)</span>
+    <span class="n">bins_for_freqs</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">sn</span> <span class="ow">in</span> <span class="n">spectrograms</span><span class="p">:</span>
+        <span class="n">energy_over_time</span><span class="p">[</span><span class="n">sn</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="c1"># the bins that correspond to the frequencies within the tolerances</span>
+        <span class="c1"># of the deviation for each target frequency</span>
+        <span class="n">bins_for_freqs</span><span class="p">[</span><span class="n">sn</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">freq</span> <span class="o">=</span> <span class="n">spectrograms</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;freqs&quot;</span><span class="p">]</span>
+        <span class="n">energy_over_time</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;noise&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">bins_for_freqs</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;noise&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">get_indices_of_not_these_frequencies</span><span class="p">(</span>
+            <span class="n">freq</span><span class="p">,</span> <span class="n">freqs</span><span class="p">)</span>
+
+        <span class="c1"># initialize magnitudes of each frequency and noise to be empty</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">freqs</span><span class="p">:</span>
+            <span class="n">energy_over_time</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="n">f</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">bins_for_freqs</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="n">f</span><span class="p">]</span> <span class="o">=</span> <span class="n">get_index_for_freq</span><span class="p">(</span><span class="n">freq</span><span class="p">,</span> <span class="n">f</span><span class="p">)</span>
+
+        <span class="c1"># for each time slice</span>
+        <span class="k">for</span> <span class="n">sec</span><span class="p">,</span> <span class="n">mag</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">spectrograms</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;mags&quot;</span><span class="p">]):</span>
+
+            <span class="c1"># get the magnitude for each frequency</span>
+            <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">freqs</span><span class="p">:</span>
+
+                <span class="n">energy_over_time</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="n">f</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="n">add_dbs</span><span class="p">([</span><span class="n">mag</span><span class="p">[</span><span class="n">b</span><span class="p">]</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">bins_for_freqs</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="n">f</span><span class="p">]]))</span>
+
+            <span class="c1"># get the energy in the noise band</span>
+            <span class="n">energy_over_time</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;noise&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="n">add_dbs</span><span class="p">([</span><span class="n">mag</span><span class="p">[</span><span class="n">b</span><span class="p">]</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">bins_for_freqs</span><span class="p">[</span><span class="n">sn</span><span class="p">][</span><span class="s2">&quot;noise&quot;</span><span class="p">]]))</span>
+
+    <span class="k">return</span> <span class="n">energy_over_time</span></div>
+
+
+<div class="viewcode-block" id="is_xfade_engaged"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.is_xfade_engaged">[docs]</a><span class="k">def</span> <span class="nf">is_xfade_engaged</span><span class="p">(</span><span class="n">energy_tone_1</span><span class="p">,</span> <span class="n">prev_energy_tone_1</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">,</span>
+                     <span class="n">prev_energy_tone_2</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Checker to determine if crossfade is currently engaged given the</span>
+<span class="sd">    magnitude values of the two distinct frequencies that we&#39;re interested in</span>
+<span class="sd">    :param energy_tone_1: the magnitude in dB of the starting tone</span>
+<span class="sd">    :param prev_energy_tone_1: the magnitude in dB of the starting tone a</span>
+<span class="sd">    window ago</span>
+<span class="sd">    :param energy_tone_2: the magnitude in dB of the ending tone</span>
+<span class="sd">    :param prev_energy_tone_2: the magnitude in dB of the ending tone a</span>
+<span class="sd">    window ago</span>
+<span class="sd">    :return: True/False depending on whether or not the logic determines</span>
+<span class="sd">    that crossfade is occurring</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># if the outgoing tone has more energy than the incoming tone, compare</span>
+    <span class="c1"># the outgoing</span>
+    <span class="k">if</span> <span class="n">energy_tone_1</span> <span class="o">&gt;</span> <span class="n">energy_tone_2</span><span class="p">:</span>
+
+        <span class="c1"># if the difference in energy between the two tones is less than our</span>
+        <span class="c1">#  threshold, we conclude that they are playing at the same time and</span>
+        <span class="c1">#  that crossfade in engaged</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">energy_tone_1</span> <span class="o">-</span> <span class="n">energy_tone_2</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Xfade engaged: Tone 1 - Tone 2 &lt; diff thresh&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+        <span class="c1"># if the outgoing tone has less energy than it did 1s ago and the</span>
+        <span class="c1"># difference in energy is greater than our threshold, conclude that</span>
+        <span class="c1"># crossfade is engaged</span>
+        <span class="k">if</span> <span class="n">prev_energy_tone_1</span> <span class="o">-</span> <span class="n">energy_tone_1</span> <span class="o">&gt;</span> <span class="n">TONE_DECREASE_THRESHOLD_DB</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Xfade engaged: Tone 1 decrease above thresh&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+        <span class="c1"># otherwise, conclude crossfade is NOT engaged</span>
+        <span class="k">return</span> <span class="kc">False</span>
+
+    <span class="c1"># if the incoming tone has more energy than the outgoing tone, compare</span>
+    <span class="c1"># the incoming</span>
+    <span class="k">elif</span> <span class="n">energy_tone_2</span> <span class="o">&gt;</span> <span class="n">energy_tone_1</span><span class="p">:</span>
+
+        <span class="c1"># if the difference in energy between the two tones is less than our</span>
+        <span class="c1">#  threshold, we conclude that they are playing at the same time and</span>
+        <span class="c1">#  that crossfade in engaged</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">energy_tone_2</span> <span class="o">-</span> <span class="n">energy_tone_1</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Xfade engaged: Tone 2 - Tone 1 &lt; diff thresh&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+        <span class="c1"># if the incoming tone has more energy than it did 1s ago and the</span>
+        <span class="c1"># difference in energy is greater than our threshold, conclude that</span>
+        <span class="c1"># crossfade is engaged</span>
+        <span class="k">if</span> <span class="n">energy_tone_2</span> <span class="o">-</span> <span class="n">prev_energy_tone_2</span> <span class="o">&gt;</span> <span class="n">TONE_DECREASE_THRESHOLD_DB</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Xfade engaged: Tone 2 increase above thresh&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span>
+
+        <span class="c1"># otherwise, conclude that crossfade is NOT engaged</span>
+        <span class="k">return</span> <span class="kc">False</span>
+
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">energy_tone_2</span> <span class="o">&gt;</span> <span class="n">prev_energy_tone_2</span> <span class="ow">and</span> <span class="n">energy_tone_1</span> <span class="o">&lt;</span> \
+                <span class="n">prev_energy_tone_1</span><span class="p">:</span>
+            <span class="c1"># if they&#39;re equal, then it&#39;s definitely a crossfade</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Xfade engaged - tones equal&quot;</span><span class="p">)</span>
+            <span class="k">return</span> <span class="kc">True</span>
+        <span class="c1"># otherwise, this could be that both tones are playing equally</span>
+        <span class="c1"># without changing amplitude</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+
+<div class="viewcode-block" id="verify_tone_1"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_tone_1">[docs]</a><span class="k">def</span> <span class="nf">verify_tone_1</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">energy_tone_1</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">,</span> <span class="n">sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set of assertions to run whenever the first tone is playing</span>
+<span class="sd">    :param sn: playback device serial number</span>
+<span class="sd">    :param energy_tone_1: the energy of the frequency of the first tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param energy_tone_2: the energy of the frequency of the second tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param sec: the number of seconds into playback that we are at</span>
+<span class="sd">    :return: either an empty string if assertions pass or an error message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># the energy in the first tone frequency bin should be much higher than</span>
+    <span class="c1"># the energy in the second tone frequency bin</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">energy_tone_1</span> <span class="o">-</span> <span class="n">energy_tone_2</span> <span class="o">&gt;</span> <span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Tone 1 should be much higher than tone 2: </span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span>\
+            <span class="nb">format</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">energy_tone_1</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">)</span>
+
+    <span class="c1"># the timestamp should come well before the max duration of the first tone</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">sec</span> <span class="o">&lt;</span> <span class="n">FIRST_TONE_MAX_DURATION</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - First tone should not be playing after </span><span class="si">{}</span><span class="s2">s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">sn</span><span class="p">,</span> <span class="n">FIRST_TONE_MAX_DURATION</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span></div>
+
+
+<div class="viewcode-block" id="verify_tone_2"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_tone_2">[docs]</a><span class="k">def</span> <span class="nf">verify_tone_2</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">energy_tone_1</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">,</span> <span class="n">sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set of assertions to run whenever the last tone is playing</span>
+<span class="sd">    :param sn: playback device serial number</span>
+<span class="sd">    :param energy_tone_1: the energy of the frequency of the first tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param energy_tone_2: the energy of the frequency of the second tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param sec: the number of seconds into playback that we are at</span>
+<span class="sd">    :return: either an empty string if assertions pass or an error message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># the energy in the second tone frequency bin should be much higher than</span>
+    <span class="c1"># the energy in teh second tone frequency bin</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">energy_tone_2</span> <span class="o">-</span> <span class="n">energy_tone_1</span> <span class="o">&gt;</span> <span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Tone 2 should be much higher than tone 1: </span><span class="si">{}</span><span class="s2"> vs </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span>\
+            <span class="nb">format</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">,</span> <span class="n">energy_tone_1</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span></div>
+
+
+<div class="viewcode-block" id="verify_xfade_audio"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_xfade_audio">[docs]</a><span class="k">def</span> <span class="nf">verify_xfade_audio</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">energy_tone_1</span><span class="p">,</span> <span class="n">prev_energy_tone_1</span><span class="p">,</span> <span class="n">energy_tone_2</span><span class="p">,</span>
+                       <span class="n">prev_energy_tone_2</span><span class="p">,</span> <span class="n">sec</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set of assertions to run whenever crossfade is engaged</span>
+<span class="sd">    :param sn: playback device serial number</span>
+<span class="sd">    :param energy_tone_1: the energy of the frequency of the first tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param prev_energy_tone_1: the energy of the frequency of the first tone in</span>
+<span class="sd">    dB for previous second</span>
+<span class="sd">    :param energy_tone_2: the energy of the frequency of the second tone in</span>
+<span class="sd">    dB for the current point in time</span>
+<span class="sd">    :param prev_energy_tone_2: the energy of the frequency of the second tone</span>
+<span class="sd">    in dB for previous second</span>
+<span class="sd">    :param sec: the number of seconds into playback that we are at</span>
+<span class="sd">    :return: either an empty string if assertions pass or an error message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">energy_tone_1</span> <span class="o">&lt;</span> <span class="n">prev_energy_tone_1</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Energy should be decreasing in tone 1&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">)</span>
+
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">assert</span> <span class="n">energy_tone_2</span> <span class="o">&gt;</span> <span class="n">prev_energy_tone_2</span>
+    <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Energy should be increasing in tone 2&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="s1">&#39;&#39;</span></div>
+
+
+<div class="viewcode-block" id="verify_xfade_enabled_in_frequency_bin"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_xfade_enabled_in_frequency_bin">[docs]</a><span class="k">def</span> <span class="nf">verify_xfade_enabled_in_frequency_bin</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">,</span> <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that the crossfade did actually engage on the zp for which we</span>
+<span class="sd">    have the FFT levels at each second of the tones that we&#39;re interested in</span>
+<span class="sd">    :param sn: playback device serial number</span>
+<span class="sd">    :param levels: map of frequencies and their corresponding magnitude</span>
+<span class="sd">    :param tone_1_hz: freq of first tone</span>
+<span class="sd">    :param tone_2_hz: freq of second tone</span>
+<span class="sd">    values for each second in time, of form:</span>
+<span class="sd">    {</span>
+<span class="sd">        &quot;frequency1&quot;: [magnitude at 1s, magnitude at 2s, ... magnitude at Ns],</span>
+<span class="sd">        &quot;frequency2&quot;: [...],</span>
+<span class="sd">        ...</span>
+<span class="sd">        &quot;frequencyN&quot;: [...]</span>
+<span class="sd">    }</span>
+<span class="sd">    :return: either an empty string if assertions pass or an error message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># boolean for tracking if we&#39;re currently in the crossfade</span>
+    <span class="n">in_xfade_section</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="c1"># boolean for tracking if we&#39;ve ever been in the crossfade section</span>
+    <span class="n">xfade_was_detected</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">n_sec_xfade_engaged</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">err_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+
+    <span class="c1"># skip the first seconds and the last seconds to avoid noise floor in</span>
+    <span class="c1"># the frequency bins</span>
+    <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">SKIP_SECONDS_SPECTROGRAM_START</span><span class="p">,</span>
+                     <span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">[</span><span class="s2">&quot;noise&quot;</span><span class="p">])</span> <span class="o">-</span> <span class="n">SKIP_SECONDS_SPECTROGRAM_END</span><span class="p">):</span>
+
+        <span class="c1"># log current values for debugging purposes</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Time: </span><span class="si">{}</span><span class="s2">s: Energy @</span><span class="si">{}</span><span class="s2">Hz: </span><span class="si">{}</span><span class="s2">dB, @</span><span class="si">{}</span><span class="s2">Hz: </span><span class="si">{}</span><span class="s2">dB&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">sec</span><span class="p">,</span>
+                <span class="n">tone_1_hz</span><span class="p">,</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                <span class="n">tone_2_hz</span><span class="p">,</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">]</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+
+        <span class="c1"># see if we think xfade is enabled from the audio</span>
+        <span class="k">if</span> <span class="n">is_xfade_engaged</span><span class="p">(</span><span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                            <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span>
+                            <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                            <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]):</span>
+
+            <span class="c1"># if crossfade had engaged and then disengaged, then crossfade</span>
+            <span class="c1"># should remain disengaged for the remainder of the test.</span>
+            <span class="c1"># If crossfade was engaged &gt; disengaged &gt; engaged, there&#39;s</span>
+            <span class="c1"># something very wrong. This assertion checks for that case.</span>
+            <span class="k">if</span> <span class="n">xfade_was_detected</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="k">assert</span> <span class="n">in_xfade_section</span>
+                <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+                    <span class="n">err_msg</span> <span class="o">=</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Xfade detection re-engaged&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">)</span>
+                    <span class="k">break</span>
+
+            <span class="n">in_xfade_section</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="n">xfade_was_detected</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="n">n_sec_xfade_engaged</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">in_xfade_section</span><span class="p">:</span>
+                <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Disengaging xfade&quot;</span><span class="p">)</span>
+            <span class="n">in_xfade_section</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="c1"># if before crossfade</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">in_xfade_section</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">xfade_was_detected</span><span class="p">:</span>
+            <span class="n">err_msg</span> <span class="o">=</span> <span class="n">verify_tone_1</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                                    <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span> <span class="n">sec</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">err_msg</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="k">break</span>
+
+        <span class="c1"># if xfade is engaged</span>
+        <span class="k">elif</span> <span class="n">in_xfade_section</span><span class="p">:</span>
+            <span class="n">err_msg</span> <span class="o">=</span> <span class="n">verify_xfade_audio</span><span class="p">(</span>
+                <span class="n">sn</span><span class="p">,</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span> <span class="o">-</span> <span class="mi">1</span><span class="p">],</span>
+                <span class="n">sec</span>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">err_msg</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="k">break</span>
+
+        <span class="c1"># if xfade was on, but is not now (after crossfade)</span>
+        <span class="k">elif</span> <span class="ow">not</span> <span class="n">in_xfade_section</span> <span class="ow">and</span> <span class="n">xfade_was_detected</span><span class="p">:</span>
+            <span class="n">err_msg</span> <span class="o">=</span> <span class="n">verify_tone_2</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                                    <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span> <span class="n">sec</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">err_msg</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="k">break</span>
+
+            <span class="c1"># Assertions around crossfade duration being within an</span>
+            <span class="c1"># acceptable range</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">n_sec_xfade_engaged</span> <span class="o">&gt;=</span> <span class="n">XFADE_MIN_DURATION_SEC</span>
+            <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+                <span class="n">err_msg</span> <span class="o">=</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Xfade should have been engaged for at &quot;</span> \
+                          <span class="s2">&quot;least </span><span class="si">{}</span><span class="s2">s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">XFADE_MIN_DURATION_SEC</span><span class="p">)</span>
+                <span class="k">break</span>
+
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">n_sec_xfade_engaged</span> <span class="o">&lt;=</span> <span class="n">XFADE_MAX_DURATION_SEC</span>
+            <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+                <span class="n">err_msg</span> <span class="o">=</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Xfade should not have been engaged for &quot;</span> \
+                          <span class="s2">&quot;more than </span><span class="si">{}</span><span class="s2">s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">XFADE_MAX_DURATION_SEC</span><span class="p">)</span>
+                <span class="k">break</span>
+
+    <span class="k">return</span> <span class="n">err_msg</span></div>
+
+
+<div class="viewcode-block" id="verify_xfade_disabled_for_zp"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_xfade_disabled_for_zp">[docs]</a><span class="k">def</span> <span class="nf">verify_xfade_disabled_for_zp</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">,</span> <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Verify that the crossfade did NOT engage on the zp for which we</span>
+<span class="sd">    have the FFT levels at each second of the tones that we&#39;re interested in</span>
+<span class="sd">    :param sn: playback device serial number</span>
+<span class="sd">    :param levels: map of frequencies and their corresponding magnitude</span>
+<span class="sd">    values for each second in time, of form:</span>
+<span class="sd">    {</span>
+<span class="sd">        &quot;frequency1&quot;: [magnitude at 1s, magnitude at 2s, ... magnitude at Ns],</span>
+<span class="sd">        &quot;frequency2&quot;: [...],</span>
+<span class="sd">        ...</span>
+<span class="sd">        &quot;frequencyN&quot;: [...]</span>
+<span class="sd">    }</span>
+<span class="sd">    :param tone_1_hz: freq of first tone</span>
+<span class="sd">    :param tone_2_hz: freq of second tone</span>
+<span class="sd">    :return: either an empty string if assertions pass or an error message</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># because we are taking 1s spectrogram windows, there will be 1s in the</span>
+    <span class="c1"># middle of the playback where it&#39;s likely that the difference between</span>
+    <span class="c1"># the two tones will be less than the Xfade threshold - which is fine as</span>
+    <span class="c1"># long as the closeness only lasts 1s</span>
+    <span class="n">n_counts_tone_diff_less_than_threshold</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">err_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+
+    <span class="c1"># skip the first seconds and the last seconds to avoid noise floor</span>
+    <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">SKIP_SECONDS_SPECTROGRAM_START</span><span class="p">,</span>
+                     <span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">[</span><span class="s2">&quot;noise&quot;</span><span class="p">])</span> <span class="o">-</span> <span class="n">SKIP_SECONDS_SPECTROGRAM_END</span><span class="p">):</span>
+
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+            <span class="s2">&quot;Time: </span><span class="si">{}</span><span class="s2">s: Energy @</span><span class="si">{}</span><span class="s2">Hz: </span><span class="si">{}</span><span class="s2">dB, @</span><span class="si">{}</span><span class="s2">Hz: </span><span class="si">{}</span><span class="s2">dB&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">sec</span><span class="p">,</span> <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span> <span class="n">tone_2_hz</span><span class="p">,</span>
+                <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">]))</span>
+
+        <span class="k">if</span> <span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">]</span> <span class="o">-</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">])</span> <span class="o">&lt;</span>
+                <span class="n">TONE_DIFFERENCE_THRESHOLD_DB</span><span class="p">):</span>
+            <span class="n">n_counts_tone_diff_less_than_threshold</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="k">assert</span> <span class="n">n_counts_tone_diff_less_than_threshold</span> <span class="o">&lt;</span> <span class="mi">2</span>
+            <span class="k">except</span> <span class="ne">AssertionError</span><span class="p">:</span>
+                <span class="n">err_msg</span> <span class="o">=</span> <span class="s2">&quot;SN:</span><span class="si">{}</span><span class="s2"> - Tones should not be as close in energy &quot;</span> \
+                          <span class="s2">&quot;for more than 1s&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">)</span>
+                <span class="k">break</span>
+            <span class="k">continue</span>
+        <span class="c1"># check to see which tone is currently higher, and do asserts as</span>
+        <span class="c1"># necessary</span>
+        <span class="k">if</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">]:</span>
+            <span class="n">err_msg</span> <span class="o">=</span> <span class="n">verify_tone_1</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                                    <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span> <span class="n">sec</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">err_msg</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="k">break</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">err_msg</span> <span class="o">=</span> <span class="n">verify_tone_2</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">tone_1_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span>
+                                    <span class="n">levels</span><span class="p">[</span><span class="n">tone_2_hz</span><span class="p">][</span><span class="n">sec</span><span class="p">],</span> <span class="n">sec</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">err_msg</span> <span class="o">!=</span> <span class="s1">&#39;&#39;</span><span class="p">:</span>
+                <span class="k">break</span>
+
+    <span class="k">return</span> <span class="n">err_msg</span></div>
+
+
+<div class="viewcode-block" id="verify_xfade_enabled_in_audio"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_xfade_enabled_in_audio">[docs]</a><span class="k">def</span> <span class="nf">verify_xfade_enabled_in_audio</span><span class="p">(</span><span class="n">spectrograms_xfade_on</span><span class="p">,</span> <span class="n">tones_hz</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set of verifications that are run on the spectrograms of all players</span>
+<span class="sd">    involved in the test to ensure that crossfade did engage at the correct</span>
+<span class="sd">    time.</span>
+
+<span class="sd">    :param spectrograms_xfade_on: dictionary of forms returned from</span>
+<span class="sd">    `fft_helper.play_and_get_spectrograms()`</span>
+<span class="sd">    :param tones_hz: list of tone frequencies under test</span>
+<span class="sd">    :return: list of error messages.</span>
+<span class="sd">    If all devices pass the test, it will return a list of empty strings</span>
+<span class="sd">    else the list will contain crossfade errors for the corresponding player</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">xfade_enabled_err_msgs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span> <span class="o">=</span> <span class="n">tones_hz</span>
+    <span class="n">levels</span> <span class="o">=</span> <span class="n">get_energy_levels_for_frequencies_in_spectrograms</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">tone_2_hz</span><span class="p">,</span> <span class="n">tone_1_hz</span><span class="p">],</span> <span class="n">spectrograms_xfade_on</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">sn</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying crossfade enabled for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">))</span>
+        <span class="n">xfade_enabled_err_msgs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">verify_xfade_enabled_in_frequency_bin</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span>
+                                                  <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">xfade_enabled_err_msgs</span></div>
+
+
+<div class="viewcode-block" id="verify_xfade_disabled_in_audio"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.verify_xfade_disabled_in_audio">[docs]</a><span class="k">def</span> <span class="nf">verify_xfade_disabled_in_audio</span><span class="p">(</span><span class="n">spectrograms_xfade_off</span><span class="p">,</span> <span class="n">tones_hz</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Set of verifications that are run on the spectrograms of all players</span>
+<span class="sd">    involved in the test to ensure that crossfade did engage at the correct</span>
+<span class="sd">    time.</span>
+
+<span class="sd">    :param spectrograms_xfade_off: dictionary of forms returned from</span>
+<span class="sd">    `fft_helper.play_and_get_spectrograms()`</span>
+<span class="sd">    :param tones_hz: list of tone frequencies under test</span>
+<span class="sd">    :return: list of error messages.</span>
+<span class="sd">    If all devices pass the test, it will return a list of empty strings</span>
+<span class="sd">    else the list will contain crossfade errors for the corresponding player</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">xfade_disabled_err_msgs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span> <span class="o">=</span> <span class="n">tones_hz</span>
+    <span class="n">levels</span> <span class="o">=</span> <span class="n">get_energy_levels_for_frequencies_in_spectrograms</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">tone_2_hz</span><span class="p">,</span> <span class="n">tone_1_hz</span><span class="p">],</span> <span class="n">spectrograms_xfade_off</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">sn</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Verifying crossfade disabled for </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">))</span>
+        <span class="n">xfade_disabled_err_msgs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="n">verify_xfade_disabled_for_zp</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">levels</span><span class="p">[</span><span class="n">sn</span><span class="p">],</span> <span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">))</span>
+
+    <span class="k">return</span> <span class="n">xfade_disabled_err_msgs</span></div>
+
+
+<div class="viewcode-block" id="display_xfade_errors"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.display_xfade_errors">[docs]</a><span class="k">def</span> <span class="nf">display_xfade_errors</span><span class="p">(</span><span class="n">err_msg_list</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Return a string containing all errors encountered during crossfade test</span>
+<span class="sd">    for a codec pair</span>
+<span class="sd">    :param err_msg_list: List of error messages. Each message contains the</span>
+<span class="sd">    device SN and the xfade error encountered</span>
+<span class="sd">    :return:</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">display_msg</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+    <span class="k">for</span> <span class="n">msg</span> <span class="ow">in</span> <span class="n">err_msg_list</span><span class="p">:</span>
+        <span class="n">display_msg</span> <span class="o">+=</span> <span class="n">msg</span> <span class="o">+</span> <span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span>
+
+    <span class="k">return</span> <span class="n">display_msg</span></div>
+
+
+<span class="c1"># NOTE: we only verify in a standalone configuration because all</span>
+<span class="c1"># configurations are executed using the same, identical code</span>
+<div class="viewcode-block" id="webserver_path"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.webserver_path">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">webserver_path</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">LOCAL_SERVER_PATH</span></div>
+
+
+<span class="n">PLAYBACK_LIST</span> <span class="o">=</span> <span class="n">get_codec_transition_list</span><span class="p">()</span>
+
+
+<span class="n">pytestmark</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">usefixtures</span><span class="p">(</span><span class="s1">&#39;disable_audio_output&#39;</span><span class="p">,</span>
+                            <span class="s1">&#39;conditionally_trueplay_all_players_for_session&#39;</span><span class="p">)</span>
+<span class="p">]</span>
+
+
+<div class="viewcode-block" id="test_crossfade_standalone"><a class="viewcode-back" href="../../../../pytest_automation.player.user_controls.html#pytest_automation.player.user_controls.test_crossfade.test_crossfade_standalone">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s1">&#39;codec_pair&#39;</span><span class="p">,</span> <span class="n">PLAYBACK_LIST</span><span class="p">,</span>
+                         <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">codecs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">codecs</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+                              <span class="k">for</span> <span class="n">codecs</span> <span class="ow">in</span> <span class="n">PLAYBACK_LIST</span><span class="p">])</span>
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">parametrize</span><span class="p">(</span><span class="s1">&#39;xfade_enabled&#39;</span><span class="p">,</span> <span class="p">[</span><span class="kc">True</span><span class="p">,</span> <span class="kc">False</span><span class="p">],</span>
+                         <span class="n">ids</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;Crossfade enabled&#39;</span><span class="p">,</span> <span class="s1">&#39;Crossfade disabled&#39;</span><span class="p">])</span>
+<span class="k">def</span> <span class="nf">test_crossfade_standalone</span><span class="p">(</span><span class="n">all_unique_platform_playback_devices</span><span class="p">,</span> <span class="n">webserver</span><span class="p">,</span>
+                              <span class="n">codec_pair</span><span class="p">,</span> <span class="n">xfade_enabled</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Abstract test method to test cross any given number of ZPs, where the</span>
+<span class="sd">    first zp is always the GC or the master in a bonded configuration</span>
+<span class="sd">    :param all_unique_platform_playback_devices: one playback device per</span>
+<span class="sd">    platform in this testbed</span>
+<span class="sd">    :param webserver: a server hosting some files for playback</span>
+<span class="sd">    :param codec_pair: codec transition under test</span>
+<span class="sd">    :param xfade_enabled: crossfade is enabled or disabled</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zps</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="n">all_unique_platform_playback_devices</span> <span class="k">if</span>
+           <span class="n">zp</span><span class="o">.</span><span class="n">get_arch</span><span class="p">()</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;sh4&#39;</span><span class="p">]]</span>
+
+    <span class="c1"># Flag to check if all processes start</span>
+    <span class="n">p_start_flag</span> <span class="o">=</span> <span class="kc">True</span>
+
+    <span class="c1"># Get tone file names</span>
+    <span class="c1"># Get tone frequencies for the codec pair</span>
+    <span class="n">tone_1_file</span><span class="p">,</span> <span class="n">tone_2_file</span> <span class="o">=</span> <span class="n">codec_pair</span>
+    <span class="n">tone_1_hz</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;\d+&#39;</span><span class="p">,</span> <span class="n">tone_1_file</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">tone_2_hz</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">findall</span><span class="p">(</span><span class="sa">r</span><span class="s1">&#39;\d+&#39;</span><span class="p">,</span> <span class="n">tone_2_file</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="c1"># Get codec for each tone to be used in audiotap file name</span>
+    <span class="n">tone_1_codec</span> <span class="o">=</span> <span class="n">tone_1_file</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">tone_2_codec</span> <span class="o">=</span> <span class="n">tone_2_file</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">first_tone_uri</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">webserver</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">tone_1_file</span><span class="p">)</span>
+    <span class="n">second_tone_uri</span> <span class="o">=</span> <span class="s1">&#39;http://</span><span class="si">{}</span><span class="s1">/</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+        <span class="n">webserver</span><span class="o">.</span><span class="n">host</span><span class="p">(),</span> <span class="n">tone_2_file</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Crossfade test - Tone 1:</span><span class="si">{}</span><span class="s1">, &#39;</span>
+                       <span class="s1">&#39;Tone 2:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tone_1_file</span><span class="p">,</span> <span class="n">tone_2_file</span><span class="p">))</span>
+
+    <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">z</span><span class="p">)</span>
+
+        <span class="n">z</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">amp_power_off</span><span class="p">()</span>
+
+        <span class="n">z</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetVolume</span><span class="p">(</span><span class="n">TEST_VOLUME</span><span class="p">)</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetMute</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">RenderingControl</span><span class="o">.</span><span class="n">SetEQ</span><span class="p">(</span><span class="s2">&quot;VolumeScalingFactor&quot;</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+
+        <span class="c1"># in order to enable crossfade, we must be using the queue</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+
+        <span class="c1"># enable/disable crossfade</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">SetCrossfadeMode</span><span class="p">(</span><span class="n">xfade_enabled</span><span class="p">)</span>
+
+        <span class="c1"># set queue up</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">clear_queue</span><span class="p">()</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">first_tone_uri</span><span class="p">)</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">add_to_queue</span><span class="p">(</span><span class="n">second_tone_uri</span><span class="p">)</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">use_queue</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="n">xfade_enabled</span><span class="p">:</span>
+        <span class="n">duration</span> <span class="o">=</span> <span class="n">XFADE_ENABLED_TOTAL_DURATION_SEC</span>
+        <span class="n">note</span> <span class="o">=</span> <span class="s1">&#39;xfade_on_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tone_1_codec</span><span class="p">,</span> <span class="n">tone_2_codec</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">duration</span> <span class="o">=</span> <span class="n">XFADE_DISABLED_TOTAL_DURATION_SEC</span>
+        <span class="n">note</span> <span class="o">=</span> <span class="s1">&#39;xfade_off_</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">tone_1_codec</span><span class="p">,</span> <span class="n">tone_2_codec</span><span class="p">)</span>
+
+    <span class="c1"># Setup a multiprocessing queue for parallel execution on all devices</span>
+    <span class="n">spectrograms_xfade_dct</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">zps_sn_modelnumber_dct</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">proc</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">res_q_xfade</span> <span class="o">=</span> <span class="n">Queue</span><span class="p">()</span>
+
+    <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+        <span class="n">zps_sn_modelnumber_dct</span><span class="p">[</span><span class="n">z</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">]</span> <span class="o">=</span> <span class="n">z</span><span class="o">.</span><span class="n">modelNumber</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Play_and_wait</span><span class="p">()</span>
+        <span class="n">p</span> <span class="o">=</span> <span class="n">Process</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="n">fft_helper</span><span class="o">.</span><span class="n">play_and_get_spectrograms</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">z</span><span class="p">],</span> <span class="n">res_q_xfade</span><span class="p">,</span> <span class="n">note</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span>
+            <span class="n">SAMPLE_RATE</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">False</span><span class="p">))</span>
+        <span class="n">proc</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+        <span class="n">p</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+    <span class="c1"># Check if all processes actually started. If a process didn&#39;t start,</span>
+    <span class="c1"># change the value of p_start_flag to False</span>
+    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">proc</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">is_alive</span><span class="p">():</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s1">&#39;Failed to start process&#39;</span><span class="p">)</span>
+            <span class="n">proc</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+            <span class="n">p_start_flag</span> <span class="o">=</span> <span class="kc">False</span>
+
+    <span class="c1"># Wait for the active processes to finish</span>
+    <span class="c1"># Each process returns the device serialNumber and its spectrogram</span>
+    <span class="c1"># Store this data in dictionary spectrograms_xfade_dct</span>
+    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">proc</span><span class="p">:</span>
+        <span class="n">spec</span> <span class="o">=</span> <span class="n">res_q_xfade</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
+        <span class="n">sn</span><span class="p">,</span> <span class="n">spect</span> <span class="o">=</span> <span class="n">spec</span><span class="o">.</span><span class="n">items</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">key</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">zps_sn_modelnumber_dct</span><span class="p">[</span><span class="n">sn</span><span class="p">])</span>
+        <span class="n">spectrograms_xfade_dct</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">spect</span>
+
+    <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="n">zps</span><span class="p">:</span>
+        <span class="n">z</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">Stop_and_wait</span><span class="p">()</span>
+
+    <span class="c1"># If a process failed to start, wait for the other processes to finish,</span>
+    <span class="c1"># then delete the audiotaps and raise an assertion</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">p_start_flag</span><span class="p">:</span>
+        <span class="n">gld_filelist</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">LOCAL_PATH</span><span class="p">)</span> <span class="k">if</span>
+                        <span class="n">f</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s1">&#39;.gld&#39;</span><span class="p">)]</span>
+        <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">gld_filelist</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span><span class="s1">&#39;Failed to start process&#39;</span><span class="p">)</span>
+
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">spectrograms_xfade_dct</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+
+    <span class="c1"># do verifications</span>
+    <span class="k">if</span> <span class="n">xfade_enabled</span><span class="p">:</span>
+        <span class="n">xfade_err_msgs</span> <span class="o">=</span> \
+            <span class="n">verify_xfade_enabled_in_audio</span><span class="p">(</span><span class="n">spectrograms_xfade_dct</span><span class="p">,</span>
+                                          <span class="p">[</span><span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">])</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">xfade_err_msgs</span> <span class="o">=</span> \
+            <span class="n">verify_xfade_disabled_in_audio</span><span class="p">(</span><span class="n">spectrograms_xfade_dct</span><span class="p">,</span>
+                                           <span class="p">[</span><span class="n">tone_1_hz</span><span class="p">,</span> <span class="n">tone_2_hz</span><span class="p">])</span>
+
+    <span class="c1"># Check for errors</span>
+    <span class="k">assert</span> <span class="n">xfade_err_msgs</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">xfade_err_msgs</span><span class="p">),</span> \
+        <span class="n">display_xfade_errors</span><span class="p">(</span><span class="n">xfade_err_msgs</span><span class="p">)</span></div>
+
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

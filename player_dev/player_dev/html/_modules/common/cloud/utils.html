@@ -1,0 +1,380 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>common.cloud.utils &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for common.cloud.utils</h1><div class="highlight"><pre>
+<span></span><span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">Created on Feb 29, 2016</span>
+
+<span class="sd">@author: alec</span>
+<span class="sd">&#39;&#39;&#39;</span>
+<span class="kn">from</span> <span class="nn">custom_dicts</span> <span class="k">import</span> <span class="n">FrozenAttributeDict</span>
+<span class="kn">from</span> <span class="nn">sonos.cloud.oauth_server</span> <span class="k">import</span> <span class="p">(</span><span class="n">MITC_ENVIRONMENT</span><span class="p">,</span> <span class="n">L7_OVERRIDE_NAME</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">webserver.helpers.mock_player_cloud_services_control</span> <span class="k">import</span> <span class="n">MockPlayerCloudServicesControl</span> <span class="k">as</span> <span class="n">MPCSC</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_zone_player_processes</span>
+<span class="kn">from</span> <span class="nn">sonos.client.internal</span> <span class="k">import</span> <span class="n">SonosZoneComponent</span>
+<span class="kn">from</span> <span class="nn">contextlib</span> <span class="k">import</span> <span class="n">contextmanager</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">import</span> <span class="nn">pprint</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">argparse</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">os</span>
+
+
+<span class="n">TEMP_REG_CERT_DIR</span> <span class="o">=</span> <span class="s1">&#39;/tmp/regdevicecert&#39;</span>
+
+
+<div class="viewcode-block" id="StoreKeyValuePair"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.StoreKeyValuePair">[docs]</a><span class="k">class</span> <span class="nc">StoreKeyValuePair</span><span class="p">(</span><span class="n">argparse</span><span class="o">.</span><span class="n">Action</span><span class="p">):</span>
+    <span class="k">def</span> <span class="nf">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parser</span><span class="p">,</span> <span class="n">namespace</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">option_string</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="nb">setattr</span><span class="p">(</span><span class="n">namespace</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dest</span><span class="p">,</span> <span class="p">([</span><span class="n">v</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;=&#39;</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">values</span><span class="p">]))</span></div>
+
+
+<div class="viewcode-block" id="CloudUtilsMixin"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin">[docs]</a><span class="k">class</span> <span class="nc">CloudUtilsMixin</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Mixin class for parsing common arguments exclusive to cloud fixtures and</span>
+<span class="sd">    providing general utility functions.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Default overrides for establishing cloud connections to different</span>
+    <span class="c1"># services</span>
+    <span class="n">SERVICE_OVERRIDE</span> <span class="o">=</span> <span class="n">L7_OVERRIDE_NAME</span>
+    <span class="n">SERVICE_OVERRIDE_URL</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">TEST_ENV</span> <span class="o">=</span> <span class="n">MITC_ENVIRONMENT</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="n">args</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_cmdline_args</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">secure_register</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">args</span><span class="o">.</span><span class="n">no_secure_reg</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">supports_lechmere</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">args</span><span class="o">.</span><span class="n">no_lechmere</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">use_overrides</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">args</span><span class="o">.</span><span class="n">no_overrides</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">override_exceptions</span> <span class="o">=</span> <span class="n">FrozenAttributeDict</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">exc_overrides</span> <span class="ow">or</span> <span class="p">[])</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">CloudUtilsMixin</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_get_cmdline_args</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Parse command line arguments. Places all arguments back into sys.argv</span>
+
+<span class="sd">        :return: Namespace of parsed arguments</span>
+<span class="sd">        :rtype: :class:`argparse.Namespace`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Store a copy of command-line args</span>
+        <span class="n">cmdline_args</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[:]</span>
+
+        <span class="c1"># Parse known args</span>
+        <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> arguments&quot;</span><span class="o">.</span>
+            <span class="nb">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">))</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--no_secure_reg&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;no_secure_reg&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Secure registration should not be used &quot;</span>
+            <span class="s2">&quot;in tests that require cloud connections.&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--no_lechmere_support&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;no_lechmere&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Firmware under test does not support Lechmere connections.&quot;</span>
+            <span class="s2">&quot; When possible, skip verifications that require Lechmere.&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--no_overrides&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;no_overrides&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Firmware under test should not set overrides. This is useful &quot;</span>
+            <span class="s2">&quot;for testing firmware &#39;out-of-the-box&#39;, as many tests rely heavily &quot;</span>
+            <span class="s2">&quot;on using overrides to change endpoints to point to different &quot;</span>
+            <span class="s2">&quot;service endpoints.&quot;</span><span class="p">)</span>
+        <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--override_exceptions&quot;</span><span class="p">,</span> <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;exc_overrides&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreKeyValuePair</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;*&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Exceptions to the above &#39;no_overrides&#39; argument. Defaults to &quot;</span>
+            <span class="s2">&quot;This argument consumes an arbitrary number of key=value pairs.&quot;</span><span class="p">)</span>
+        <span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
+
+        <span class="c1"># Place all arguments back onto the command-line for other fixtures</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">argv</span> <span class="o">=</span> <span class="n">cmdline_args</span>
+        <span class="k">return</span> <span class="n">args</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">overrides_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Default dictionary of overrides.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">d</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">d</span> <span class="o">=</span> <span class="p">{</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span><span class="p">}</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">TEST_ENV</span> <span class="o">!=</span> <span class="s1">&#39;prod&#39;</span><span class="p">:</span>
+            <span class="n">d</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s1">&#39;O_SONOS_CLOUD_API_TEST_ENV&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">TEST_ENV</span><span class="p">})</span>
+        <span class="k">return</span> <span class="n">d</span>
+
+<div class="viewcode-block" id="CloudUtilsMixin.get_overrides"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.get_overrides">[docs]</a>    <span class="k">def</span> <span class="nf">get_overrides</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">custom_url</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get the list of overrides. Allow specification of a custom</span>
+<span class="sd">        url for the service pointer override for negative testing.</span>
+
+<span class="sd">        :param str custom_url: Optional string to use for url override</span>
+
+<span class="sd">        :return: Immutable dictionary of the form override:value</span>
+<span class="sd">        :rtype: :class:`~custom_dicts.FrozenAttributeDict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">overrides</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">use_overrides</span><span class="p">:</span>
+            <span class="c1"># Use a copy of the overrides dictionary in case we need to</span>
+            <span class="c1"># replace a value.</span>
+            <span class="n">overrides</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">overrides_dict</span><span class="p">)</span>
+            <span class="c1"># Handle case where custom_url is specified</span>
+            <span class="k">if</span> <span class="n">custom_url</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span> <span class="ow">and</span> <span class="n">custom_url</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">overrides</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">]</span> <span class="o">=</span> <span class="n">custom_url</span>
+            <span class="k">return</span> <span class="n">FrozenAttributeDict</span><span class="p">(</span><span class="n">overrides</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">overrides</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">override_exceptions</span><span class="p">)</span>
+            <span class="c1"># Handle case where custom_url is specified</span>
+            <span class="k">if</span> <span class="n">custom_url</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span> <span class="ow">and</span> <span class="n">custom_url</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="c1"># Log a warning here if the cert override is not in the exception</span>
+                <span class="c1"># list, but otherwise allow it to be set. This allows the testing</span>
+                <span class="c1"># of certain negative cases where the url is pointed at an</span>
+                <span class="c1"># invalid endpoint, but is otherwise unchanged as a part of normal</span>
+                <span class="c1"># functionality</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">override_exceptions</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> not in specified override exceptions </span><span class="si">{}</span><span class="s2">, &quot;</span>
+                        <span class="s2">&quot;use case may result in unexpected behavior.&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">override_exceptions</span><span class="p">))</span>
+                <span class="c1"># Copy the dict into a mutable object as override_exceptions</span>
+                <span class="c1"># is immutable</span>
+                <span class="n">overrides</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">]</span> <span class="o">=</span> <span class="n">custom_url</span>
+
+        <span class="k">return</span> <span class="n">FrozenAttributeDict</span><span class="p">(</span><span class="n">overrides</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.set_string_overrides"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.set_string_overrides">[docs]</a>    <span class="k">def</span> <span class="nf">set_string_overrides</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set or remove the appropriate string overrides for the service url</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str url: Url to set service string override, uses default if None</span>
+<span class="sd">        :param bool enable: Add override if true, else remove it</span>
+
+<span class="sd">        :return bool: UPnP rc OK?</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">url</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">url</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE_URL</span>
+
+        <span class="n">overrides</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_overrides</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+        <span class="n">svc_override_present</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span> <span class="ow">in</span> <span class="n">overrides</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">enable</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Setting overrides: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">overrides</span><span class="p">))</span>
+            <span class="k">return</span> <span class="p">(</span><span class="nb">all</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">,</span>
+                <span class="n">overrides</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> <span class="n">overrides</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span> <span class="ow">and</span>
+                    <span class="c1"># Always explicitly remove the service override if setting</span>
+                    <span class="c1"># overrides when the service name is not included. This protects</span>
+                    <span class="c1"># against the player having a bad override value after a negative</span>
+                    <span class="c1"># test or on boot.</span>
+                    <span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">)</span> <span class="k">if</span> <span class="ow">not</span>
+                <span class="n">svc_override_present</span> <span class="k">else</span> <span class="kc">True</span><span class="p">)</span>
+                    <span class="ow">and</span> <span class="n">MPCSC</span><span class="o">.</span><span class="n">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Always remove the service override even if it is not included</span>
+            <span class="c1"># in the list of overrides. This protects against having a bad</span>
+            <span class="c1"># override after a negative test regardless of override_exemptions</span>
+            <span class="n">override_keys</span> <span class="o">=</span> <span class="n">overrides</span><span class="o">.</span><span class="n">keys</span><span class="p">()[:]</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">override_keys</span><span class="p">:</span>
+                <span class="n">override_keys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">SERVICE_OVERRIDE</span><span class="p">)</span>
+
+            <span class="c1"># Don&#39;t remove testenv</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">override_keys</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s1">&#39;O_SONOS_CLOUD_API_TEST_ENV&#39;</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+                <span class="k">pass</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Removing overrides: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">override_keys</span><span class="p">))</span>
+            <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">,</span> <span class="n">override_keys</span><span class="p">))</span> <span class="ow">and</span> <span class="n">MPCSC</span><span class="o">.</span><span class="n">remove_mutual_ssl_overrides</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.set_string_overrides_and_bounce_anacapa"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.set_string_overrides_and_bounce_anacapa">[docs]</a>    <span class="k">def</span> <span class="nf">set_string_overrides_and_bounce_anacapa</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zps</span><span class="p">,</span> <span class="n">url</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">enable</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set or remove the appropriate string overrides for the cert service url</span>
+
+<span class="sd">        :param zp: ZonePlayer</span>
+<span class="sd">        :type zp: :obj:`list` of :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str url: Url to set cert string override to, uses default if None</span>
+<span class="sd">        :param bool enable: Add override if true, else remove it</span>
+
+<span class="sd">        :return bool: Operation was successful (upnp return codes OK and anacapa bounced?)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">set_string_overrides</span><span class="p">(</span><span class="n">zps</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">url</span><span class="o">=</span><span class="n">url</span><span class="p">,</span> <span class="n">enable</span><span class="o">=</span><span class="n">enable</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">False</span>
+
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+
+        <span class="n">run_concurrent_zone_player_processes</span><span class="p">(</span>
+            <span class="n">SonosZoneComponent</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">,</span> <span class="n">zps</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.temp_non_secure_registered_cm"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.temp_non_secure_registered_cm">[docs]</a>    <span class="nd">@contextmanager</span>
+    <span class="k">def</span> <span class="nf">temp_non_secure_registered_cm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Contextmanager to temporarily move the registration cert, bounce</span>
+<span class="sd">        anacapa, then move the registration cert back and bounce anacapa</span>
+<span class="sd">        again on exit.</span>
+
+<span class="sd">        Basically does nothing if you&#39;re not secure registered.</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">had_cert</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">has_reg_cert</span><span class="p">():</span>
+                <span class="n">had_cert</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="n">TEMP_REG_CERT_DIR</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;mv -f </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_reg_cert_root_dir</span><span class="p">(),</span> <span class="n">TEMP_REG_CERT_DIR</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span>
+            <span class="k">yield</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">had_cert</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;mv -f </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_REG_CERT_DIR</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_reg_cert_root_dir</span><span class="p">()))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="n">TEMP_REG_CERT_DIR</span><span class="p">)</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">bounce_anacapa_and_wait</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.temp_copy_secure_registered_cm"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.temp_copy_secure_registered_cm">[docs]</a>    <span class="nd">@contextmanager</span>
+    <span class="k">def</span> <span class="nf">temp_copy_secure_registered_cm</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Contextmanager to temporarily copy the registration cert</span>
+
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_file</span><span class="p">(</span><span class="n">TEMP_REG_CERT_DIR</span><span class="p">)</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;cp -rf </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_reg_cert_root_dir</span><span class="p">(),</span> <span class="n">TEMP_REG_CERT_DIR</span><span class="p">))</span>
+            <span class="k">yield</span>
+        <span class="k">finally</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">remove_reg_certs</span><span class="p">()</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;mv -f </span><span class="si">{}</span><span class="s1"> </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">TEMP_REG_CERT_DIR</span><span class="p">,</span> <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_reg_cert_root_dir</span><span class="p">()))</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.get_log"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.get_log">[docs]</a>    <span class="k">def</span> <span class="nf">get_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">base_url</span><span class="p">,</span> <span class="nb">type</span><span class="p">):</span>
+        <span class="n">apilog</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/logs&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="nb">type</span><span class="p">)</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="n">apilog</span><span class="p">,</span> <span class="n">verify</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">text</span>
+        <span class="n">payload</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">payload</span></div>
+
+<div class="viewcode-block" id="CloudUtilsMixin.clear_log"><a class="viewcode-back" href="../../../common.cloud.html#common.cloud.utils.CloudUtilsMixin.clear_log">[docs]</a>    <span class="k">def</span> <span class="nf">clear_log</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">base_url</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="s2">&quot;api&quot;</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">val</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">get_log</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">type</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;clear </span><span class="si">{}</span><span class="s2"> log:</span><span class="se">\n</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">,</span> <span class="n">pprint</span><span class="o">.</span><span class="n">pformat</span><span class="p">(</span><span class="n">val</span><span class="p">)))</span>
+
+        <span class="n">apilog</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/</span><span class="si">{}</span><span class="s2">/logs&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">base_url</span><span class="p">,</span> <span class="nb">type</span><span class="p">)</span>
+
+        <span class="n">log</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">{}</span><span class="s2">/logs/</span><span class="si">{}</span><span class="s2">log/clear&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">CQ_URI</span><span class="p">,</span> <span class="nb">type</span><span class="p">)</span>
+        <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="o">=</span><span class="n">log</span><span class="p">,</span> <span class="n">verify</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,404 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.pytest_sonos_testbed &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.pytest_sonos_testbed</h1><div class="highlight"><pre>
+<span></span><span class="c1"># -*- coding: utf-8 -*-</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Pytest plugin to manage Sonos testbed operations.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">import</span> <span class="nn">traceback</span>
+<span class="kn">import</span> <span class="nn">pytest</span>
+<span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.mdputil</span> <span class="k">import</span> <span class="n">MdpRegion</span>
+<span class="kn">from</span> <span class="nn">testbed.check_testbed</span> <span class="k">import</span> <span class="n">TestbedChecker</span>
+<span class="kn">from</span> <span class="nn">testbed.cleanup_testbed</span> <span class="k">import</span> <span class="p">(</span><span class="n">TestbedCleanup</span><span class="p">,</span>
+        <span class="n">DEFAULT_CONTROLLER_DOCKED_TIMEOUT</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.environment</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">load_workflow_execution_configuration_from_EXECUTION_ENVIRONMENT_or_None</span> <span class="k">as</span>
+    <span class="n">load_EXECUTION_ENVIRONMENT</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">testbed.create_testbed_json</span> <span class="k">import</span> <span class="n">StoreNetworkInterface</span>
+<span class="kn">from</span> <span class="nn">testbed.testrunner_properties</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">get_testbed_sonosnet_channel</span><span class="p">,</span>
+    <span class="n">get_node_name</span><span class="p">,</span>
+    <span class="n">get_build_tag</span><span class="p">,</span>
+    <span class="n">get_build_number</span><span class="p">,</span>
+    <span class="n">should_enable_console</span><span class="p">,</span>
+    <span class="n">get_console_enabled</span><span class="p">,</span>
+    <span class="n">does_testbed_require_toslink</span><span class="p">,</span>
+    <span class="n">running_on_jenkins_testbed</span><span class="p">,</span>
+    <span class="n">is_printk_enabled</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">testbed.utils</span> <span class="k">import</span> <span class="p">(</span>
+        <span class="n">StoreBooleanValue</span><span class="p">,</span>
+        <span class="n">StoreMdpRegion</span><span class="p">,</span>
+        <span class="n">setup_validate_testbed_logger</span><span class="p">,</span>
+        <span class="n">stop_validate_testbed_logger</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">build_server</span> <span class="k">import</span> <span class="n">SonosBuildServerUtil</span><span class="p">,</span> <span class="n">SonosBuildServerError</span>
+<span class="kn">from</span> <span class="nn">cert_manager.devmode_statement_source</span> <span class="k">import</span> <span class="n">DevModeDataSourceValues</span>
+<span class="kn">from</span> <span class="nn">text_parsing.type_conversion</span> <span class="k">import</span> <span class="n">str_to_bool</span>
+
+<span class="n">PYTEST_EXIT_OK</span> <span class="o">=</span> <span class="mi">0</span>
+
+<span class="c1"># TODO - SWPBL-78204 ##########################################################</span>
+<div class="viewcode-block" id="pytest_namespace"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_testbed.pytest_namespace">[docs]</a><span class="k">def</span> <span class="nf">pytest_namespace</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Load the testbed configuration into the Pytest namespace.</span>
+
+<span class="sd">    This is done here because this will not be available to the Pytest session</span>
+<span class="sd">    until loading of the plugin has completed. Since we use</span>
+<span class="sd">    &#39;pytest.testbed_config&#39; in the device selection plugin, we are unable to</span>
+<span class="sd">    properly load it there.</span>
+
+<span class="sd">    This will be removed in SWPBL-78204.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;testbed_config&#39;</span><span class="p">:</span><span class="n">load_EXECUTION_ENVIRONMENT</span><span class="p">()}</span></div>
+<span class="c1"># END TODO - SWPBL-78204 ######################################################</span>
+
+<div class="viewcode-block" id="pytest_addoption"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_testbed.pytest_addoption">[docs]</a><span class="k">def</span> <span class="nf">pytest_addoption</span><span class="p">(</span><span class="n">parser</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Add arguments to manage testbed checking/cleanup in a Pytest session.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">testbed_ops</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">getgroup</span><span class="p">(</span><span class="s2">&quot;Testbed Operations:&quot;</span><span class="p">)</span>
+    <span class="n">testbed_ops</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--clean_at_start&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreBooleanValue</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Clean the testbed before running any tests&quot;</span><span class="p">)</span>
+    <span class="n">testbed_ops</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--scan_at_end&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreBooleanValue</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Clean the testbed after running any tests&quot;</span><span class="p">)</span>
+    <span class="n">testbed_ops</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--stop_on_missing_devices&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreBooleanValue</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Verify that all expected testbed devices are present after &quot;</span>
+            <span class="s2">&quot;each testcase completes.&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">getgroup</span><span class="p">(</span><span class="s2">&quot;Validate Testbed Options:&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--node&quot;</span><span class="p">,</span>
+            <span class="n">nargs</span><span class="o">=</span><span class="s1">&#39;?&#39;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">get_node_name</span><span class="p">(),</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Name of Jenkins testrunner being validated.&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--console_enabled&quot;</span><span class="p">,</span>
+            <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;console_enabled&#39;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">get_console_enabled</span><span class="p">()</span> <span class="ow">or</span> <span class="n">should_enable_console</span><span class="p">(),</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should console access be enabled on testbed devices?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--printk_enabled&quot;</span><span class="p">,</span>
+            <span class="n">dest</span><span class="o">=</span><span class="s1">&#39;printk_enabled&#39;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">is_printk_enabled</span><span class="p">(),</span>
+            <span class="nb">type</span><span class="o">=</span><span class="n">str_to_bool</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should kernel printk access be enabled on testbed devices?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--sonosnet_channel&quot;</span><span class="p">,</span>
+            <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">get_testbed_sonosnet_channel</span><span class="p">(),</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Ensure all devices are on a specific SonosNet channel&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--wifi_region&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreMdpRegion</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">MdpRegion</span><span class="o">.</span><span class="n">USCA</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;WiFi region to use&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--build_number&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">get_build_number</span><span class="p">(),</span>
+            <span class="n">help</span><span class="o">=</span><span class="s1">&#39;The current build number, such as &quot;153&quot;&#39;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--build_tag&quot;</span><span class="p">,</span>
+            <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;build_tag&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">get_build_tag</span><span class="p">()</span> <span class="ow">or</span> <span class="s2">&quot;local-validate_testbed-run&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--skip_disable_testbed&quot;</span><span class="p">,</span>
+            <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;skip_disable_testbed&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should we skip disable_testbed if an error occurs?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--save_logfile_on_success&quot;</span><span class="p">,</span>
+            <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;should_save_logfile&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Does not delete the log file generated if successful&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--network_interface&quot;</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="n">StoreNetworkInterface</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Name of network interface to look for devices&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+           <span class="s2">&quot;--save_diag_on_error&quot;</span><span class="p">,</span>
+           <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+           <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+           <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Save a testbed diag on validation errors.&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+           <span class="s2">&quot;--delineate_tests_in_anacapa&quot;</span><span class="p">,</span>
+           <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+           <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+           <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Delineates test in anacapa by logging start and stop points&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--write_testbed_errors&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Write any testbed error details to disk.&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--scan_for_testbed_errors&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="nb">type</span><span class="o">=</span><span class="nb">bool</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should testbed devices be scanned for errors?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--ignore_testbed_errors&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Don&#39;t stop validation if testbed errors are detected&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--setup_toslink&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">does_testbed_require_toslink</span><span class="p">(),</span>
+            <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should the testbed TOSLink connection be setup?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--expected_cr_timeout&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_CONTROLLER_DOCKED_TIMEOUT</span><span class="p">,</span>
+            <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Value to pass to &#39;DOCKED_TIMEOUT_SECONDS&#39; on controllers.&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--install_devmode_statement&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">running_on_jenkins_testbed</span><span class="p">(),</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should we install a default DevMode statement&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span><span class="s2">&quot;--devmode_source&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="n">DevModeDataSourceValues</span><span class="o">.</span><span class="n">JENKINS</span>
+            <span class="k">if</span> <span class="n">running_on_jenkins_testbed</span><span class="p">()</span>
+            <span class="k">else</span> <span class="n">DevModeDataSourceValues</span><span class="o">.</span><span class="n">LOCAL</span><span class="p">,</span>
+            <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="n">DevModeDataSourceValues</span><span class="o">.</span><span class="n">LOCAL</span><span class="p">,</span>
+                <span class="n">DevModeDataSourceValues</span><span class="o">.</span><span class="n">JENKINS</span><span class="p">],</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;What data source should we use for the&quot;</span>
+                 <span class="s2">&quot;DevMode statements&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--preserve_system&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should the QA Reset preserve the /jffs/system directory?&quot;</span><span class="p">)</span>
+    <span class="n">validate_options</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+            <span class="s2">&quot;--secure_register&quot;</span><span class="p">,</span>
+            <span class="n">default</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Should the HouseHold be secure registered?&quot;</span><span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">addoption</span><span class="p">(</span>
+        <span class="s2">&quot;--assert_on_disconnected_line_in&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;Assert if there is not one of each model line-in device with &quot;</span>
+             <span class="s2">&quot;line-in connected&quot;</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="pytest_configure"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_testbed.pytest_configure">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">hookimpl</span><span class="p">(</span><span class="n">trylast</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">pytest_configure</span><span class="p">(</span><span class="n">config</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Pytest hook which runs before a session starts. Performs testbed cleanup.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pytest</span><span class="p">,</span> <span class="s2">&quot;testbed_config&quot;</span><span class="p">):</span>
+        <span class="nb">setattr</span><span class="p">(</span><span class="n">pytest</span><span class="p">,</span> <span class="s1">&#39;testbed_config&#39;</span><span class="p">,</span> <span class="n">load_EXECUTION_ENVIRONMENT</span><span class="p">())</span>
+        <span class="nb">setattr</span><span class="p">(</span><span class="n">pytest</span><span class="p">,</span> <span class="s1">&#39;logger&#39;</span><span class="p">,</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">())</span>
+
+    <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">json</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">testbed_config</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">clean_at_start</span><span class="p">:</span>
+        <span class="n">_add_build_info_to_pytest_config</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+        <span class="n">log_fn</span> <span class="o">=</span> <span class="n">setup_validate_testbed_logger</span><span class="p">(</span><span class="s2">&quot;cleanup_testbed&quot;</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting Testbed Cleanup&quot;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">TestbedCleanup</span><span class="o">.</span><span class="n">create_from_namespace</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="c1"># If we caught an exception cleaning up a Jenkins testbed, record</span>
+            <span class="c1"># it in our output junit XML file and don&#39;t run any tests.</span>
+            <span class="k">if</span> <span class="n">running_on_jenkins_testbed</span><span class="p">():</span>
+                <span class="n">_record_testbed_error</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;cleanup&quot;</span><span class="p">)</span>
+                <span class="n">config</span><span class="o">.</span><span class="n">pluginmanager</span><span class="o">.</span><span class="n">getplugin</span><span class="p">(</span><span class="s2">&quot;session&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shouldstop</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span>
+        <span class="n">stop_validate_testbed_logger</span><span class="p">(</span><span class="n">log_fn</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Ending Testbed Cleanup&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="pytest_sessionfinish"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_testbed.pytest_sessionfinish">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">hookimpl</span><span class="p">(</span><span class="n">tryfirst</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">pytest_sessionfinish</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">exitstatus</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Pytest hook which runs when a Pytest session finishes.</span>
+
+<span class="sd">    Performs testbed scanning, and ensures a zero exit code when running</span>
+<span class="sd">    from Jenkins.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">config</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">scan_at_end</span><span class="p">:</span>
+        <span class="n">_add_build_info_to_pytest_config</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+        <span class="n">log_fn</span> <span class="o">=</span> <span class="n">setup_validate_testbed_logger</span><span class="p">(</span><span class="s2">&quot;check_testbed&quot;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Starting Testbed Check&quot;</span><span class="p">)</span>
+            <span class="n">TestbedChecker</span><span class="o">.</span><span class="n">create_from_namespace</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">running_on_jenkins_testbed</span><span class="p">():</span>
+                <span class="c1"># If we caught an exception scanning the testbed after running</span>
+                <span class="c1"># automation, AND we&#39;re running on a Jenkins testbed, record</span>
+                <span class="c1"># the exception in our output junit XML file.</span>
+                <span class="n">_record_testbed_error</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">&quot;check&quot;</span><span class="p">)</span>
+                <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;Caught exception checking testbed&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span>
+        <span class="n">stop_validate_testbed_logger</span><span class="p">(</span><span class="n">log_fn</span><span class="p">)</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Ending Testbed Check&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="pytest_unconfigure"><a class="viewcode-back" href="../../pytest_automation.html#pytest_automation.pytest_sonos_testbed.pytest_unconfigure">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">hookimpl</span><span class="p">(</span><span class="n">trylast</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">pytest_unconfigure</span><span class="p">(</span><span class="n">config</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">running_on_jenkins_testbed</span><span class="p">():</span>
+        <span class="c1"># Change exit code to zero if we failed when running on a Jenkins</span>
+        <span class="c1"># testbed. Jenkins marks jobs with non-zero exit codes as failures. If</span>
+        <span class="c1"># the job passes, but testcases are recorded as failed in the Junit XML</span>
+        <span class="c1"># file, Jenkins will mark the job &#39;unstable&#39;. We prefer to designate</span>
+        <span class="c1"># our failing automation as &#39;unstable&#39;, rather than failed.</span>
+        <span class="n">session</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">pluginmanager</span><span class="o">.</span><span class="n">get_plugin</span><span class="p">(</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">session</span> <span class="ow">and</span> <span class="n">session</span><span class="o">.</span><span class="n">exitstatus</span> <span class="o">!=</span> <span class="n">PYTEST_EXIT_OK</span><span class="p">:</span>
+            <span class="n">session</span><span class="o">.</span><span class="n">exitstatus</span> <span class="o">=</span> <span class="n">PYTEST_EXIT_OK</span></div>
+
+<span class="k">def</span> <span class="nf">_record_testbed_error</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">stage</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Writes testbed cleanup/check exceptions to the test JUnit XML file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;xmlpath&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="n">junit</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">pluginmanager</span><span class="o">.</span><span class="n">getplugin</span><span class="p">(</span><span class="s2">&quot;junitxml&quot;</span><span class="p">)</span>
+        <span class="n">xml</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">_xml</span>
+        <span class="n">reporter</span> <span class="o">=</span> <span class="n">xml</span><span class="o">.</span><span class="n">node_reporter</span><span class="p">(</span><span class="s1">&#39;internal&#39;</span><span class="p">)</span>
+        <span class="n">reporter</span><span class="o">.</span><span class="n">attrs</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">classname</span><span class="o">=</span><span class="s1">&#39;pytest&#39;</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">&#39;internal&#39;</span><span class="p">)</span>
+        <span class="n">reporter</span><span class="o">.</span><span class="n">_add_simple</span><span class="p">(</span>
+                <span class="n">junit</span><span class="o">.</span><span class="n">Junit</span><span class="o">.</span><span class="n">error</span><span class="p">,</span> <span class="s2">&quot;testbed </span><span class="si">{}</span><span class="s2"> error&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">stage</span><span class="p">),</span>
+                <span class="n">traceback</span><span class="o">.</span><span class="n">format_exc</span><span class="p">())</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;Caught exception checking testbed&quot;</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_add_build_info_to_pytest_config</span><span class="p">(</span><span class="n">config</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Create a &quot;build_info&quot; section in the testbed configuration, so that</span>
+<span class="sd">    TestbedChecker knows where to look for test artifacts.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="p">,</span> <span class="s2">&quot;json&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span>
+            <span class="nb">hasattr</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">json</span><span class="p">,</span> <span class="s2">&quot;build_info&quot;</span><span class="p">)):</span>
+        <span class="n">version</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;update_version&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">branch</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;update_branch&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">update_url</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">getoption</span><span class="p">(</span><span class="s2">&quot;update_url&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">json</span><span class="o">.</span><span class="n">build_info</span> <span class="o">=</span> <span class="n">SonosBuildServerUtil</span><span class="p">(</span>
+                    <span class="n">url</span><span class="o">=</span><span class="n">update_url</span><span class="p">,</span>
+                    <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">,</span>
+                    <span class="n">branch</span><span class="o">=</span><span class="n">branch</span><span class="p">)</span><span class="o">.</span><span class="n">as_build_info</span><span class="p">()</span>
+        <span class="k">except</span> <span class="p">(</span><span class="n">requests</span><span class="o">.</span><span class="n">exceptions</span><span class="o">.</span><span class="n">RequestException</span><span class="p">,</span> <span class="n">SonosBuildServerError</span><span class="p">):</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">option</span><span class="o">.</span><span class="n">json</span><span class="o">.</span><span class="n">build_info</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">SonosBuildServerUtil</span><span class="p">()</span><span class="o">.</span><span class="n">as_build_info</span><span class="p">())</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

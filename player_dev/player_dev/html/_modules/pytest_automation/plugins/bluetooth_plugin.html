@@ -1,0 +1,303 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>pytest_automation.plugins.bluetooth_plugin &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for pytest_automation.plugins.bluetooth_plugin</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">weakref</span>
+
+<span class="kn">import</span> <span class="nn">pytest</span>
+
+<span class="kn">from</span> <span class="nn">pytest_automation.player.bluetooth.common</span> <span class="k">import</span> \
+    <span class="n">put_wifi_player_in_bluetooth_mode</span><span class="p">,</span> <span class="n">put_bluetooth_player_in_wifi_mode</span><span class="p">,</span> \
+    <span class="n">pair_player_to_bluetooth_adapter</span><span class="p">,</span> <span class="n">unpair_player_with_bluetooth_adapter</span><span class="p">,</span> \
+    <span class="n">configure_bt_audio_to_testrunner_output</span>
+<span class="kn">from</span> <span class="nn">sonos.services</span> <span class="k">import</span> <span class="n">Diag</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">XMLAccessor</span>
+<span class="kn">from</span> <span class="nn">wifi.access_point.access_point_manager</span> <span class="k">import</span> <span class="n">NetworkManager</span>
+
+
+<div class="viewcode-block" id="bluetooth_player_connected_to_bluetooth_source_with_audio_configured"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.bluetooth_player_connected_to_bluetooth_source_with_audio_configured">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+<span class="k">def</span> <span class="nf">bluetooth_player_connected_to_bluetooth_source_with_audio_configured</span><span class="p">(</span>
+        <span class="n">trusted_bluetooth_player_connected_to_bluetooth_source</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fixture to yield a test runner that is configured to start BT audio</span>
+<span class="sd">    playback on a player.</span>
+
+<span class="sd">    :param trusted_bluetooth_player_connected_to_bluetooth_source: the</span>
+<span class="sd">        Bluetooth audio player and the test runner to direct audio to it</span>
+
+<span class="sd">    NOTE: we need to sleep for 10s between connection and specifying</span>
+<span class="sd">    the audio output device to be the player when we want to start playback.</span>
+<span class="sd">    Otherwise, we appear to hit some race condition on the Linux box where</span>
+<span class="sd">    we don&#39;t actually output anything to the player.</span>
+
+<span class="sd">    :return: BT player and BT adapter, ready for playback</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">player</span><span class="p">,</span> <span class="n">adapter</span> <span class="o">=</span> <span class="n">trusted_bluetooth_player_connected_to_bluetooth_source</span>
+    <span class="n">configure_bt_audio_to_testrunner_output</span><span class="p">(</span><span class="n">adapter</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">player</span><span class="p">,</span> <span class="n">adapter</span></div>
+
+
+<div class="viewcode-block" id="trusted_bluetooth_player_connected_to_bluetooth_source"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.trusted_bluetooth_player_connected_to_bluetooth_source">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">trusted_bluetooth_player_connected_to_bluetooth_source</span><span class="p">(</span>
+        <span class="n">player_paired_with_bluetooth_source</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Yields a</span>
+<span class="sd">    :func:`~pytest_automation.player.bluetooth.conftest.player_paired_with_bluetooth_source`</span>
+<span class="sd">    that&#39;s in Bluetooth mode that&#39;s already been connected to the test runner,</span>
+<span class="sd">    and trusted</span>
+
+<span class="sd">    :return: a SonosZoneComponent in BT mode and the BT adapter</span>
+<span class="sd">    :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        and :func:`~pytest_automation.conftest.bluetooth_adapter`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">player</span><span class="p">,</span> <span class="n">adapter</span> <span class="o">=</span> <span class="n">player_paired_with_bluetooth_source</span>
+    <span class="n">adapter</span><span class="o">.</span><span class="n">connect_to_device</span><span class="p">(</span><span class="n">player</span><span class="o">.</span><span class="n">bt_mac</span><span class="p">)</span>
+    <span class="n">adapter</span><span class="o">.</span><span class="n">trust_device</span><span class="p">(</span><span class="n">player</span><span class="o">.</span><span class="n">bt_mac</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">player</span><span class="p">,</span> <span class="n">adapter</span>
+    <span class="k">if</span> <span class="n">adapter</span><span class="o">.</span><span class="n">is_device_connected</span><span class="p">(</span><span class="n">player</span><span class="o">.</span><span class="n">bt_mac</span><span class="p">):</span>
+        <span class="n">adapter</span><span class="o">.</span><span class="n">disconnect_from_device</span><span class="p">()</span>
+    <span class="n">adapter</span><span class="o">.</span><span class="n">untrust_device</span><span class="p">(</span><span class="n">player</span><span class="o">.</span><span class="n">bt_mac</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="use_pulse_audio"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.use_pulse_audio">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;function&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">use_pulse_audio</span><span class="p">():</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Start pulseaudio on the test runner if it is not already running, then load</span>
+<span class="sd">    the needed bluetooth module</span>
+
+<span class="sd">    Subdirectory tests that use this fixture should create a :func:`use_pulse_audio`</span>
+<span class="sd">    fixture with `autouse` to automatically start this one.</span>
+<span class="sd">    e.g.</span>
+<span class="sd">        @pytest.fixture(autouse=True)</span>
+<span class="sd">        def use_pulse_audio(use_pulse_audio):</span>
+<span class="sd">            pass</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">pulseaudio</span> <span class="o">=</span> <span class="s1">&#39;pulseaudio --start&#39;</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting &quot;</span><span class="si">{}</span><span class="s1">&quot; on test runner&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pulseaudio</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="ow">not</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">check_output</span><span class="p">(</span><span class="n">pulseaudio</span><span class="p">,</span> <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">pacmd</span> <span class="o">=</span> <span class="s1">&#39;pacmd load-module module-bluetooth-discover&#39;</span>
+    <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Starting &quot;</span><span class="si">{}</span><span class="s1">&quot; on test runner&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">pacmd</span><span class="p">))</span>
+    <span class="n">subprocess</span><span class="o">.</span><span class="n">check_output</span><span class="p">(</span><span class="n">pacmd</span><span class="p">,</span> <span class="n">shell</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="bluetooth_player_in_wifi_mode"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.bluetooth_player_in_wifi_mode">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;session&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">bluetooth_player_in_wifi_mode</span><span class="p">(</span><span class="n">bt_capable_device</span><span class="p">,</span> <span class="n">ap</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Yield a :func:`~pytest_automation.pytest_sonos_device_selection.bt_capable`</span>
+<span class="sd">    player that&#39;s been configured to WiFi mode using the</span>
+<span class="sd">    :func:`~pytest_automation.conftest.ap` that&#39;s already been spun up and</span>
+<span class="sd">    connected to the local network.</span>
+
+<span class="sd">    :return: the SonosZoneComponent and Access Point network manager</span>
+<span class="sd">    :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        and :func:`~wifi.access_point.access_point_manager`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span> <span class="o">=</span> <span class="n">bt_capable_device</span>
+    <span class="n">ntw_manager</span> <span class="o">=</span> <span class="n">NetworkManager</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">ap</span><span class="p">)</span>
+
+    <span class="c1"># turn on AP, disconnect ethernet, wait for player to come up in wifi mode</span>
+    <span class="n">ntw_manager</span><span class="o">.</span><span class="n">setup_player_in_wifi_mode</span><span class="p">()</span>
+
+    <span class="k">yield</span> <span class="n">zp</span><span class="p">,</span> <span class="n">ntw_manager</span>
+
+    <span class="c1"># turn off AP, reconnect ethernet, wait to go back to wired config</span>
+    <span class="n">ntw_manager</span><span class="o">.</span><span class="n">return_player_to_wired_mode</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="player_in_bluetooth_mode"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.player_in_bluetooth_mode">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">player_in_bluetooth_mode</span><span class="p">(</span><span class="n">bluetooth_player_in_wifi_mode</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Yield a</span>
+<span class="sd">    :func:`~pytest_automation.player.bluetooth.conftest.bluetooth_player_in_wifi_mode`</span>
+<span class="sd">    player that&#39;s been put into Bluetooth mode in the same way that a user</span>
+<span class="sd">    would put it into Bluetooth mode. That is:</span>
+<span class="sd">    - Have it in WiFi mode</span>
+<span class="sd">    - Press the Bluetooth button</span>
+
+<span class="sd">    :return: a SonosZoneComponent</span>
+<span class="sd">    :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">zp</span><span class="p">,</span> <span class="n">ap</span> <span class="o">=</span> <span class="n">bluetooth_player_in_wifi_mode</span>
+    <span class="n">put_wifi_player_in_bluetooth_mode</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">bt_mgr</span><span class="o">.</span><span class="n">clear_all_autoconnect_devices</span><span class="p">()</span>
+    <span class="n">orig_diag</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">diag</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">diag</span> <span class="o">=</span> <span class="n">SerialOnlyDiag</span><span class="p">(</span><span class="n">weakref</span><span class="o">.</span><span class="n">proxy</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+    <span class="k">yield</span> <span class="n">zp</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">bt_mgr</span><span class="o">.</span><span class="n">clear_all_autoconnect_devices</span><span class="p">()</span>
+    <span class="n">put_bluetooth_player_in_wifi_mode</span><span class="p">(</span><span class="n">zp</span><span class="p">)</span>
+    <span class="n">zp</span><span class="o">.</span><span class="n">diag</span> <span class="o">=</span> <span class="n">orig_diag</span></div>
+
+
+<div class="viewcode-block" id="player_paired_with_bluetooth_source"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.player_paired_with_bluetooth_source">[docs]</a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span><span class="p">(</span><span class="n">scope</span><span class="o">=</span><span class="s2">&quot;module&quot;</span><span class="p">)</span>
+<span class="k">def</span> <span class="nf">player_paired_with_bluetooth_source</span><span class="p">(</span><span class="n">player_in_bluetooth_mode</span><span class="p">,</span>
+                                        <span class="n">bluetooth_adapter</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Yields a</span>
+<span class="sd">    :func:`~pytest_automation.player.bluetooth.conftest.player_in_bluetooth_mode`</span>
+<span class="sd">    player in Bluetooth mode such that it&#39;s already been paired with the test</span>
+<span class="sd">    runner and a :func:`~pytest_automation.conftest.bluetooth_adapter`.</span>
+
+<span class="sd">    :return: a SonosZoneComponent in BT mode and the BT adapter</span>
+<span class="sd">    :rtype: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        and :func:`~pytest_automation.conftest.bluetooth_adapter`</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">pair_player_to_bluetooth_adapter</span><span class="p">(</span><span class="n">player_in_bluetooth_mode</span><span class="p">,</span>
+                                     <span class="n">bluetooth_adapter</span><span class="p">)</span>
+    <span class="k">yield</span> <span class="n">player_in_bluetooth_mode</span><span class="p">,</span> <span class="n">bluetooth_adapter</span>
+    <span class="n">unpair_player_with_bluetooth_adapter</span><span class="p">(</span><span class="n">player_in_bluetooth_mode</span><span class="p">,</span>
+                                         <span class="n">bluetooth_adapter</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="SerialOnlyDiag"><a class="viewcode-back" href="../../../pytest_automation.plugins.html#pytest_automation.plugins.bluetooth_plugin.SerialOnlyDiag">[docs]</a><span class="k">class</span> <span class="nc">SerialOnlyDiag</span><span class="p">(</span><span class="n">Diag</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    This class is an override of the :cls:`~sonos.services.diag.Diag` class,</span>
+<span class="sd">    retrieving diagnostic service info using a serial telnet connection,</span>
+<span class="sd">    instead of through the standard web interface. This is best used when the</span>
+<span class="sd">    device is in Bluetooth mode (the web interface is not available).</span>
+
+<span class="sd">    As more functions are needed, developers should add to this class.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">SerialOnlyDiag</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_battery_status</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Parses the &#39;status/battery&#39; diagnostic page and returns the</span>
+<span class="sd">        contents in XML format.</span>
+
+<span class="sd">        :return: contents of &#39;status/battery&#39;</span>
+<span class="sd">        :rtype: :class:`~sonos.services.common.XMLAccessor` or None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># A short wait timeout is used to decrease the amount of</span>
+        <span class="c1"># time between retries</span>
+        <span class="c1"># Read the battery level using Command-line</span>
+        <span class="n">pytest</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Reading battery status from </span><span class="si">{}</span><span class="s2"> using serial diag&quot;</span>
+                            <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="p">))</span>
+        <span class="n">cmd</span> <span class="o">=</span> <span class="s2">&quot;wget -O - http://localhost:1400/status/battery&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="n">cmd</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">res</span><span class="p">:</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">:])</span>
+            <span class="n">res</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\r</span><span class="s1">&#39;</span><span class="p">)[:</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+            <span class="n">battery_status</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">res</span><span class="p">)</span><span class="o">.</span><span class="n">BatteryInfo</span>
+            <span class="k">return</span> <span class="n">battery_status</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

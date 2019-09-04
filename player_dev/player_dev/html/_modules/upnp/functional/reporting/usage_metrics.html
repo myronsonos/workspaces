@@ -1,0 +1,799 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.reporting.usage_metrics &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.reporting.usage_metrics</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span> <span class="nn">zlib</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">xml.etree.ElementTree</span>
+<span class="kn">import</span> <span class="nn">logging</span>
+
+<span class="kn">from</span> <span class="nn">twisted.web</span> <span class="k">import</span> <span class="n">server</span><span class="p">,</span> <span class="n">http</span><span class="p">,</span> <span class="n">resource</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">XMLAccessor</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">custom_tuples</span> <span class="k">import</span> <span class="n">namedtyple</span>
+<span class="kn">from</span> <span class="nn">custom_enums</span> <span class="k">import</span> <span class="n">StringEnum</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.usage_metrics_events</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">EVENT_NAMES</span><span class="p">,</span>
+    <span class="n">REPORT_TIME_FORMAT</span><span class="p">,</span>
+    <span class="n">EVENT_TIME_FORMAT</span><span class="p">,</span>
+    <span class="n">PLAYER_CONFIG_MINIMUM</span><span class="p">,</span>
+    <span class="n">PLAYER_CONFIG_MINIMUM_KEYS</span><span class="p">,</span>
+    <span class="n">PLAYER_CONFIG_OPTIONAL_KEYS</span><span class="p">,</span>
+    <span class="n">COMMON_REPORT_HEADER</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">upnp.functional.reporting.usage_metrics_utils</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">validate_event</span><span class="p">,</span>
+    <span class="n">validate_common_header</span><span class="p">)</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">The default uploader interval in seconds is instantiated from</span>
+<span class="sd">the construction of the report uploader in</span>
+<span class="sd">all/oc/zone/common/zonecommon.cxx:makeZoneReportMgr()</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">REPORT_INTERVAL</span> <span class="o">=</span> <span class="mi">3600</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">From all/oc/protocol/client/src/reportuploader.cxx:RReportUploader::serializePlayerConfig</span>
+<span class="sd">ver - version number of report</span>
+<span class="sd">ts - time stamp</span>
+<span class="sd">cu - customer registration</span>
+<span class="sd">hh - house hold id</span>
+<span class="sd">mhhid - muse household id</span>
+<span class="sd">sn - reporting serial device</span>
+<span class="sd">md - zone model</span>
+<span class="sd">bld - firmware version</span>
+<span class="sd">rm - zone room name</span>
+<span class="sd">uptime - uptime since boot</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">UsageMetricsHeader</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;UsageMetricsHeader&#39;</span><span class="p">,</span>
+                                <span class="p">[</span><span class="s1">&#39;ver&#39;</span><span class="p">,</span> <span class="s1">&#39;ts&#39;</span><span class="p">,</span> <span class="s1">&#39;cu&#39;</span><span class="p">,</span> <span class="s1">&#39;hh&#39;</span><span class="p">,</span> <span class="s1">&#39;mhh&#39;</span><span class="p">,</span> <span class="s1">&#39;sn&#39;</span><span class="p">,</span> <span class="s1">&#39;md&#39;</span><span class="p">])</span>
+<span class="c1"># A named tuple for a voice service account</span>
+<span class="n">VoiceSVCs</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;VoiceSVSs&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;st&#39;</span><span class="p">,</span> <span class="s1">&#39;ww&#39;</span><span class="p">])</span>
+<span class="c1"># A named tuple for available/total space in JFFS</span>
+<span class="c1"># From oc/zone/zoneplayer/zp.cxx:RZonePlayer::populateConfigReport</span>
+<span class="n">JFFS</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;jffs&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;freeBytes&#39;</span><span class="p">,</span> <span class="s1">&#39;totalBytes&#39;</span><span class="p">])</span>
+<span class="n">ATH_IF</span> <span class="o">=</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,)</span>
+<span class="n">ETH_IF</span> <span class="o">=</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,)</span>
+<span class="c1"># A named tuple with wireless mode/channel</span>
+<span class="n">ATH</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;ath&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">,</span> <span class="s1">&#39;channel&#39;</span><span class="p">])</span>
+<span class="c1"># A named tuple with ethernet name/status</span>
+<span class="n">ETH</span> <span class="o">=</span> <span class="n">namedtyple</span><span class="p">(</span><span class="s1">&#39;eth&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">,</span> <span class="s1">&#39;status&#39;</span><span class="p">])</span>
+
+
+<div class="viewcode-block" id="PlayerReports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerReports">[docs]</a><span class="k">class</span> <span class="nc">PlayerReports</span><span class="p">(</span><span class="n">StringEnum</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Every zone sends a usage metrics and every player</span>
+<span class="sd">    sends a player config report.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">CONFIG_REPORT</span> <span class="o">=</span> <span class="s1">&#39;PlayerConfigReport&#39;</span>
+    <span class="n">USAGE_REPORT</span> <span class="o">=</span> <span class="s1">&#39;UsageMetrics&#39;</span></div>
+
+
+<span class="n">DEFAULT_PLAYER_REPORT</span> <span class="o">=</span> <span class="n">PlayerReports</span><span class="o">.</span><span class="n">CONFIG_REPORT</span>
+
+
+<div class="viewcode-block" id="PlayerConfigDict"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict">[docs]</a><span class="k">class</span> <span class="nc">PlayerConfigDict</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Converts the player config report to dictionary format.</span>
+<span class="sd">    The input is the XMLAccessor object that encapsulates</span>
+<span class="sd">    the player config report.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">xml</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param :class:`sonos.services.common.XMLAccessor`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">xml</span> <span class="o">=</span> <span class="n">xml</span>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Converts the elements in the player config report to a</span>
+<span class="sd">        dictionary.</span>
+<span class="sd">        Returns the dictionary of items in the player config report.</span>
+<span class="sd">        :return: A dictionary of key/value items in report</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">player_cfg_dict</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
+        <span class="c1"># Some elements must always be present</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">PLAYER_CONFIG_MINIMUM_KEYS</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">player_cfg_dict</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span><span class="o">.</span><span class="n">value</span>
+        <span class="n">player_cfg_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_player_cfg_ath</span><span class="p">())</span>
+        <span class="n">player_cfg_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_player_cfg_eth</span><span class="p">())</span>
+        <span class="n">player_cfg_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_player_cfg_jffs</span><span class="p">())</span>
+        <span class="c1"># Go through the nested elements for voice</span>
+        <span class="k">if</span> <span class="s1">&#39;voice&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="p">:</span>
+            <span class="n">player_cfg_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_player_cfg_voice</span><span class="p">())</span>
+        <span class="k">if</span> <span class="s1">&#39;hdmi&#39;</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="p">:</span>
+            <span class="n">player_cfg_dict</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_player_cfg_hdmi</span><span class="p">())</span>
+        <span class="c1"># Go through elements which may or may not exist in report</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">PLAYER_CONFIG_OPTIONAL_KEYS</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">key</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="p">:</span>
+                <span class="n">player_cfg_dict</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">)</span><span class="o">.</span><span class="n">value</span>
+        <span class="k">return</span> <span class="n">player_cfg_dict</span></div>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg_eth"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg_eth">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg_eth</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a dictionary with a single key &#39;eth&#39; which</span>
+<span class="sd">        maps to a list of ethernet interfaces named tuples</span>
+<span class="sd">        of ETH type</span>
+<span class="sd">        :return: A dictionary item with a list of ethernet</span>
+<span class="sd">        interfaces</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">eth</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="n">ETH_IF</span><span class="p">:</span>
+            <span class="n">ifc</span> <span class="o">=</span> <span class="s1">&#39;eth</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">interface</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">ifc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="p">:</span>
+                <span class="n">eth</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ETH</span><span class="p">(</span><span class="n">ifc</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ifc</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;eth&#39;</span><span class="p">:</span> <span class="n">eth</span><span class="p">}</span></div>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg_ath"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg_ath">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg_ath</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a dictionary with a single key &#39;ath&#39; which</span>
+<span class="sd">        maps to a list of wireless interfaces named tuples</span>
+<span class="sd">        of ATH type</span>
+<span class="sd">        :return: A dictionary item with a list of wireless</span>
+<span class="sd">        interfaces</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ath</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="n">ATH_IF</span><span class="p">:</span>
+            <span class="n">ifc</span> <span class="o">=</span> <span class="s1">&#39;ath</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">interface</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">ifc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="p">:</span>
+                <span class="n">ath</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ATH</span><span class="p">(</span><span class="n">ifc</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ifc</span><span class="p">)</span><span class="o">.</span><span class="n">mode</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                               <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">ifc</span><span class="p">)</span><span class="o">.</span><span class="n">ch</span><span class="o">.</span><span class="n">value</span><span class="p">))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;ath&#39;</span><span class="p">:</span> <span class="n">ath</span><span class="p">}</span></div>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg_jffs"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg_jffs">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg_jffs</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a dictionary with a single key &#39;jffs&#39; which</span>
+<span class="sd">        maps to a named tuple JFFS.</span>
+<span class="sd">        :return: A dictionary item mapped to JFFS tuple</span>
+<span class="sd">        interfaces</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;jffs&#39;</span><span class="p">:</span> <span class="n">JFFS</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">jffs</span><span class="o">.</span><span class="n">tb</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">jffs</span><span class="o">.</span><span class="n">fb</span><span class="o">.</span><span class="n">value</span><span class="p">)}</span></div>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg_voice"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg_voice">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg_voice</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the voice elements in the player config report</span>
+<span class="sd">        as a dictionary.</span>
+<span class="sd">        :return: A dictionary item with a dictionary of voice</span>
+<span class="sd">        elements</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">voice_dict</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span>
+                              <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+        <span class="n">svcs</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">num</span><span class="o">.</span><span class="n">value</span><span class="p">)):</span>
+            <span class="n">svc_id</span> <span class="o">=</span> <span class="s1">&#39;svc_</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span>
+
+            <span class="c1"># Google Assistant service doesn&#39;t have a ww value</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">svc_id</span><span class="p">),</span> <span class="s2">&quot;ww&quot;</span><span class="p">):</span>
+                <span class="n">ww</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">svc_id</span><span class="p">)</span><span class="o">.</span><span class="n">ww</span><span class="o">.</span><span class="n">value</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">ww</span> <span class="o">=</span> <span class="kc">None</span>
+
+            <span class="n">svc</span> <span class="o">=</span> <span class="n">VoiceSVCs</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">svc_id</span><span class="p">)</span><span class="o">.</span><span class="n">name</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">voice</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">svc_id</span><span class="p">)</span><span class="o">.</span><span class="n">st</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="n">ww</span><span class="p">)</span>
+            <span class="n">svcs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">svc</span><span class="p">)</span>
+        <span class="n">voice_dict</span><span class="p">[</span><span class="s1">&#39;svcs&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">svcs</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;voice&#39;</span><span class="p">:</span> <span class="n">voice_dict</span><span class="p">}</span></div>
+
+<div class="viewcode-block" id="PlayerConfigDict.convert_player_cfg_hdmi"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.PlayerConfigDict.convert_player_cfg_hdmi">[docs]</a>    <span class="k">def</span> <span class="nf">convert_player_cfg_hdmi</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the HDMI elements in the player config report</span>
+<span class="sd">        as a dictionary</span>
+<span class="sd">        :return: A dictionary item with a dictionary of HDMI</span>
+<span class="sd">        elements</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">hdmi_dict</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">hdmi</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span>
+                             <span class="bp">self</span><span class="o">.</span><span class="n">xml</span><span class="o">.</span><span class="n">hdmi</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s1">&#39;hdmi&#39;</span><span class="p">:</span> <span class="n">hdmi_dict</span><span class="p">}</span></div></div>
+
+
+<div class="viewcode-block" id="UsageMetricsHelper"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper">[docs]</a><span class="k">class</span> <span class="nc">UsageMetricsHelper</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Utility class for the usage metrics report.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">HEADER_KEYS</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;ver&#39;</span><span class="p">,</span> <span class="s1">&#39;ts&#39;</span><span class="p">,</span> <span class="s1">&#39;cu&#39;</span><span class="p">,</span> <span class="s1">&#39;hh&#39;</span><span class="p">,</span> <span class="s1">&#39;mhh&#39;</span><span class="p">,</span> <span class="s1">&#39;sn&#39;</span><span class="p">,</span> <span class="s1">&#39;md&#39;</span><span class="p">,)</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">XMLstr</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">XMLstr</span><span class="p">)</span>
+
+<div class="viewcode-block" id="UsageMetricsHelper.header_info"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.header_info">[docs]</a>    <span class="k">def</span> <span class="nf">header_info</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a named tuple of the header information contained in</span>
+<span class="sd">        the usage metrics report.</span>
+
+<span class="sd">        :returns: the named tuple UsageMetricsHeader</span>
+<span class="sd">        :rtype: :class:`UsageMetricsHeader`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">UsageMetricsHeader</span><span class="p">(</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span><span class="o">.</span><span class="n">values</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="UsageMetricsHelper.player_config_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.player_config_report">[docs]</a>    <span class="k">def</span> <span class="nf">player_config_report</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a dictionary of items in the player config report.</span>
+<span class="sd">        :return: A dictionary of key/value items in report</span>
+<span class="sd">        :rtype: :dict:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">PlayerConfigDict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span><span class="p">)</span><span class="o">.</span><span class="n">convert_player_cfg</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="UsageMetricsHelper.find_events"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.find_events">[docs]</a>    <span class="k">def</span> <span class="nf">find_events</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param list items: `~sonos.services.common.XMLAccessor`</span>
+<span class="sd">        :param str name: The name of the event</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">event_list</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span><span class="o">.</span><span class="n">events</span>
+        <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">event</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="n">name</span><span class="p">:</span>
+                    <span class="n">event_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">event</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">event_list</span></div>
+
+<div class="viewcode-block" id="UsageMetricsHelper.has_event"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.has_event">[docs]</a>    <span class="k">def</span> <span class="nf">has_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param str name: Event name</span>
+<span class="sd">        :param str key: Key name</span>
+<span class="sd">        :param str value: Key value</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">find_events</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="n">entries</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">entry</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">entries</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">entries</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="n">key</span> <span class="ow">and</span> <span class="n">entries</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="n">value</span><span class="p">:</span>
+                    <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="n">key</span> <span class="ow">and</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span> <span class="o">==</span> <span class="n">value</span><span class="p">:</span>
+                        <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="UsageMetricsHelper.has_relative_event"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.has_relative_event">[docs]</a>    <span class="k">def</span> <span class="nf">has_relative_event</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">operator</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param str name: Event name</span>
+<span class="sd">        :param str key: Key name</span>
+<span class="sd">        &quot;param str value: Key value</span>
+<span class="sd">        :pram obj operator: Operator to compare against Key value</span>
+
+<span class="sd">        Ex. has_relative_event(&#39;chsrc:framed&#39;, &#39;ms&#39;, 2000, operator.le)</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">find_events</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="n">entries</span> <span class="o">=</span> <span class="n">event</span><span class="o">.</span><span class="n">entry</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">entries</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+                <span class="k">if</span> <span class="n">entries</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="n">key</span> <span class="ow">and</span> <span class="n">operator</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">entries</span><span class="o">.</span><span class="n">value</span><span class="p">),</span> <span class="n">value</span><span class="p">):</span>
+                    <span class="k">return</span> <span class="kc">True</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">entries</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">key</span> <span class="o">==</span> <span class="n">key</span> <span class="ow">and</span> <span class="n">operator</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">),</span> <span class="n">value</span><span class="p">):</span>
+                        <span class="k">return</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="UsageMetricsHelper.compare_event_time_to_report_time"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetricsHelper.compare_event_time_to_report_time">[docs]</a>    <span class="k">def</span> <span class="nf">compare_event_time_to_report_time</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">max_seconds</span><span class="o">=</span><span class="n">REPORT_INTERVAL</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterates through the events in the usage metrics report.</span>
+<span class="sd">        Returns False when the time difference in seconds of the event</span>
+<span class="sd">        exceeds the specified maximum threshold of the report time.</span>
+<span class="sd">        :param int max_seconds: Maximum seconds difference allowed between the</span>
+<span class="sd">        event time and the report time</span>
+<span class="sd">        :return: True if time on all events within max_seconds of report time</span>
+<span class="sd">        else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">report_time</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span><span class="o">.</span><span class="n">ts</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="n">REPORT_TIME_FORMAT</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">events</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">usage_metrics</span><span class="o">.</span><span class="n">events</span>
+        <span class="k">except</span> <span class="ne">AttributeError</span><span class="p">:</span>
+            <span class="k">pass</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+                <span class="n">event_time</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">datetime</span><span class="o">.</span><span class="n">strptime</span><span class="p">(</span>
+                    <span class="n">event</span><span class="o">.</span><span class="n">time</span><span class="p">,</span> <span class="n">EVENT_TIME_FORMAT</span><span class="p">)</span>
+                <span class="n">event_delta</span> <span class="o">=</span> <span class="n">report_time</span> <span class="o">-</span> <span class="n">event_time</span>
+                <span class="n">ret</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">event_delta</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">())</span> <span class="o">&lt;=</span> <span class="n">max_seconds</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="n">ret</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="UsageMetrics"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics">[docs]</a><span class="k">class</span> <span class="nc">UsageMetrics</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Class that validates a usage metric report from the zone device.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">USAGE_METRICS_KEYS</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;ver&#39;</span><span class="p">,</span> <span class="s1">&#39;ts&#39;</span><span class="p">,</span> <span class="s1">&#39;cu&#39;</span><span class="p">,</span> <span class="s1">&#39;hh&#39;</span><span class="p">,</span> <span class="s1">&#39;mhh&#39;</span><span class="p">,</span> <span class="s1">&#39;sn&#39;</span><span class="p">,</span> <span class="s1">&#39;md&#39;</span><span class="p">,</span> <span class="s1">&#39;events&#39;</span><span class="p">,</span> <span class="s1">&#39;uptime&#39;</span><span class="p">)</span>
+    <span class="n">SAVE_ALL</span> <span class="o">=</span> <span class="s1">&#39;0.0.0.0&#39;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span>
+            <span class="n">make_log_name</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">save_ip</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hard_error</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">raise_exc_on_key_error</span> <span class="o">=</span> <span class="kc">False</span>
+
+<div class="viewcode-block" id="UsageMetrics.set_hard_or_soft_error"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.set_hard_or_soft_error">[docs]</a>    <span class="k">def</span> <span class="nf">set_hard_or_soft_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hard</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Sets how to respond to client based on error.</span>
+<span class="sd">        Setting to True, the server will respond to the client</span>
+<span class="sd">        with an internal server error while if the setting is</span>
+<span class="sd">        False, the server will respond to client with OK.</span>
+<span class="sd">        This method should be used for debugging purposes and</span>
+<span class="sd">        in test cases where it&#39;s intended to verify that the</span>
+<span class="sd">        player re-sends the POST after it has received an error</span>
+<span class="sd">        from the server.</span>
+<span class="sd">        :param bool hard: Handling on error</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">hard_error</span> <span class="o">=</span> <span class="n">hard</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.set_raise_exc"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.set_raise_exc">[docs]</a>    <span class="k">def</span> <span class="nf">set_raise_exc</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">raise_exc_on_key_error</span> <span class="o">=</span> <span class="n">value</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.hard_or_soft_error"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.hard_or_soft_error">[docs]</a>    <span class="k">def</span> <span class="nf">hard_or_soft_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">msg</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Format the HTTP reply code based on test.</span>
+<span class="sd">        The msg parameter could be either a string,</span>
+<span class="sd">        a list of strings or a tuple of strings.</span>
+<span class="sd">        :param int code: HTTP response code</span>
+<span class="sd">        :param str msg: Accompanying message to reply</span>
+<span class="sd">        :return: tuple of HTTP response and message</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="p">(</span><span class="nb">list</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)):</span>
+            <span class="n">reply_msg</span> <span class="o">=</span> <span class="n">msg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">msg</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
+            <span class="n">reply_msg</span> <span class="o">=</span> <span class="n">msg</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">reply_msg</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Unhandled </span><span class="si">{}</span><span class="s2"> in msg&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">msg</span><span class="p">)))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_error</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">code</span><span class="p">,</span> <span class="n">reply_msg</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">OK</span><span class="p">,</span> <span class="n">reply_msg</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.validate_player_config_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.validate_player_config_report">[docs]</a>    <span class="k">def</span> <span class="nf">validate_player_config_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">report</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validates the player configuration from the player sent once</span>
+<span class="sd">        following boot. It ascertains the report containes the required</span>
+<span class="sd">        elements. It does not check the integrity of the individual elements.</span>
+<span class="sd">        :param :class:`sonos.services.common.XMLAccessor` report:</span>
+<span class="sd">        :return: Tuple of integer for the HTTP response and message</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">set_report_keys</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="n">set_minimum</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">PLAYER_CONFIG_MINIMUM</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">set_minimum</span><span class="o">.</span><span class="n">issubset</span><span class="p">(</span><span class="n">set_report_keys</span><span class="p">):</span>
+            <span class="n">msg</span> <span class="o">=</span> <span class="s1">&#39;Missing key in player config report&#39;</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> missing </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">msg</span><span class="p">,</span>
+                <span class="n">set_minimum</span> <span class="o">-</span> <span class="n">set_minimum</span><span class="o">.</span><span class="n">intersection</span><span class="p">(</span><span class="n">set_report_keys</span><span class="p">)))</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_or_soft_error</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">INTERNAL_SERVER_ERROR</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">OK</span><span class="p">,</span> <span class="s1">&#39;Validated&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.validate_usage_metrics_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.validate_usage_metrics_report">[docs]</a>    <span class="k">def</span> <span class="nf">validate_usage_metrics_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">usage_report</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validates the usage metrics report from the player.</span>
+<span class="sd">        (a) Version</span>
+<span class="sd">        (b) Player time stamp</span>
+<span class="sd">        (c) Customer ID</span>
+<span class="sd">        (d) Household ID</span>
+<span class="sd">        (e) Serial #</span>
+<span class="sd">        (f) Model</span>
+<span class="sd">        (g) Button events</span>
+<span class="sd">        (h) Temperature events</span>
+<span class="sd">        (i) Orientation events</span>
+<span class="sd">        (j) Memory usage events</span>
+<span class="sd">        :param :class:`sonos.services.common.XMLAccessor` report:</span>
+<span class="sd">        :return: Tuple of integer for the HTTP response and message</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">usage_report</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;LostEvents&#39;</span><span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">usage_report</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;LostEvents&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="o">.</span><span class="n">isdigit</span><span class="p">():</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;LostEvents non numeric value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">usage_report</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;LostEvents&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+                <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_or_soft_error</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">INTERNAL_SERVER_ERROR</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+        <span class="n">events</span> <span class="o">=</span> <span class="n">usage_report</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;events&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> </span><span class="si">{}</span><span class="s2"> EVENTS=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">usage_report</span><span class="o">.</span><span class="n">sn</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="n">usage_report</span><span class="o">.</span><span class="n">md</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="n">usage_report</span><span class="o">.</span><span class="n">ts</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="n">usage_report</span><span class="o">.</span><span class="n">hh</span><span class="o">.</span><span class="n">value</span><span class="p">,</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">events</span><span class="p">)))</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">event</span><span class="o">.</span><span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">EVENT_NAMES</span><span class="p">:</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;Missing event </span><span class="si">{}</span><span class="s2"> from expected names&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                    <span class="n">event</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+                <span class="n">results</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="kc">False</span><span class="p">,</span> <span class="n">msg</span><span class="p">))</span>
+                <span class="k">continue</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">validate_event</span><span class="p">(</span>
+                <span class="n">event</span><span class="p">,</span>
+                <span class="n">EVENT_NAMES</span><span class="p">[</span><span class="n">event</span><span class="o">.</span><span class="n">name</span><span class="p">],</span>
+                <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+                <span class="n">raise_exc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">raise_exc_on_key_error</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">result</span><span class="p">:</span>
+                <span class="n">results</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">results</span><span class="p">:</span>
+            <span class="n">msg</span> <span class="o">=</span> <span class="p">[</span><span class="n">err</span> <span class="k">for</span> <span class="n">status</span><span class="p">,</span> <span class="n">err</span> <span class="ow">in</span> <span class="n">results</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">status</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;Failed to validate report </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_or_soft_error</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">INTERNAL_SERVER_ERROR</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">OK</span><span class="p">,</span> <span class="s1">&#39;Validated report&#39;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.validate_usage_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.validate_usage_report">[docs]</a>    <span class="k">def</span> <span class="nf">validate_usage_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">body</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validates fields in the report.</span>
+<span class="sd">        Returns http.ok if validation succeeds else http.INTERNAL_SERVER_ERROR</span>
+<span class="sd">        with an accompanying message suggesting the failure.</span>
+
+<span class="sd">        :param str body: POST contents of usage report in XML format.</span>
+<span class="sd">        :return: Tuple of integer for the HTTP response and message</span>
+<span class="sd">        :rtype: :obj:`tuple`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">usage_report</span> <span class="o">=</span> <span class="n">XMLAccessor</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">xml</span><span class="o">.</span><span class="n">etree</span><span class="o">.</span><span class="n">ElementTree</span><span class="o">.</span><span class="n">ParseError</span> <span class="k">as</span> <span class="n">err</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">exception</span><span class="p">(</span><span class="s2">&quot;Malformed XML </span><span class="si">{}</span><span class="s2"> body </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">err</span><span class="p">,</span> <span class="n">body</span><span class="p">))</span>
+            <span class="c1"># If this exception is hit, we need to not continue</span>
+            <span class="k">return</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="n">validate_common_header</span><span class="p">(</span>
+            <span class="n">usage_report</span><span class="p">,</span>
+            <span class="n">COMMON_REPORT_HEADER</span><span class="p">,</span>
+            <span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">,</span>
+            <span class="n">raise_exc</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">raise_exc_on_key_error</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">results</span><span class="p">:</span>
+            <span class="n">msg</span> <span class="o">=</span> <span class="p">[</span><span class="n">err</span> <span class="k">for</span> <span class="n">status</span><span class="p">,</span> <span class="n">err</span> <span class="ow">in</span> <span class="n">results</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">status</span><span class="p">]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;Failed to validate common header in report </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_or_soft_error</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">INTERNAL_SERVER_ERROR</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">PlayerReports</span><span class="o">.</span><span class="n">CONFIG_REPORT</span> <span class="ow">in</span> <span class="n">usage_report</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">validate_player_config_report</span><span class="p">(</span><span class="n">usage_report</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="n">PlayerReports</span><span class="o">.</span><span class="n">USAGE_REPORT</span> <span class="ow">in</span> <span class="n">usage_report</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">validate_usage_metrics_report</span><span class="p">(</span><span class="n">usage_report</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">msg</span> <span class="o">=</span> <span class="s2">&quot;Unexpected report type </span><span class="se">\&quot;</span><span class="si">{}</span><span class="se">\&quot;</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">usage_report</span><span class="o">.</span><span class="n">element</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">msg</span><span class="p">))</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">hard_or_soft_error</span><span class="p">(</span><span class="n">http</span><span class="o">.</span><span class="n">INTERNAL_SERVER_ERROR</span><span class="p">,</span> <span class="n">msg</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_extract_body_from_http_post</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Decompresses the body from the received HTTP POST if the encoding is gzip.</span>
+<span class="sd">        All players except mips platform (bridge) use gzip content encoding.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">content_encoding</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">received_headers</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;content-encoding&#39;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="n">body</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">content</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">content_encoding</span> <span class="ow">and</span> <span class="s1">&#39;gzip&#39;</span> <span class="o">==</span> <span class="n">content_encoding</span><span class="p">:</span>
+            <span class="n">body</span> <span class="o">=</span> <span class="n">zlib</span><span class="o">.</span><span class="n">decompress</span><span class="p">(</span><span class="n">body</span><span class="p">,</span> <span class="n">zlib</span><span class="o">.</span><span class="n">MAX_WBITS</span> <span class="o">|</span> <span class="mi">16</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">body</span>
+
+<div class="viewcode-block" id="UsageMetrics.metrics_event_handler"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.metrics_event_handler">[docs]</a>    <span class="k">def</span> <span class="nf">metrics_event_handler</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private POST handler that validates the usage report.</span>
+<span class="sd">        Given the parsed usage report, it sets the HTTP reply code</span>
+<span class="sd">        and returns the accompanying reply message.</span>
+
+<span class="sd">        :param obj request:`~requests`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">client_ip</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">getClientIP</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Testrunner received UsageMetrics Report&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;POST from </span><span class="si">{}</span><span class="s2"> save_ip=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">client_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_ip</span><span class="p">))</span>
+        <span class="n">body</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_extract_body_from_http_post</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">body</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_ip</span> <span class="o">==</span> <span class="n">client_ip</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_ip</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">SAVE_ALL</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;Saving non validated usage metrics report from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">client_ip</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">client_ip</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">metrics_event_clear</span><span class="p">(</span><span class="n">client_ip</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">client_ip</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="p">(</span><span class="n">reply_code</span><span class="p">,</span> <span class="n">reply_msg</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">validate_usage_report</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="n">request</span><span class="o">.</span><span class="n">setResponseCode</span><span class="p">(</span><span class="n">reply_code</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">reply_msg</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.system_api_event_handler"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.system_api_event_handler">[docs]</a>    <span class="k">def</span> <span class="nf">system_api_event_handler</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private POST handler that stores the usage report.</span>
+<span class="sd">        Given the parsed usage report, it sets the HTTP reply code</span>
+<span class="sd">        and returns the accompanying reply message.</span>
+
+<span class="sd">        :param obj request:`~requests`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">client_ip</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">getClientIP</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Testrunner received UsageMetrics Report&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;POST from </span><span class="si">{}</span><span class="s2"> save_ip=</span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">client_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">save_ip</span><span class="p">))</span>
+        <span class="n">body</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_extract_body_from_http_post</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+        <span class="k">if</span> <span class="s1">&#39;system-api&#39;</span> <span class="ow">in</span> <span class="n">body</span><span class="p">:</span>
+            <span class="p">(</span><span class="n">reply_code</span><span class="p">,</span> <span class="n">reply_msg</span><span class="p">)</span> <span class="o">=</span> <span class="mi">200</span><span class="p">,</span> <span class="s1">&#39;&#39;</span>
+            <span class="n">request</span><span class="o">.</span><span class="n">setResponseCode</span><span class="p">(</span><span class="n">reply_code</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">client_ip</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="p">(</span><span class="n">reply_code</span><span class="p">,</span> <span class="n">reply_msg</span><span class="p">)</span> <span class="o">=</span> <span class="mi">403</span><span class="p">,</span> <span class="s1">&#39;&#39;</span>
+            <span class="n">request</span><span class="o">.</span><span class="n">setResponseCode</span><span class="p">(</span><span class="n">reply_code</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">reply_msg</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.metrics_event_clear"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.metrics_event_clear">[docs]</a>    <span class="k">def</span> <span class="nf">metrics_event_clear</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Deletes the received usage reports from the specified IP address.</span>
+
+<span class="sd">        :param str ip: Internet address of device</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.metrics_event_depth"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.metrics_event_depth">[docs]</a>    <span class="k">def</span> <span class="nf">metrics_event_depth</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns the number of usage reports from the specified IP address.</span>
+
+<span class="sd">        :param str ip: Internet address of device</span>
+<span class="sd">        :return: The number of usage reports from the device</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.find_names_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.find_names_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">find_names_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns a tuple of events associated with the name.</span>
+<span class="sd">        :param str ip: Internet address of device</span>
+<span class="sd">        :param str name: The name to search in reports</span>
+<span class="sd">        :return: A list of events for name</span>
+<span class="sd">        :rtype: :obj:`list`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+            <span class="s2">&quot;UMH Searching for name: </span><span class="si">{}</span><span class="s2"> from </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">ip</span><span class="p">))</span>
+        <span class="n">name_list</span> <span class="o">=</span> <span class="nb">list</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">ip</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span>
+                <span class="s2">&quot;find_names_in_reports: uninitialized key &quot;</span>
+                <span class="s2">&quot;no saved events for IP </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ip</span><span class="p">))</span>
+            <span class="k">return</span> <span class="n">name_list</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">reports</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;UMH searching report: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">report</span><span class="p">))</span>
+            <span class="n">usage</span> <span class="o">=</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+            <span class="c1"># List addition</span>
+            <span class="n">name_list</span> <span class="o">=</span> <span class="n">name_list</span> <span class="o">+</span> <span class="n">usage</span><span class="o">.</span><span class="n">find_events</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">name_list</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.find_event_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.find_event_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">find_event_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given a list of usage reports and an event comprising of a tuple</span>
+<span class="sd">        it returns True if the event is found else False.</span>
+<span class="sd">        The event tuple is of format type, name, value where the type is</span>
+<span class="sd">        either buttons or orientation_change, name is the entry name in</span>
+<span class="sd">        the report with its corresponding value.</span>
+
+<span class="sd">        :param str ip: String of the internet address of device.</span>
+<span class="sd">        :param tuple event: The event to search.</span>
+<span class="sd">        :return: Is the event in the usage report(s)</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;UMH Searching for event: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">event</span><span class="p">))</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">reports</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;UMH searching report: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">report</span><span class="p">))</span>
+            <span class="n">usage</span> <span class="o">=</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="n">usage</span><span class="o">.</span><span class="n">has_event</span><span class="p">(</span><span class="o">*</span><span class="n">event</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">ret</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">ret</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.find_event_with_relative_value_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.find_event_with_relative_value_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">find_event_with_relative_value_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">event</span><span class="p">,</span> <span class="n">operator</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Given a list of usage reports and an event comprising of a tuple</span>
+<span class="sd">        it returns True if the event is found else False.</span>
+<span class="sd">        The event tuple is of format type, name, value where the type is</span>
+<span class="sd">        either buttons or orientation_change, name is the entry name in</span>
+<span class="sd">        the report with its corresponding value.</span>
+
+<span class="sd">        :param str ip: String of the internet address of device.</span>
+<span class="sd">        :param tuple event: The event to search.</span>
+<span class="sd">        :param obj operator: Operator to be used in raltive comparison</span>
+<span class="sd">        :return: Is the event in the usage report(s)</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">reports</span><span class="p">:</span>
+            <span class="n">usage</span> <span class="o">=</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+            <span class="n">ret</span> <span class="o">=</span> <span class="n">usage</span><span class="o">.</span><span class="n">has_relative_event</span><span class="p">(</span><span class="o">*</span><span class="n">event</span><span class="p">,</span> <span class="n">operator</span><span class="o">=</span><span class="n">operator</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">ret</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">ret</span>
+        <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.validate_event_time_in_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.validate_event_time_in_reports">[docs]</a>    <span class="k">def</span> <span class="nf">validate_event_time_in_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">max_seconds</span><span class="o">=</span><span class="n">REPORT_INTERVAL</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns True when all events in the reports that have been saved</span>
+<span class="sd">        from the device with the associated IP have a time stamp no &quot;older&quot;</span>
+<span class="sd">        of max_seconds from the report time stamp.</span>
+<span class="sd">        :param str ip: Internet address of device</span>
+<span class="sd">        :param int max_seconds: Maximum seconds difference between the</span>
+<span class="sd">        event time and the report time</span>
+<span class="sd">        :return: True if time on all events within max_seconds of report time</span>
+<span class="sd">        else False</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="n">reports</span><span class="p">:</span>
+            <span class="n">usage</span> <span class="o">=</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+            <span class="n">ret</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">usage</span><span class="o">.</span><span class="n">compare_event_time_to_report_time</span><span class="p">(</span>
+                <span class="n">max_seconds</span><span class="o">=</span><span class="n">max_seconds</span><span class="p">))</span>
+        <span class="k">return</span> <span class="nb">all</span><span class="p">(</span><span class="n">ret</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.has_report"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.has_report">[docs]</a>    <span class="k">def</span> <span class="nf">has_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="o">=</span><span class="n">DEFAULT_PLAYER_REPORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Returns True when the report_type exists in the saved list</span>
+<span class="sd">        :param str ip: Zone player IP address</span>
+<span class="sd">        :param str report_type: :class:`PlayerReports`</span>
+<span class="sd">        :return: Has the report type been received ?</span>
+<span class="sd">        :rtype: :obj:`bool`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">ip</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">any</span><span class="p">(</span>
+                <span class="p">[</span><span class="n">report_type</span> <span class="ow">in</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span><span class="o">.</span><span class="n">usage_metrics</span>
+                 <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.get_reports"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.get_reports">[docs]</a>    <span class="k">def</span> <span class="nf">get_reports</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">report_type</span><span class="o">=</span><span class="n">DEFAULT_PLAYER_REPORT</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Return the saved specified reports.</span>
+<span class="sd">        :param str ip: Zone IP address</span>
+<span class="sd">        :param str report_type: Report(s) type to return</span>
+<span class="sd">        :return: List of UsageMetricsHelper objects</span>
+<span class="sd">        :rtype :list:`UsageMetricsHelper`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">reports</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">report</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">saved_events</span><span class="p">[</span><span class="n">ip</span><span class="p">]:</span>
+            <span class="n">item</span> <span class="o">=</span> <span class="n">UsageMetricsHelper</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">report_type</span> <span class="ow">in</span> <span class="n">item</span><span class="o">.</span><span class="n">usage_metrics</span><span class="p">:</span>
+                <span class="n">reports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">reports</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.convert_event_to_dict"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.convert_event_to_dict">[docs]</a>    <span class="k">def</span> <span class="nf">convert_event_to_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create a dictionary of key/value pairs from the XML formatted</span>
+<span class="sd">        event name instance</span>
+<span class="sd">        :param str event: The reported event</span>
+<span class="sd">        :return: Dictionary of key/value pairs</span>
+<span class="sd">        :rtype: :obj:`dict`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">d</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;time&#39;</span><span class="p">:</span> <span class="n">event</span><span class="o">.</span><span class="n">time</span><span class="p">}</span>
+        <span class="p">[</span><span class="n">d</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="n">entry</span><span class="o">.</span><span class="n">key</span><span class="p">:</span> <span class="n">entry</span><span class="o">.</span><span class="n">value</span><span class="p">})</span> <span class="k">for</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">event</span><span class="o">.</span><span class="n">entry</span><span class="p">]</span>
+        <span class="k">return</span> <span class="n">d</span></div>
+
+<div class="viewcode-block" id="UsageMetrics.convert_events_to_dict"><a class="viewcode-back" href="../../../../upnp.functional.reporting.html#upnp.functional.reporting.usage_metrics.UsageMetrics.convert_events_to_dict">[docs]</a>    <span class="k">def</span> <span class="nf">convert_events_to_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">events</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param list events: A list of XML formatted events</span>
+<span class="sd">        :return: A list of events converted to a dictionary format</span>
+<span class="sd">        from the XML report</span>
+<span class="sd">        :rtype: :obj:`list` of dictionaries</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">convert_event_to_dict</span><span class="p">(</span><span class="n">event</span><span class="p">)</span> <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">]</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

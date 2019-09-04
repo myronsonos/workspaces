@@ -1,0 +1,295 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>webserver_v0.helpers.muse_api_helpers &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for webserver_v0.helpers.muse_api_helpers</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Helper functions for Muse response expectations. Use this to more easily</span>
+<span class="sd">dip into the message queue and grab the responses to Muse commands/errors.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">sonos.client.websockets_v0.event</span> <span class="k">import</span> <span class="p">(</span><span class="n">PlaybackStatusEvent</span><span class="p">,</span> <span class="n">SessionErrorEvent</span><span class="p">,</span>
+                                              <span class="n">SessionState</span><span class="p">,</span> <span class="n">SessionStatusEvent</span><span class="p">,</span>
+                                              <span class="n">Success</span><span class="p">,</span> <span class="n">SessionSuccessResponse</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">webserver_v0.helpers.cloud_queue_control</span> <span class="k">import</span> <span class="n">CloudQueueControl</span>
+
+<div class="viewcode-block" id="MuseSessionMixin"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin">[docs]</a><span class="k">class</span> <span class="nc">MuseSessionMixin</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">cq_control</span> <span class="o">=</span> <span class="n">CloudQueueControl</span><span class="p">()</span>
+
+<div class="viewcode-block" id="MuseSessionMixin.mute_output"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.mute_output">[docs]</a>    <span class="k">def</span> <span class="nf">mute_output</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_connection</span><span class="p">,</span> <span class="n">gid</span><span class="p">):</span>
+        <span class="n">muse_connection</span><span class="o">.</span><span class="n">set_muted_groupvolume</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">gid</span><span class="p">,</span>
+                                              <span class="n">muted</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse_connection</span><span class="p">)</span></div>
+
+    <span class="c1"># I *think* that the &quot;group_id could be pulled out of the muse_connection</span>
+    <span class="c1"># with enough Python magic, but it is beyond my skill level</span>
+<div class="viewcode-block" id="MuseSessionMixin.make_muse_session"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.make_muse_session">[docs]</a>    <span class="k">def</span> <span class="nf">make_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_connection</span><span class="p">,</span> <span class="n">group_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">group_id</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">group_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span>
+
+        <span class="n">muse_connection</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">group_id</span><span class="p">,</span>
+                                       <span class="n">app_id</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span>
+                                       <span class="n">app_context</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_testMethodName</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse_connection</span><span class="p">,</span>
+                          <span class="n">event_verifier</span><span class="o">=</span><span class="k">lambda</span> <span class="n">e</span><span class="p">:</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="o">==</span> <span class="n">SessionState</span><span class="o">.</span><span class="n">CONNECTED</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="MuseSessionMixin.remove_muse_session"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.remove_muse_session">[docs]</a>    <span class="k">def</span> <span class="nf">remove_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_connection</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">muse_connection</span><span class="o">.</span><span class="n">session_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">muse_connection</span><span class="o">.</span><span class="n">leave_session</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">muse_connection</span><span class="o">.</span><span class="n">session_id</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse_connection</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionMixin.clear_muse_session"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.clear_muse_session">[docs]</a>    <span class="k">def</span> <span class="nf">clear_muse_session</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_connection</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">make_muse_session</span><span class="p">(</span><span class="n">muse_connection</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">remove_muse_session</span><span class="p">(</span><span class="n">muse_connection</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionMixin.start_cloud_queue_client"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.start_cloud_queue_client">[docs]</a>    <span class="k">def</span> <span class="nf">start_cloud_queue_client</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_connection</span><span class="p">,</span> <span class="n">auto_playback</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="n">my_item_id</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="n">my_metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">get_track_metadata</span><span class="p">(</span><span class="n">item_id</span><span class="o">=</span><span class="n">my_item_id</span><span class="p">)</span>
+        <span class="n">muse_connection</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">muse_connection</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                         <span class="n">queue_base_url</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">CQ_PLAYBACK_URI</span><span class="p">,</span>
+                                         <span class="n">item_id</span><span class="o">=</span><span class="n">my_item_id</span><span class="p">,</span>
+                                         <span class="n">first_track_metadata</span><span class="o">=</span><span class="n">my_metadata</span><span class="p">,</span>
+                                         <span class="n">play_on_completion</span><span class="o">=</span><span class="n">auto_playback</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verify_event</span><span class="p">(</span><span class="n">Success</span><span class="p">,</span> <span class="n">connection</span><span class="o">=</span><span class="n">muse_connection</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionMixin.start_cloud_queue_server"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.start_cloud_queue_server">[docs]</a>    <span class="k">def</span> <span class="nf">start_cloud_queue_server</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwds</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cq</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">start_cloudqueue_server</span><span class="p">(</span><span class="o">**</span><span class="n">kwds</span><span class="p">)</span>
+        <span class="c1"># WORKAROUND: wait for mock server CQ to index music</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseSessionMixin.stop_cloud_queue_server"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseSessionMixin.stop_cloud_queue_server">[docs]</a>    <span class="k">def</span> <span class="nf">stop_cloud_queue_server</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;cq&#39;</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">cq</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq_control</span><span class="o">.</span><span class="n">stop_cloudqueue_server</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cq</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cq</span> <span class="o">=</span> <span class="kc">None</span></div></div>
+
+
+<span class="n">cloudqueue</span> <span class="o">=</span> <span class="n">CloudQueueControl</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="MuseApiHelpers"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers">[docs]</a><span class="k">class</span> <span class="nc">MuseApiHelpers</span><span class="p">:</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">logger</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">logger</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logger</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s1">&#39;MuseApiHelpers&#39;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="MuseApiHelpers.expect_event_response"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.expect_event_response">[docs]</a>    <span class="k">def</span> <span class="nf">expect_event_response</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse</span><span class="p">,</span> <span class="n">response</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterate through the message queue and return a SessionStatusEvent message that</span>
+<span class="sd">        contains the supplied response string</span>
+<span class="sd">        :param response: String to match when iterating through the message queue</span>
+<span class="sd">        :return: Parsed dictionary of the datagram</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">SessionStatusEvent</span><span class="p">,</span>
+                                     <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="n">v</span><span class="p">,</span>
+                                     <span class="n">response</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.expect_success_response"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.expect_success_response">[docs]</a>    <span class="k">def</span> <span class="nf">expect_success_response</span><span class="p">(</span><span class="n">muse</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span> <span class="n">response</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterate through the message queue and return a SessionSuccessResponse</span>
+<span class="sd">        that matches the supplied response string</span>
+<span class="sd">        :param response: String to match when iterating through the message queue</span>
+<span class="sd">        :return: Parsed dictionary of the datagram</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">muse</span><span class="p">,</span> <span class="n">SessionSuccessResponse</span><span class="p">,</span>
+                                     <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">response</span> <span class="o">==</span> <span class="n">v</span><span class="p">,</span>
+                                     <span class="n">response</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.expect_session_status"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.expect_session_status">[docs]</a>    <span class="k">def</span> <span class="nf">expect_session_status</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse</span><span class="p">,</span> <span class="n">states</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterate through the message queue and return the SessionStatusEvent</span>
+<span class="sd">        that matches the string(s) in states</span>
+<span class="sd">        :param states: String/List to match on when iterating through the message queue</span>
+<span class="sd">        :return: Parsed dictionary of the datagram</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="c1"># states can be a single state string, or a list</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">muse</span><span class="p">,</span> <span class="n">SessionStatusEvent</span><span class="p">,</span>
+                                     <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="ow">in</span> <span class="n">v</span><span class="p">,</span>
+                                     <span class="n">states</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.expect_error"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.expect_error">[docs]</a>    <span class="k">def</span> <span class="nf">expect_error</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse</span><span class="p">,</span> <span class="n">error</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterate through the message queue and return the SessionErrorEvent</span>
+<span class="sd">        that matches the string in error</span>
+<span class="sd">        :param error: String to match on when iterating through the message queue</span>
+<span class="sd">        :return: Parsed dictionary of the datagram</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">muse</span><span class="p">,</span> <span class="n">SessionErrorEvent</span><span class="p">,</span>
+                                     <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">error_code</span> <span class="ow">in</span> <span class="n">v</span><span class="p">,</span>
+                                     <span class="n">error</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.expect_something"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.expect_something">[docs]</a>    <span class="k">def</span> <span class="nf">expect_something</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_instance</span><span class="p">,</span> <span class="n">what</span><span class="p">,</span> <span class="n">test</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Iterate through the message queue and return the datagram that matches the supplied</span>
+<span class="sd">        conditions</span>
+<span class="sd">        :param what: Type of muse event/response to return</span>
+<span class="sd">        :param test: Condition to use when looking for a match</span>
+<span class="sd">        :param value: String to match on</span>
+<span class="sd">        :param timeout: Int timeout value. Default == 1</span>
+<span class="sd">        :return:</span>
+
+<span class="sd">        Ex: Most other functions in this script utilize this as their base</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">while</span> <span class="n">timeout</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">muse_instance</span><span class="o">.</span><span class="n">generate_events</span><span class="p">():</span>
+                <span class="k">if</span> <span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">event</span><span class="p">,</span> <span class="n">what</span><span class="p">)</span>
+                    <span class="ow">and</span> <span class="n">test</span><span class="p">(</span><span class="n">event</span><span class="p">,</span> <span class="n">value</span><span class="p">)):</span>
+                    <span class="k">return</span> <span class="n">event</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">timeout</span> <span class="o">-=</span> <span class="mi">1</span>
+                <span class="n">sleep</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.create_session_on_player"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.create_session_on_player">[docs]</a>    <span class="k">def</span> <span class="nf">create_session_on_player</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">player</span><span class="p">,</span> <span class="n">muse_instance</span><span class="p">,</span> <span class="n">app_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                 <span class="n">app_context</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">custom_data</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="n">gid</span> <span class="o">=</span> <span class="n">player</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()[</span><span class="s2">&quot;CurrentZoneGroupID&quot;</span><span class="p">]</span>
+        <span class="n">player</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">BecomeCoordinatorOfStandaloneGroup</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">player</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()[</span><span class="s2">&quot;CurrentZoneGroupID&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">gid</span><span class="p">,</span>
+                        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
+                        <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">gid</span> <span class="o">=</span> <span class="n">player</span><span class="o">.</span><span class="n">ZoneGroupTopology</span><span class="o">.</span><span class="n">GetZoneGroupAttributes</span><span class="p">()[</span><span class="s2">&quot;CurrentZoneGroupID&quot;</span><span class="p">]</span>
+        <span class="n">muse_instance</span><span class="o">.</span><span class="n">create_session</span><span class="p">(</span><span class="n">group_id</span><span class="o">=</span><span class="n">gid</span><span class="p">,</span>
+                                     <span class="n">app_id</span><span class="o">=</span><span class="n">app_id</span><span class="p">,</span>
+                                     <span class="n">app_context</span><span class="o">=</span><span class="n">app_context</span><span class="p">,</span>
+                                     <span class="n">custom_data</span><span class="o">=</span><span class="n">custom_data</span><span class="p">)</span>
+        <span class="n">session</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">muse_instance</span><span class="p">,</span> <span class="n">SessionStatusEvent</span><span class="p">,</span>
+                                        <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">session_state</span> <span class="ow">in</span> <span class="n">v</span><span class="p">,</span>
+                                        <span class="s2">&quot;SESSION_STATE_CONNECTED&quot;</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">session</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="MuseApiHelpers.load_cq_and_verify_playing"><a class="viewcode-back" href="../../../webserver_v0.helpers.html#webserver_v0.helpers.muse_api_helpers.MuseApiHelpers.load_cq_and_verify_playing">[docs]</a>    <span class="k">def</span> <span class="nf">load_cq_and_verify_playing</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">muse_instance</span><span class="p">,</span> <span class="n">first_track_md</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">queuebaseurl</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">muse_instance</span><span class="o">.</span><span class="n">load_cloud_queue</span><span class="p">(</span><span class="n">session_id</span><span class="o">=</span><span class="n">muse_instance</span><span class="o">.</span><span class="n">session_id</span><span class="p">,</span>
+                                   <span class="n">queue_base_url</span><span class="o">=</span><span class="n">queuebaseurl</span><span class="p">,</span>
+                                   <span class="n">item_id</span><span class="o">=</span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+                                   <span class="n">play_on_completion</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                   <span class="n">first_track_metadata</span><span class="o">=</span><span class="n">first_track_md</span><span class="p">)</span>
+        <span class="n">playing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">expect_something</span><span class="p">(</span><span class="n">muse_instance</span><span class="p">,</span> <span class="n">PlaybackStatusEvent</span><span class="p">,</span>
+                                <span class="k">lambda</span> <span class="n">e</span><span class="p">,</span> <span class="n">v</span><span class="p">:</span> <span class="n">e</span><span class="o">.</span><span class="n">playback_state</span> <span class="ow">in</span> <span class="n">v</span><span class="p">,</span>
+                                <span class="s2">&quot;PLAYBACK_STATE_PLAYING&quot;</span><span class="p">,</span>
+                                <span class="n">timeout</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">playing</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">playing</span></div></div>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,536 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.api.deviceproperties.test_device_properties_events &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.api.deviceproperties.test_device_properties_events</h1><div class="highlight"><pre>
+<span></span><span class="c1"># -*- coding: utf-8 -*-</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">upnp.api.deviceproperties.device_properties_base</span> <span class="k">import</span> <span class="n">DevicePropertiesTestBaseFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">InvalidArgumentsError</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">SUPPORTS_WIRELESS_DISABLE</span><span class="p">,</span>
+    <span class="n">PAIRABLE_MODEL_COMPATIBILITY_MAP</span><span class="p">,</span> <span class="n">S1</span><span class="p">,</span> <span class="n">S6</span><span class="p">,</span> <span class="n">S9</span><span class="p">,</span> <span class="n">S11</span><span class="p">,</span> <span class="n">SUB</span><span class="p">,</span> <span class="n">WD100</span><span class="p">)</span>
+
+<span class="n">CONFIG_FILE</span> <span class="o">=</span> <span class="s1">&#39;device_properties.json&#39;</span>
+<span class="n">DISABLED</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+<span class="n">ENABLED</span> <span class="o">=</span> <span class="s1">&#39;1&#39;</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    The DeviceProperties service has twenty-five state variables: </span>
+<span class="sd">         AutoplayIncludeLinkedZones,AutoplayRoomUUID, AutoplayUseVolume,</span>
+<span class="sd">         AutoplayVolume, ChannelMapSet, Configuration, CopyrightInfo, </span>
+<span class="sd">         DisplaySoftwareVersion,ExtraInfo,HardwareVersion,HouseholdID,</span>
+<span class="sd">         HTAudioIn,HTFreq, HTSatChanMapSet,Icon,IPAddress,</span>
+<span class="sd">         IsZoneBridge,LEDState,MACAddress,SatRoomUUID,SerialNumber,</span>
+<span class="sd">         SettingsReplicationState,SoftwareVersion, ZoneName</span>
+
+<span class="sd">         SettingsReplicationState,, </span>
+<span class="sd">    </span>
+<span class="sd">    Notes: </span>
+<span class="sd">        1.  SatRoomUUID is listed in DeviceSpy as a state variable. However,</span>
+<span class="sd">            it is not readable via DeviceProperties.get_state_variable(&#39;SatRoomUUID&#39;)</span>
+<span class="sd">            and times out. A grep of both python and C++ code only shows it as an</span>
+<span class="sd">            argument to the RemoveHTSatellite() function call. Therefore this test</span>
+<span class="sd">            does nothing with SatRoomUUID.</span>
+<span class="sd">        </span>
+<span class="sd">        2.  HTFreq is only readable via a Playbar. It always returns 0. I borrowed</span>
+<span class="sd">            a piece of script from channel_change_2ghz.py and can see the channel</span>
+<span class="sd">            change to the specified channel/frequency. I can see what appears to be</span>
+<span class="sd">            correct changes in dmesg. However, HTFreq does not change on the S9 and </span>
+<span class="sd">            is not readable on the S1.</span>
+<span class="sd">            e.g.</span>
+<span class="sd">            (166261)sat: enable=1</span>
+<span class="sd">            (166262)sat: saw primary on 2412 (htchan=5180)</span>
+<span class="sd">            (166262)sat: freq=5180 (was 2412) 1</span>
+<span class="sd">                    </span>
+<span class="sd">    Test Cases:</span>
+<span class="sd">    - Set/Get LEDState and compare to State variable LEDState</span>
+<span class="sd">    - Set/Get HouseholdID and compare to State variable HouseholdID</span>
+<span class="sd">    - Set/Get ZoneAttributes and compare to State variables ZoneName, </span>
+<span class="sd">      Configuration,and Icon.</span>
+<span class="sd">    - Set/Get AutoplayUseVolume and compare to State variable AutoplayUseVolume</span>
+<span class="sd">    - Set/Get AutoplayVolume and compare to State variable AutoplayVolume</span>
+<span class="sd">    - Set/Get AutoplayLinkedZones and compare to State variable AutoplayLinkedZones</span>
+<span class="sd">    - Set/Get AutoplayRoomUUID and compare to State variable to AutoplayRoomUUID</span>
+<span class="sd">    - Add/Remove BondedZones and compare to State variable ChannelMapSet</span>
+<span class="sd">    - Create/Separate StereoPair and compare to State variable ChannelMapSet</span>
+<span class="sd">    - Add/Remove HTSatellite and compare to State variable HTSatChanMapSet</span>
+<span class="sd">    - GetZoneInfo and compare to State variables CopyrightInfo,DisplaySoftwareVersion,</span>
+<span class="sd">      ExtraInfo,HardwareVersion,HTAudioIn,IPAddress,MACAddress,SerialNumber,SoftwareVersion</span>
+<span class="sd">    - Get all devices and compare zp.is_bridge() result to State variable IsZoneBridge</span>
+<span class="sd">    - Get initial SettingsReplicationState variable. Change a system settings variable.</span>
+<span class="sd">      Wait for settings to match. Compare Initial/Updated/Final result to State variable</span>
+<span class="sd">      SettingsReplicationState.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<div class="viewcode-block" id="DevicePropertiesEventBridgeTestFixture"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventBridgeTestFixture">[docs]</a><span class="k">class</span> <span class="nc">DevicePropertiesEventBridgeTestFixture</span><span class="p">(</span><span class="n">DevicePropertiesTestBaseFixture</span><span class="p">):</span>
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;BRIDGE&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventBridgeTestFixture.test_is_bridge"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventBridgeTestFixture.test_is_bridge">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_unique_bridge_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_is_bridge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the IsZoneBridge test with the set of devices.</span>
+
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">WD100</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;skipping DOCK test&quot;</span><span class="p">)</span>
+        <span class="n">expected_value</span> <span class="o">=</span> <span class="s1">&#39;1&#39;</span> <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">is_bridge</span><span class="p">()</span> <span class="k">else</span> <span class="s1">&#39;0&#39;</span>
+        <span class="n">var_value</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;IsZoneBridge&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_value</span><span class="p">,</span> <span class="n">var_value</span><span class="p">,</span>
+			<span class="s2">&quot;Expect value of &#39;IsZoneBridge&#39; to be </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">expected_value</span><span class="p">))</span></div></div>
+
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture">[docs]</a><span class="k">class</span> <span class="nc">DevicePropertiesEventsTestFixture</span><span class="p">(</span><span class="n">DevicePropertiesEventBridgeTestFixture</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Device Properties Events Test Fixture &quot;&quot;&quot;</span>
+
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span> <span class="s1">&#39;NIGHTLY_API_DEVICEPROPERTIES&#39;</span> <span class="p">]</span>
+
+    <span class="n">ZONE_ATTR_VECTORS</span> <span class="o">=</span> <span class="p">[</span>
+              <span class="p">(</span><span class="sa">u</span><span class="s1">&#39;Living Room&#39;</span><span class="p">,</span> <span class="sa">u</span><span class="s1">&#39;x-rincon-roomicon:living&#39;</span><span class="p">,</span> <span class="sa">u</span><span class="s1">&#39;1&#39;</span><span class="p">),</span>
+              <span class="p">(</span><span class="sa">u</span><span class="s1">&#39;Den&#39;</span><span class="p">,</span> <span class="sa">u</span><span class="s1">&#39;x-rincon-roomicon:den&#39;</span><span class="p">,</span> <span class="sa">u</span><span class="s1">&#39;0&#39;</span><span class="p">)</span> <span class="p">]</span>
+
+    <span class="n">AUTOPLAY_TEST_VOL</span> <span class="o">=</span> <span class="mi">5</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.setUpFixture"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DevicePropertiesEventsTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">setUpFixture</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> 
+                <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">PAIRABLE_MODEL_COMPATIBILITY_MAP</span><span class="p">[</span><span class="n">S1</span><span class="p">]]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sub_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">SUB</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playbar_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">S9</span><span class="p">]</span></div>
+
+    <span class="k">def</span> <span class="nf">_perform_led_state_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">desired_state</span><span class="p">):</span>
+        <span class="n">state_str</span> <span class="o">=</span> <span class="s1">&#39;On&#39;</span> <span class="k">if</span> <span class="n">desired_state</span> <span class="k">else</span> <span class="s1">&#39;Off&#39;</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetLEDState</span><span class="p">(</span><span class="n">desired_state</span><span class="p">)</span>
+        <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetLEDState</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span>
+                                <span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;LEDState&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">state_str</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span>
+                                   <span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;LEDState&quot;</span><span class="p">),</span> <span class="n">state_str</span><span class="p">,</span>
+                                   <span class="s2">&quot;expect &#39;LEDState&#39; state variable to &quot;</span>
+                                   <span class="s2">&quot;be </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">))</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_set_get_led_state"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_set_get_led_state">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_get_led_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the SetGet LED State test with the set of devices.</span>
+
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">S6</span> <span class="ow">or</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">S11</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;S6/S11 unsupported - skipping testcase&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_perform_led_state_test</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_perform_led_state_test</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_get_household_id"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_get_household_id">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_get_household_id</span> <span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the GetHouseholdID test with the set of devices.</span>
+<span class="sd">            e.g. HouseholdID: [Sonos_J7KIC0Z77nsmLucrtJdCSs2iUc]</span>
+<span class="sd">            The HouseholdID state variable .</span>
+
+<span class="sd">        If the device is not a member of a household the return is empty. </span>
+<span class="sd">        </span>
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ref_hhid</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetHouseholdID</span><span class="p">()</span>
+        <span class="n">test_hhid</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;HouseholdID&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">ref_hhid</span><span class="p">,</span> <span class="n">test_hhid</span><span class="p">,</span>
+                                   <span class="s2">&quot;expect value of &#39;HouseholdID&#39; state &quot;</span>
+                                   <span class="s2">&quot;variable to match HHID returned from &quot;</span>
+                                   <span class="s2">&quot;DeviceProperties.GetHouseholdID&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_get_zone_attrib_state_variables</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="n">name</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;ZoneName&quot;</span><span class="p">)</span>
+        <span class="n">icon</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;Icon&quot;</span><span class="p">)</span>
+        <span class="n">cfg</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;Configuration&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">icon</span><span class="p">,</span> <span class="n">cfg</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_set_get_zone_attributes"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_set_get_zone_attributes">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_get_zone_attributes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the Set/Get ZoneAttributes and verify that the expected</span>
+<span class="sd">        state variables update accordingly</span>
+
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">SUB</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;SWPBL-42285&quot;</span><span class="p">)</span>  
+        <span class="k">for</span> <span class="n">data</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">ZONE_ATTR_VECTORS</span><span class="p">:</span>
+            <span class="n">name</span><span class="p">,</span> <span class="n">icon</span><span class="p">,</span> <span class="n">cfg</span> <span class="o">=</span> <span class="n">data</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;vectors: name=</span><span class="si">{}</span><span class="s2">, icon=</span><span class="si">{}</span><span class="s2">, cfg=</span><span class="si">{}</span><span class="s2">&quot;</span>
+                              <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">icon</span><span class="p">,</span> <span class="n">cfg</span><span class="p">))</span>
+            <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetZoneAttributes</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">icon</span><span class="p">,</span> <span class="n">cfg</span><span class="p">)</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;ZoneName&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">name</span><span class="p">,</span>
+                            <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;Failed to updated zone name&quot;</span><span class="p">)</span>
+            <span class="n">updated_attribs</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetZoneAttributes</span><span class="p">()</span>
+            <span class="n">updated_name</span><span class="p">,</span> <span class="n">updated_icon</span><span class="p">,</span> <span class="n">updated_cfg</span> <span class="o">=</span> \
+                                <span class="bp">self</span><span class="o">.</span><span class="n">_get_zone_attrib_state_variables</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">updated_attribs</span><span class="p">[</span><span class="s1">&#39;CurrentZoneName&#39;</span><span class="p">],</span>
+                                        <span class="n">updated_name</span><span class="p">,</span>
+                                        <span class="s2">&quot;Expect state variable &#39;ZoneName&#39; &quot;</span>
+                                        <span class="s2">&quot;to be updated.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">updated_attribs</span><span class="p">[</span><span class="s1">&#39;CurrentIcon&#39;</span><span class="p">],</span>
+                                        <span class="n">updated_icon</span><span class="p">,</span>
+                                        <span class="s2">&quot;Expect state variable &#39;ZoneIcon&#39; &quot;</span>
+                                        <span class="s2">&quot;to be updated.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_status_property</span><span class="p">(</span><span class="s1">&#39;Configuration&#39;</span><span class="p">),</span>
+                                       <span class="n">updated_cfg</span><span class="p">,</span>
+                                       <span class="s2">&quot;Expect state variable &#39;Configuration&#39; &quot;</span>
+                                       <span class="s2">&quot;to be updated.&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_add_remove_bonded_zones"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_add_remove_bonded_zones">[docs]</a>    <span class="k">def</span> <span class="nf">test_add_remove_bonded_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the Add Remove Bonded Zones test with the set of playable devices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_virtual</span> <span class="o">==</span> <span class="kc">True</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Skip this test for virtual players. Timing issue.&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sub_list</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;this test requires 2 PLAY:1s and 1 Sub&quot;</span><span class="p">)</span>
+        <span class="n">s1_left</span><span class="p">,</span> <span class="n">s1_right</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">sub</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sub_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="n">s1_left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">add_stereo_bonded_zone_sub_to_this_device</span><span class="p">(</span><span class="n">sub</span><span class="p">,</span> <span class="n">s1_right</span><span class="p">)</span>
+        <span class="n">chmap</span> <span class="o">=</span> <span class="n">s1_left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;ChannelMapSet&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">s1_right</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">chmap</span><span class="p">,</span>
+                                  <span class="s2">&quot;Expect UDN of right channel &quot;</span>
+                                  <span class="s2">&quot;in channelmap of bonded configuration&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">sub</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">chmap</span><span class="p">,</span>
+                                  <span class="s2">&quot;Expect UDN of Sub in channelmap of &quot;</span>
+                                  <span class="s2">&quot;bonded configuration&quot;</span><span class="p">)</span>
+        <span class="n">s1_left</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_add_remove_ht_satellite"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_add_remove_ht_satellite">[docs]</a>    <span class="k">def</span> <span class="nf">test_add_remove_ht_satellite</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the Add/Remove HT Satellite test with the set </span>
+<span class="sd">        of playable devices.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span> <span class="ow">or</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sub_list</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="ow">or</span>
+            <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">playbar_list</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;this test requires 2 PLAY:1s, 1 PLAYBAR, and 1 Sub&quot;</span><span class="p">)</span>
+        <span class="n">playbar</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playbar_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">s1_left</span><span class="p">,</span> <span class="n">s1_right</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">s1_list</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">sub</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sub_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">playbar</span><span class="o">.</span><span class="n">is_virtual</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;Skip this test for virtual players. Timing issue.&quot;</span><span class="p">)</span>
+        <span class="n">playbar</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_51_config</span><span class="p">(</span><span class="n">sub</span><span class="p">,</span> <span class="n">s1_left</span><span class="p">,</span> <span class="n">s1_right</span><span class="p">)</span>
+        <span class="n">chmap</span> <span class="o">=</span> <span class="n">playbar</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;HTSatChanMapSet&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">s1_left</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">chmap</span><span class="p">,</span>
+                                  <span class="s2">&quot;Expect left rear PLAY:1 UDN in channelmap&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">s1_right</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">chmap</span><span class="p">,</span>
+                                  <span class="s2">&quot;Expect right rear PLAY:1 UDN in channelmap&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">sub</span><span class="o">.</span><span class="n">raw_udn</span> <span class="ow">in</span> <span class="n">chmap</span><span class="p">,</span>
+                                  <span class="s2">&quot;Expect Sub UDN in channelmap&quot;</span><span class="p">)</span>
+        <span class="n">playbar</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+
+    <span class="k">def</span> <span class="nf">_get_device_zone_info_state_variables</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Get device info state variables.</span>
+
+<span class="sd">        :param zp: zone player under test.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :return: tuple containing state variable value strings</span>
+<span class="sd">        :rtype: :func:`tuple`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">sn</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;SerialNumber&quot;</span><span class="p">)</span>
+        <span class="n">ver</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;SoftwareVersion&quot;</span><span class="p">)</span>
+        <span class="n">display_ver</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;DisplaySoftwareVersion&quot;</span><span class="p">)</span>
+        <span class="n">hw_ver</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;HardwareVersion&quot;</span><span class="p">)</span>
+        <span class="n">ip</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;IPAddress&quot;</span><span class="p">)</span>
+        <span class="n">mac</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;MACAddress&quot;</span><span class="p">)</span>
+        <span class="n">extra_info</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;ExtraInfo&quot;</span><span class="p">)</span>
+        <span class="n">htaudio</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;HTAudioIn&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">(</span><span class="n">sn</span><span class="p">,</span> <span class="n">ver</span><span class="p">,</span> <span class="n">display_ver</span><span class="p">,</span> <span class="n">hw_ver</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span> <span class="n">mac</span><span class="p">,</span> <span class="n">extra_info</span><span class="p">,</span> <span class="n">htaudio</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_get_zone_info"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_get_zone_info">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_get_zone_info</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the GetZoneInfo test with the set of playable devices.</span>
+<span class="sd">                </span>
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">info</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetZoneInfo</span><span class="p">()</span>
+        <span class="p">(</span><span class="n">sn</span><span class="p">,</span>
+         <span class="n">ver</span><span class="p">,</span>
+         <span class="n">display_ver</span><span class="p">,</span>
+         <span class="n">hw_ver</span><span class="p">,</span>
+         <span class="n">ip</span><span class="p">,</span>
+         <span class="n">mac_addr</span><span class="p">,</span>
+         <span class="n">extra_info</span><span class="p">,</span>
+         <span class="n">htaudio_in</span><span class="p">)</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_device_zone_info_state_variables</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_status_property</span><span class="p">(</span><span class="s2">&quot;SerialNumber&quot;</span><span class="p">),</span>
+                                   <span class="n">sn</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct serial number from &quot;</span>
+                                   <span class="s2">&quot;state variable &#39;SerialNumber&#39;&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
+                                   <span class="n">ver</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct firmware version from &quot;</span>
+                                   <span class="s2">&quot;state variable &#39;SoftwareVersion&#39;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">info</span><span class="p">[</span><span class="s1">&#39;DisplaySoftwareVersion&#39;</span><span class="p">],</span>
+                                   <span class="n">display_ver</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct display software version &quot;</span>
+                                   <span class="s2">&quot;from state variable &#39;DisplaySoftwareVersion&#39;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">info</span><span class="p">[</span><span class="s1">&#39;HardwareVersion&#39;</span><span class="p">],</span>
+                                   <span class="n">hw_ver</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct hardware version &quot;</span>
+                                   <span class="s2">&quot;from state variable &#39;HardwareVersion&#39;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">ip</span><span class="p">,</span> <span class="n">ip</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct IP address from state &quot;</span>
+                                   <span class="s2">&quot;variable &#39;IPAddress&#39;&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(),</span>
+                                   <span class="n">mac_addr</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct MAC address from state &quot;</span>
+                                   <span class="s2">&quot;variable &#39;MACAddress&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_extra_info</span><span class="p">(),</span> <span class="n">extra_info</span> <span class="ow">or</span> <span class="kc">None</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect correct &#39;ExtraInfo&#39; from state &quot;</span>
+                                   <span class="s2">&quot;variable &#39;ExtraInfo&#39;&quot;</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">modelNumber</span> <span class="o">==</span> <span class="n">S9</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_status_property</span><span class="p">(</span><span class="s1">&#39;HTAudioInCode&#39;</span><span class="p">)),</span>
+                                       <span class="n">htaudio_in</span><span class="p">,</span>
+                                       <span class="s2">&quot;Expect correct value from state &quot;</span>
+                                       <span class="s2">&quot;variable &#39;HTAudioIn&#39;&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_perform_set_get_autoplay_linked_zones_test</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">desired_state</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Perform set and get for autoplay linked zones</span>
+<span class="sd">        </span>
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param str desired_state: Desired state variable value.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">state_str</span> <span class="o">=</span> <span class="s1">&#39;1&#39;</span> <span class="k">if</span> <span class="n">desired_state</span> <span class="k">else</span> <span class="s1">&#39;0&#39;</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">SetAutoplayLinkedZones</span><span class="p">(</span><span class="n">desired_state</span><span class="p">)</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">GetAutoplayLinkedZones</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span>
+                                <span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;AutoplayIncludeLinkedZones&quot;</span><span class="p">)</span>
+                                <span class="o">==</span> <span class="n">state_str</span><span class="p">)</span>
+        <span class="n">state</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;AutoplayIncludeLinkedZones&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">state_str</span><span class="p">,</span>
+                                   <span class="s2">&quot;Expect state variable &quot;</span>
+                                   <span class="s2">&quot;&#39;AutoplayIncludeLinkedZones&#39; to have &quot;</span>
+                                   <span class="s2">&quot;value </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">state_str</span><span class="p">))</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_set_get_autoplay_linked_zones"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_set_get_autoplay_linked_zones">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_set_get_autoplay_linked_zones</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the Autoplay Linked Zones test with the set of playable devices.</span>
+
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_perform_set_get_autoplay_linked_zones_test</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_perform_set_get_autoplay_linked_zones_test</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_is_bridge"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_is_bridge">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_is_bridge</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">device</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the IsZoneBridge test with the set of devices.</span>
+
+<span class="sd">        :param device: Unique testbed zone player.</span>
+<span class="sd">        :type device: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">DevicePropertiesEventsTestFixture</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">test_is_bridge</span><span class="p">(</span><span class="n">device</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_setting_replicated_state"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_setting_replicated_state">[docs]</a>    <span class="k">def</span> <span class="nf">test_setting_replicated_state</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute the setting replicated state test with the set of playable devices.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">device</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">initial_state</span> <span class="o">=</span> <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;SettingsReplicationState&quot;</span><span class="p">)</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">SetString</span><span class="p">(</span><span class="s2">&quot;TEST&quot;</span><span class="p">,</span> <span class="s2">&quot;TEST_VALUE&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyNotEqualOrFailCase</span><span class="p">(</span><span class="n">initial_state</span><span class="p">,</span>
+                    <span class="n">device</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;SettingsReplicationState&quot;</span><span class="p">),</span>
+                    <span class="s2">&quot;Expect value of &#39;SettingsReplicationState&#39; to have changed&quot;</span><span class="p">)</span>
+        <span class="n">device</span><span class="o">.</span><span class="n">SystemProperties</span><span class="o">.</span><span class="n">Remove</span><span class="p">(</span><span class="s2">&quot;TEST&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_set_wifi_mode_and_verify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">wifi_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Set wifi mode via http and verify state variable WifiEnabled value</span>
+
+<span class="sd">        :param zp: zone player.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param bool wifi_enable: wifi enable or disable</span>
+<span class="sd">        </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">wifi_enable</span><span class="p">:</span>
+            <span class="c1"># Turn on wifi. This causes anacapa restart.</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">wifi_enable</span><span class="p">()</span>
+            <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span>
+                                <span class="s1">&#39;WifiEnabled&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="n">ENABLED</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Turn off wifi (on devices which allow it).</span>
+            <span class="c1"># This causes anacapa restart.</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">modelNumber</span> <span class="ow">in</span> <span class="n">SUPPORTS_WIRELESS_DISABLE</span><span class="p">:</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">wifi_disable</span><span class="p">()</span>
+                <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span><span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span>
+                    <span class="s1">&#39;WifiEnabled&#39;</span><span class="p">)</span> <span class="o">==</span> <span class="n">DISABLED</span><span class="p">,</span> <span class="n">iteration_delay</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+<div class="viewcode-block" id="DevicePropertiesEventsTestFixture.test_wifi_enable_disable_state"><a class="viewcode-back" href="../../../../upnp.api.deviceproperties.html#upnp.api.deviceproperties.test_device_properties_events.DevicePropertiesEventsTestFixture.test_wifi_enable_disable_state">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_unique_playback_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_wifi_enable_disable_state</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify WifiEnabled state variable is evented when enabling or disabling</span>
+<span class="sd">        player wifi interface.</span>
+<span class="sd">                </span>
+<span class="sd">        :param zp: Unique testbed playback zone player.</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_virtual</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s2">&quot;This test is skipped for virtual players.&quot;</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">wifienabled_state</span> <span class="o">=</span> <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">get_state_variable</span><span class="p">(</span><span class="s2">&quot;WifiEnabled&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">InvalidArgumentsError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;Unexpected exception for Rush and later release.&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">wifienabled_state</span> <span class="o">==</span> <span class="n">ENABLED</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_set_wifi_mode_and_verify</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wifi_enable</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_set_wifi_mode_and_verify</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wifi_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_set_wifi_mode_and_verify</span><span class="p">(</span><span class="n">zp</span><span class="p">,</span> <span class="n">wifi_enable</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></div></div>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s2">&quot;DevicePropertiesEventsTestFixture&quot;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">DevicePropertiesEventsTestFixture</span><span class="p">()])</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

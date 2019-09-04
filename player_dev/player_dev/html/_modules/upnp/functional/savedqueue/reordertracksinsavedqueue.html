@@ -1,0 +1,779 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>upnp.functional.savedqueue.reordertracksinsavedqueue &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for upnp.functional.savedqueue.reordertracksinsavedqueue</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                                                                                         James Manderson</span>
+<span class="sd">UPnP Functional Test: ReorderTracksInSavedQueue</span>
+<span class="sd">Tests the newly created playlist UPnP functions: ReorderTracksInSavedQueue.</span>
+<span class="sd">The _reorder_tracklist() and _reorder_multiple_tracklist() compare the list from the original playist and the</span>
+<span class="sd">reordered playlist.  It assigns a boolean to which tracks match/not match.  Final verification is testing for </span>
+<span class="sd">correct boolean between chosen track and position.</span>
+
+<span class="sd">EX: </span>
+<span class="sd">Tracklist = [0,1,2,3,4,5,6,7,8,9,10,11]</span>
+<span class="sd">Move track 3 to position 0; Chosen track = 3, position = 0 </span>
+
+<span class="sd">[  3  ,   0  ,   1   ,  2  ,   4  ,  5  ,  6 ,   7 ,   8,   9   , 10,  11]</span>
+<span class="sd">[False, False, False, False, True, True, True, True, True, True, True, True]</span>
+
+<span class="sd">_reorder_copy_tracklist() verifies the copied track is in correct position by using a similar method and if </span>
+<span class="sd">the list sizes are not equal.</span>
+
+<span class="sd">Add this argument to run: --execfg playlist_config.json</span>
+
+<span class="sd">To update URI and Metadata info, monitor anacapa.trace with avt_impl=2</span>
+<span class="sd">and add container to queue on a controller.</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">sonos.environment</span> <span class="k">import</span> <span class="n">WorkflowExecutionConfigurationFactory</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.services.common</span> <span class="k">import</span> <span class="n">wait_until_true</span>
+<span class="kn">from</span> <span class="nn">sonos.exception</span> <span class="k">import</span> <span class="n">UPnPError</span>
+<span class="kn">import</span> <span class="nn">upnp.helpers</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">SimpleUpgradeTestFixture</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">random</span>
+
+<span class="c1"># Global variables</span>
+<span class="n">TITLE</span> <span class="o">=</span> <span class="s1">&#39;S O N O S&#39;</span>
+<span class="n">INVALID</span> <span class="o">=</span> <span class="mi">9999999</span>
+<span class="n">EMPTY</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Possible UPnP Errors associated with ReorderTracksInSavedQueue</span>
+<span class="sd">UPNP_ERROR_402_INVALID_ARGUMENTS</span>
+<span class="sd">UPNP_ERROR_801_INVALID_QUEUE_ID</span>
+<span class="sd">UPNP_ERROR_810_R_SAVED_Q_UPNPRESULT_INVALID_INSERTION_POSITION</span>
+<span class="sd">UPNP_ERROR_812_R_SAVED_Q_UPNPRESULT_INVALID_TRACK_NUM</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="n">UPNP_ERROR</span> <span class="o">=</span> <span class="p">[</span><span class="mi">402</span><span class="p">,</span> <span class="mi">801</span><span class="p">,</span> <span class="mi">810</span><span class="p">,</span> <span class="mi">812</span><span class="p">]</span>
+
+<span class="n">TEST_CONFIG_FILE</span> <span class="o">=</span> <span class="s1">&#39;playlist_config.json&#39;</span>
+
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue">[docs]</a><span class="k">class</span> <span class="nc">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">):</span>
+
+    <span class="n">TEST_TYPE</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;SONOS_PLAYLISTS&#39;</span><span class="p">]</span>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.setUpFixture"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">helpers</span> <span class="o">=</span> <span class="n">upnp</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Helpers</span><span class="p">(</span><span class="n">logger</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="p">)</span>
+
+        <span class="c1"># getting random playback device</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="p">[</span><span class="n">zp</span> <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span> <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_playback_device</span><span class="p">()]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+        <span class="n">zp_index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">[</span><span class="n">zp_index</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Player chosen: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">)</span>
+
+        <span class="c1"># grab appropriate ip address in config file to use with uri and metadata</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nas_ip</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">ip</span><span class="o">.</span><span class="n">nas</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">uri</span> <span class="o">=</span> \
+        <span class="s1">&#39;x-rincon-playlist:</span><span class="si">%s</span><span class="s1">#S://</span><span class="si">%s</span><span class="s1">/Playback/queue_tests/large_share&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">nas_ip</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span> <span class="o">=</span> \
+        <span class="s1">&#39;&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns:r=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;S://</span><span class="si">%s</span><span class="s1">/Playback/queue_tests/large_share&quot; parentID=&quot;S:&quot; restricted=&quot;true&quot;&gt;&lt;dc:title&gt;//</span><span class="si">%s</span><span class="s1">/Playback/queue_tests/large_share&lt;/dc:title&gt;&lt;upnp:class&gt;object.container&lt;/upnp:class&gt;&lt;desc id=&quot;cdudn&quot; nameSpace=&quot;urn:schemas-rinconnetworks-com:metadata-1-0/&quot;&gt;RINCON_AssociatedZPUDN&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;&#39;</span> <span class="o">%</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nas_ip</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">nas_ip</span><span class="p">)</span>
+
+        <span class="c1"># remove any existing bonded config</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">zones</span><span class="o">.</span><span class="n">cleanup_device_configurations</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">)</span>
+        <span class="c1"># add library share</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_setup_share</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.setUpTest"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># set an initial saved playlist</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Creating initial playlist&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_create_initial_queue</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s2">&quot;Could not create initial playlist&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_setup_share</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">share_credentials</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">execution_configuration</span><span class="o">.</span><span class="n">large_music_library</span><span class="o">.</span><span class="vm">__dict__</span>
+        <span class="k">for</span> <span class="n">share</span> <span class="ow">in</span> <span class="n">share_credentials</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">shares</span><span class="o">.</span><span class="n">add_test_share</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="p">,</span> <span class="o">*</span><span class="n">share_credentials</span><span class="p">[</span><span class="n">share</span><span class="p">])</span>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.tearDownTest"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_destroy_playlists</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.tearDownFixture"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.tearDownFixture">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Removing all playlists&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_destroy_playlists</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Removing all shares&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_shares</span><span class="p">()</span></div>
+
+    <span class="k">def</span> <span class="nf">_destroy_playlists</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">remove_all_sonos_playlists</span><span class="p">()</span>
+        <span class="n">wait_until_true</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">ContentDirectory</span><span class="o">.</span><span class="n">do_sonos_playlists_exist</span><span class="p">()</span> <span class="o">==</span> <span class="kc">False</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.invoke_CreateSavedQueue"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.invoke_CreateSavedQueue">[docs]</a>    <span class="k">def</span> <span class="nf">invoke_CreateSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Invoke the CreateSavedQueue UPnP method</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        title -- string, title of the new saved playlist</span>
+<span class="sd">        uri -- string, URI of content to add to device saved queue</span>
+<span class="sd">        metadata -- string, XML metadata for content to be added to device saved queue   </span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        dictionary with CreateSavedQueue response</span>
+<span class="sd">            keys:</span>
+<span class="sd">            NumTracksAdded -- number of tracks added</span>
+<span class="sd">            NewQueueLength -- new length of device saved queue</span>
+<span class="sd">            AssignedObjectID -- new object ID for saved queue</span>
+<span class="sd">            NewUpdateID -- new update ID for saved queue  </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">CreateSavedQueue</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">NumTracksAdded</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;NumTracksAdded&#39;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">NewQueueLength</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;NewQueueLength&#39;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span> <span class="o">=</span> <span class="n">res</span><span class="p">[</span><span class="s1">&#39;AssignedObjectID&#39;</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;NewUpdateID&#39;</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+    <span class="k">def</span> <span class="nf">_create_saved_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that creates a saved queue and verifies the expected return data matches the actual data</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        title -- string, title of the new saved playlist</span>
+<span class="sd">        uri -- string, URI of content to add to device saved queue</span>
+<span class="sd">        metadata -- string, XML metadata for content to be added to device saved queue   </span>
+<span class="sd">        expected_tracks -- int, expected number of tracks in saved queue</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        boolean </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">success</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">invoke_CreateSavedQueue</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">uri</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="c1"># get num of indexed tracks</span>
+        <span class="n">expected_tracks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_num_indexed_tracks</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_tracks</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NumTracksAdded</span><span class="p">,</span> <span class="s2">&quot;should return expected num tracks&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_tracks</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewQueueLength</span><span class="p">,</span> <span class="s2">&quot;should expected queue length&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="s2">&quot;should return appropriate updateID&quot;</span><span class="p">):</span>
+            <span class="n">success</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">success</span>
+
+    <span class="k">def</span> <span class="nf">_create_initial_queue</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that creates an initial playlist.  Sets the returned UpdateID from invoke_CreateSavedQueue()</span>
+<span class="sd">        to a variable that will be used to increment each time ReordertracksInSavedQueue is triggered.</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        boolean </span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">success</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_create_saved_queue</span><span class="p">(</span><span class="n">TITLE</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">uri</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">expected_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span>
+            <span class="n">success</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">success</span>
+
+    <span class="k">def</span> <span class="nf">_get_playlist_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">SQ</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that gets saved queue </span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        SQ -- int, saved queue number</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        number of tracks in playlist and an array of each track</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_create_initial_queue</span><span class="p">()</span>  <span class="c1"># created for comparing original and reordered</span>
+        <span class="n">playlist_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">settings</span><span class="o">.</span><span class="n">get_playlist_settings</span><span class="p">()</span>
+        <span class="n">playlist</span> <span class="o">=</span> <span class="n">playlist_data</span><span class="o">.</span><span class="n">SavedQueue</span><span class="p">[</span><span class="n">SQ</span><span class="p">]</span>  <span class="c1"># get first SonosPlaylist defined in repl setting</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">playlist</span><span class="o">.</span><span class="n">NumTracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">playlist</span> <span class="o">=</span> <span class="n">playlist</span><span class="o">.</span><span class="n">Track</span>
+
+    <span class="k">def</span> <span class="nf">_get_original_playlist_data</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that gets saved queue before the reorder</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">    </span>
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        number of tracks in playlist and an array of each track before the reorder</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_get_playlist_data</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">original_num_tracks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playlist</span>
+        <span class="c1"># print self.original_playlist[pos]</span>
+
+    <span class="k">def</span> <span class="nf">_get_reorder_playlist_data</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that gets saved queue after the reorder</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">    </span>
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+<span class="sd">        </span>
+<span class="sd">        Returns:</span>
+<span class="sd">        number of tracks in playlist and an array of each track after the reorder</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_get_playlist_data</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_tracks</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">playlist</span>
+        <span class="c1"># print self.reorder_playlist[pos]</span>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.invoke_ReorderTracksInSavedQueue"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.invoke_ReorderTracksInSavedQueue">[docs]</a>    <span class="k">def</span> <span class="nf">invoke_ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">object_id</span><span class="p">,</span> <span class="n">update_id</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">new_position_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Invoke the ReorderTracksInSavedQueue UPnP method</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        object_id -- string, ObjectID of the new saved queue</span>
+<span class="sd">        update_id -- int, UpdateID of the saved queue</span>
+<span class="sd">        track_list -- string, track index list</span>
+<span class="sd">        new_position_list -- string, new index position</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        dictionary with ReorderTracksInSavedQueue response</span>
+<span class="sd">            keys:</span>
+<span class="sd">            QueueLengthChange -- Change in queue length (can be a + or - num)</span>
+<span class="sd">            NewQueueLength -- new length of device saved queue</span>
+<span class="sd">            NewUpdateID -- new update ID for saved queue</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="n">object_id</span><span class="p">,</span> <span class="n">update_id</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">new_position_list</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ReorderQueueLengthChange</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;QueueLengthChange&#39;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ReorderNewQueueLength</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;NewQueueLength&#39;</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ReorderNewUpdateID</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">res</span><span class="p">[</span><span class="s1">&#39;NewUpdateID&#39;</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">res</span></div>
+
+    <span class="k">def</span> <span class="nf">_verify_reorder_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">expected_queue_change</span><span class="p">,</span> <span class="n">expected_new_queue</span><span class="p">,</span> <span class="n">expected_update_id</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that verifies QueueLength, NewQueueLength and NewUpdateID</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        expected_queue_change -- int, difference between original track list and reorder track list</span>
+<span class="sd">        expected_new_queue -- int, track list number after reordering saved queue</span>
+<span class="sd">        expected_update_id -- int, incremented update ID after reordering saved queue</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        boolean</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">success</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="n">expected_update_id</span> <span class="o">+=</span> <span class="mi">1</span>  <span class="c1"># updateID needs to increment after initial one created</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">expected_id</span> <span class="o">=</span> <span class="n">expected_update_id</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_queue_change</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ReorderQueueLengthChange</span><span class="p">,</span> <span class="s2">&quot;should return QueueLength&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_new_queue</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ReorderNewQueueLength</span><span class="p">,</span> <span class="s2">&quot;should return expected NewQueueLength&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">expected_update_id</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">ReorderNewUpdateID</span><span class="p">,</span> <span class="s2">&quot;should return expected NewUpdateID&quot;</span><span class="p">):</span>
+            <span class="n">success</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="k">return</span> <span class="n">success</span>
+
+    <span class="k">def</span> <span class="nf">_reorder_tracklist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">track</span><span class="p">,</span> <span class="n">position</span><span class="p">,</span> <span class="n">chosen_track</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that reorders a single tracklist.  Compares original saved queue playlist with reordered saved queue playlist and verifies if reorder</span>
+<span class="sd">        was successful.</span>
+<span class="sd">        Catches any UPnP errors associated with ReorderTracksInSavedQueue()</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        track -- int, index position of tracklist to reorder</span>
+<span class="sd">        position -- int, desired index position </span>
+<span class="sd">        chosen track -- int, same as track</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">compare</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;track:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">track</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;position:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">position</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_original_playlist_data</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">invoke_ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track</span><span class="p">,</span> <span class="n">position</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_reorder_playlist_data</span><span class="p">()</span>
+            <span class="n">queue_length_change</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_num_tracks</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_reorder_tracks</span><span class="p">(</span><span class="n">queue_length_change</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">expected_id</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">))</span> <span class="ow">and</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">)):</span>
+                <span class="c1"># self.logger.debug(self.original_playlist[i]), self.logger.debug(self.reorder_playlist[i])</span>
+                <span class="c1"># comparing track by track</span>
+                <span class="n">has_changed</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">compare</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">has_changed</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Outcome of the compare?: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">compare</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track</span><span class="p">]</span> <span class="ow">and</span> <span class="n">compare</span><span class="p">[</span><span class="n">position</span><span class="p">],</span> <span class="s2">&quot;Everything between the chosen track and the position shall be False&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span> <span class="ow">in</span> <span class="n">UPNP_ERROR</span><span class="p">,</span> <span class="s2">&quot;got UPnP Error: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_reorder_multiple_tracklist</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">track_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that reorders two tracklists.  Compares original saved queue playlist with reordered saved queue playlist and verifies if reorder</span>
+<span class="sd">        was successful.</span>
+<span class="sd">        Catches any UPnP errors associated with ReorderTracksInSavedQueue()</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        track_1 -- int, index position of primary tracklist to reorder</span>
+<span class="sd">        position_1 -- int, desired index position for primary tracklist</span>
+<span class="sd">        track_2 -- int, index position of secondary tracklist to reorder</span>
+<span class="sd">        position_2 -- int, desired index position for secondary tracklist</span>
+<span class="sd">        chosen track_1 -- int, same as track_1</span>
+<span class="sd">        chosen track_2 -- int, same as track_2</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">compare</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">multiple_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">,</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">track_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">)</span>
+        <span class="n">multiple_positions</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">,</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">position_1</span><span class="p">,</span> <span class="n">position_2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;tracks:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">multiple_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;positions:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">multiple_positions</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_original_playlist_data</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">invoke_ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">multiple_tracks</span><span class="p">,</span> <span class="n">multiple_positions</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_reorder_playlist_data</span><span class="p">()</span>
+            <span class="n">queue_length_change</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_num_tracks</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_reorder_tracks</span><span class="p">(</span><span class="n">queue_length_change</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">expected_id</span><span class="p">)</span>
+
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">))</span> <span class="ow">and</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">)):</span>
+                <span class="c1"># self.logger.debug(self.original_playlist[i]), self.logger.debug(self.reorder_playlist[i])</span>
+                <span class="c1"># comparing track by track</span>
+                <span class="n">has_changed</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+                <span class="n">compare</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">has_changed</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Outcome of the compare?: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">compare</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">position_1</span> <span class="o">==</span> <span class="n">EMPTY</span> <span class="ow">and</span> <span class="n">position_2</span> <span class="o">==</span> <span class="n">EMPTY</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;position 1 and position 2 are blank&quot;</span><span class="p">)</span>
+                <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_1</span><span class="p">],</span> <span class="s2">&quot;Everything past chosen track_1, including itself shall be False&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_2</span><span class="p">],</span> <span class="s2">&quot;Everything past chosen track_2, including itself shall be False&quot;</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">position_2</span> <span class="o">==</span> <span class="n">EMPTY</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;position 2 is blank&quot;</span><span class="p">)</span>
+                <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_1</span><span class="p">]</span> <span class="ow">and</span> <span class="n">compare</span><span class="p">[</span><span class="n">position_1</span><span class="p">],</span> <span class="s2">&quot;Everything between the chosen track and the position shall be False&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_2</span><span class="p">],</span> <span class="s2">&quot;Everything past chosen track_2, including itself shall be False&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;No positions are blank&quot;</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_1</span><span class="p">]</span> <span class="ow">and</span> <span class="n">compare</span><span class="p">[</span><span class="n">position_1</span><span class="p">],</span> <span class="s2">&quot;Everything between the chosen track_1 and the position shall be False&quot;</span><span class="p">)</span> <span class="ow">and</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="n">compare</span><span class="p">[</span><span class="n">chosen_track_2</span><span class="p">]</span> <span class="ow">and</span> <span class="n">compare</span><span class="p">[</span><span class="n">position_2</span><span class="p">],</span> <span class="s2">&quot;Everything between the chosen track_2 and the position shall be False&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span> <span class="ow">in</span> <span class="n">UPNP_ERROR</span><span class="p">,</span> <span class="s2">&quot;got UPnP Error: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_reorder_copy_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">track_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Private method that copies tracklist as part of a reorder.  Compares original saved queue playlist with reordered saved queue playlist and verifies if reorder</span>
+<span class="sd">        was successful.</span>
+<span class="sd">        Catches any UPnP errors associated with ReorderTracksInSavedQueue()</span>
+<span class="sd">        </span>
+<span class="sd">        Arguments:</span>
+<span class="sd">        track_1 -- int, index position of primary tracklist to reorder</span>
+<span class="sd">        position_1 -- int, desired index position for primary tracklist</span>
+<span class="sd">        track_2 -- int, index position of secondary tracklist to reorder</span>
+<span class="sd">        position_2 -- int, desired index position for secondary tracklist</span>
+<span class="sd">        chosen track_1 -- int, same as track_1</span>
+<span class="sd">        chosen track_2 -- int, same as track_2</span>
+
+<span class="sd">        Keyword Arguments:</span>
+<span class="sd">        None</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">        None</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">multiple_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">,</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">track_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">)</span>
+        <span class="n">multiple_positions</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">,</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">position_1</span><span class="p">,</span> <span class="n">position_2</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;tracks:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">multiple_tracks</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;positions:</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">multiple_positions</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_original_playlist_data</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">invoke_ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">multiple_tracks</span><span class="p">,</span> <span class="n">multiple_positions</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_get_reorder_playlist_data</span><span class="p">()</span>
+            <span class="n">queue_length_change</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_num_tracks</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_verify_reorder_tracks</span><span class="p">(</span><span class="n">queue_length_change</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">reorder_num_tracks</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">expected_id</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;reorder track playlist does not match original_playlist as expected&quot;</span><span class="p">)</span>
+                <span class="c1"># self.logger.debug(self.original_playlist[chosen_track_1]), self.logger.debug(self.reorder_playlist[position_1])</span>
+                <span class="c1"># self.logger.debug(self.original_playlist[chosen_track_2]), self.logger.debug(self.reorder_playlist[position_2])</span>
+                <span class="n">do_tracks_match</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">[</span><span class="n">chosen_track_1</span><span class="p">])</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">[</span><span class="n">position_1</span><span class="p">])</span> <span class="ow">and</span> \
+                            <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">original_playlist</span><span class="p">[</span><span class="n">chosen_track_2</span><span class="p">])</span> <span class="o">==</span> <span class="nb">str</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reorder_playlist</span><span class="p">[</span><span class="n">position_2</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Do tracks match?: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="n">do_tracks_match</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrFailCase</span><span class="p">(</span><span class="n">do_tracks_match</span><span class="p">,</span> <span class="s2">&quot;Track and position should match; Should return True&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyFalseOrFailCase</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span> <span class="ow">in</span> <span class="n">UPNP_ERROR</span><span class="p">,</span> <span class="s2">&quot;got UPnP Error: </span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_01_move_track"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_01_move_track">[docs]</a>    <span class="k">def</span> <span class="nf">test_01_move_track</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">position</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">chosen_track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_tracklist</span><span class="p">(</span><span class="n">track</span><span class="p">,</span> <span class="n">position</span><span class="p">,</span> <span class="n">chosen_track</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_02_move_multiple_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_02_move_multiple_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_02_move_multiple_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">4</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">track_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_03_move_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_03_move_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_03_move_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+        <span class="n">position</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">chosen_track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_tracklist</span><span class="p">(</span><span class="n">range_tracks</span><span class="p">,</span> <span class="n">position</span><span class="p">,</span> <span class="n">chosen_track</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_04_large_move_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_04_large_move_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_04_large_move_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">255</span><span class="p">,</span> <span class="mi">300</span><span class="p">],</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">position</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">chosen_track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_tracklist</span><span class="p">(</span><span class="n">range_tracks</span><span class="p">,</span> <span class="n">position</span><span class="p">,</span> <span class="n">chosen_track</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_05_move_multiple_large_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_05_move_multiple_large_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_05_move_multiple_large_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">255</span><span class="p">,</span> <span class="mi">260</span><span class="p">,</span> <span class="mi">265</span><span class="p">,</span> <span class="mi">520</span><span class="p">,</span> <span class="mi">525</span><span class="p">],</span> <span class="mi">6</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks_1</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">range_tracks_2</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">4</span><span class="p">])</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">range_tracks_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_06_move_multiple_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_06_move_multiple_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_06_move_multiple_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">7</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks_1</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">range_tracks_2</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">5</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">6</span><span class="p">])</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">range_tracks_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_07_move_track_and_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_07_move_track_and_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_07_move_track_and_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_08_remove_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_08_remove_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_08_remove_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">EMPTY</span>
+        <span class="n">track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">EMPTY</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_09_move_and_remove_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_09_move_and_remove_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_09_move_and_remove_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">track</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">EMPTY</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_10_copy_and_move_track"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_10_copy_and_move_track">[docs]</a>    <span class="k">def</span> <span class="nf">test_10_copy_and_move_track</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">track_2</span> <span class="o">=</span> <span class="n">track_1</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">track_1</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_copy_tracks</span><span class="p">(</span><span class="n">track_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_11_copy_and_move_range_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_11_copy_and_move_range_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_11_copy_and_move_range_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">7</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks_1</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+        <span class="n">range_tracks_2</span> <span class="o">=</span> <span class="n">range_tracks_1</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_copy_tracks</span><span class="p">(</span><span class="n">range_tracks_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">range_tracks_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_12_copy_and_move_large_range_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_12_copy_and_move_large_range_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_12_copy_and_move_large_range_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">255</span><span class="p">,</span> <span class="mi">260</span><span class="p">,</span> <span class="mi">265</span><span class="p">,</span> <span class="mi">600</span><span class="p">],</span> <span class="mi">5</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks_1</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">range_tracks_2</span> <span class="o">=</span> <span class="n">range_tracks_1</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_copy_tracks</span><span class="p">(</span><span class="n">range_tracks_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">range_tracks_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_13_copy_and_remove_track"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_13_copy_and_remove_track">[docs]</a>    <span class="k">def</span> <span class="nf">test_13_copy_and_remove_track</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">track_2</span> <span class="o">=</span> <span class="n">track_1</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">track_1</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">track_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">track_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_14_copy_and_remove_range_tracks"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_14_copy_and_remove_range_tracks">[docs]</a>    <span class="k">def</span> <span class="nf">test_14_copy_and_remove_range_tracks</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">sample</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="mi">11</span><span class="p">],</span> <span class="mi">7</span><span class="p">)</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">range_tracks_1</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%s</span><span class="s2">-</span><span class="si">%s</span><span class="s2">&quot;</span> <span class="o">%</span> <span class="p">(</span><span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">index</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+        <span class="n">range_tracks_2</span> <span class="o">=</span> <span class="n">range_tracks_1</span>
+        <span class="n">position_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">position_2</span> <span class="o">=</span> <span class="n">EMPTY</span>
+        <span class="n">chosen_track_1</span> <span class="o">=</span> <span class="n">index</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">chosen_track_2</span> <span class="o">=</span> <span class="n">chosen_track_1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reorder_multiple_tracklist</span><span class="p">(</span><span class="n">range_tracks_1</span><span class="p">,</span> <span class="n">position_1</span><span class="p">,</span> <span class="n">range_tracks_2</span><span class="p">,</span> <span class="n">position_2</span><span class="p">,</span> <span class="n">chosen_track_1</span><span class="p">,</span> <span class="n">chosen_track_2</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_15_invalid_instance_id"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_15_invalid_instance_id">[docs]</a>    <span class="k">def</span> <span class="nf">test_15_invalid_instance_id</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">INVALID</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">718</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 718 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_16_invalid_update_id"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_16_invalid_update_id">[docs]</a>    <span class="k">def</span> <span class="nf">test_16_invalid_update_id</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="n">INVALID</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">1028</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 1028 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_17_invalid_object_id"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_17_invalid_object_id">[docs]</a>    <span class="k">def</span> <span class="nf">test_17_invalid_object_id</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="n">INVALID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">801</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 801 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_18_position_list_in_descending_order"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_18_position_list_in_descending_order">[docs]</a>    <span class="k">def</span> <span class="nf">test_18_position_list_in_descending_order</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;0-2, 4-6&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;7,3&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">402</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 402 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_19_move_descending_range"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_19_move_descending_range">[docs]</a>    <span class="k">def</span> <span class="nf">test_19_move_descending_range</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;5-0&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;3&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">402</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 402 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_20_move_tracks_to_out_of_range_position"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_20_move_tracks_to_out_of_range_position">[docs]</a>    <span class="k">def</span> <span class="nf">test_20_move_tracks_to_out_of_range_position</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;0-9&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;9&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">810</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 810 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_22_invalid_track_position"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_22_invalid_track_position">[docs]</a>    <span class="k">def</span> <span class="nf">test_22_invalid_track_position</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="n">INVALID</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">812</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 812 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_22_invalid_tracklist"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_22_invalid_tracklist">[docs]</a>    <span class="k">def</span> <span class="nf">test_22_invalid_tracklist</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="n">INVALID</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">812</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 812 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_23_invalid_position"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_23_invalid_position">[docs]</a>    <span class="k">def</span> <span class="nf">test_23_invalid_position</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="n">INVALID</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">810</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 810 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_24_moving_tracks_to_same_position"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_24_moving_tracks_to_same_position">[docs]</a>    <span class="k">def</span> <span class="nf">test_24_moving_tracks_to_same_position</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;0-3,4&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;5,5&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">402</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 402 UPnP Error&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ReorderTracksInSavedQueue.test_25_hyphen_in_position"><a class="viewcode-back" href="../../../../upnp.functional.savedqueue.html#upnp.functional.savedqueue.reordertracksinsavedqueue.ReorderTracksInSavedQueue.test_25_hyphen_in_position">[docs]</a>    <span class="k">def</span> <span class="nf">test_25_hyphen_in_position</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">track_list</span> <span class="o">=</span> <span class="s1">&#39;0&#39;</span>
+        <span class="n">position_list</span> <span class="o">=</span> <span class="s1">&#39;1-4&#39;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">AVTransport</span><span class="o">.</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">AssignedObjectID</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">NewUpdateID</span><span class="p">,</span> <span class="n">track_list</span><span class="p">,</span> <span class="n">position_list</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">UPnPError</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">402</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp</span><span class="o">.</span><span class="n">last_upnp_error_code</span><span class="p">,</span> <span class="s2">&quot;Should be a 402 UPnP Error&quot;</span><span class="p">)</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">helpers</span> <span class="o">=</span> <span class="n">upnp</span><span class="o">.</span><span class="n">helpers</span><span class="o">.</span><span class="n">Helpers</span><span class="p">()</span>
+    <span class="k">if</span> <span class="s1">&#39;--execfg&#39;</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">:</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SimpleUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">fixtures</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ReorderTracksInSavedQueue</span><span class="p">)</span>
+    <span class="n">config</span> <span class="o">=</span> <span class="n">WorkflowExecutionConfigurationFactory</span><span class="o">.</span><span class="n">create_from_file</span><span class="p">(</span>
+        <span class="n">TEST_CONFIG_FILE</span><span class="p">,</span> <span class="n">use_automation_server_config</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="s1">&#39;ReorderTracksInSavedQueue&#39;</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">execution_environment</span> <span class="o">=</span> <span class="n">config</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">f</span><span class="p">()</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+
+
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

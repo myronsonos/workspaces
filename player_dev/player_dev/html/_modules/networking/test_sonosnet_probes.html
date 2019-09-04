@@ -1,0 +1,761 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>networking.test_sonosnet_probes &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+   
+  <link rel="stylesheet" href="../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for networking.test_sonosnet_probes</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">time</span> <span class="k">import</span> <span class="n">sleep</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="k">import</span> <span class="n">deque</span>
+<span class="kn">from</span> <span class="nn">decorators</span> <span class="k">import</span> <span class="n">retry</span>
+<span class="kn">from</span> <span class="nn">multiprocessing</span> <span class="k">import</span> <span class="n">Process</span>
+<span class="kn">from</span> <span class="nn">thread_processing</span> <span class="k">import</span> <span class="n">run_concurrent_processes</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.suite</span> <span class="k">import</span> <span class="n">WorkflowTestSuite</span>
+<span class="kn">from</span> <span class="nn">sonos.workflow.fixture</span> <span class="k">import</span> <span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">combinatorial</span>
+<span class="kn">from</span> <span class="nn">sonos.client.athconfiglib</span> <span class="k">import</span> <span class="n">Athconfig</span><span class="p">,</span> <span class="n">IoctlFailedError</span>
+<span class="kn">from</span> <span class="nn">common.networking.packet_capture</span> <span class="k">import</span> <span class="n">PacketCaptureMixin</span>
+<span class="kn">from</span> <span class="nn">sonos.simple_upgrade</span> <span class="k">import</span> <span class="n">ConditionalUpgradeTestFixture</span>
+<span class="kn">from</span> <span class="nn">wifi.channels</span> <span class="k">import</span> <span class="n">channel_frequency_to_number</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">INTERFACE_2GHZ</span><span class="p">,</span> <span class="n">INTERFACE_5GHZ</span>
+<span class="kn">from</span> <span class="nn">sonos.client.cli.brctl</span> <span class="k">import</span> <span class="n">Brctl</span>
+<span class="kn">from</span> <span class="nn">sonos.client.fullstatus_from_telnet</span> <span class="k">import</span> <span class="n">Fullstatus</span>
+<span class="kn">import</span> <span class="nn">re</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">pyshark</span>
+
+<span class="n">WIRELESS_CAP_ID</span> <span class="o">=</span> <span class="s1">&#39;mon0&#39;</span>
+<span class="n">WIRELESS_INT_ID</span> <span class="o">=</span> <span class="s1">&#39;wlan0&#39;</span>
+<span class="n">SNIFF_TIME</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="c1"># expected probes per seconds</span>
+<span class="n">EXPECTED_PROBES_PS_11N</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="c1"># each antenna sends 1 per 500 ms (alternating) and our legacy 11g devices have 2 antennas</span>
+<span class="c1"># https://confluence.sonos.com/display/PDSW/SonosNet+RSSI+monitoring+and+link+setup</span>
+<span class="n">EXPECTED_PROBES_PS_11G</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="c1"># To allow for dropped/missed packets in open air</span>
+<span class="n">PASS_RATE</span> <span class="o">=</span> <span class="mf">0.33</span>
+
+<span class="n">PASSING_MIN_PROBE_COUNT_11N</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">((</span><span class="n">SNIFF_TIME</span> <span class="o">*</span> <span class="n">EXPECTED_PROBES_PS_11N</span><span class="p">)</span> <span class="o">*</span> <span class="n">PASS_RATE</span><span class="p">))</span>
+<span class="n">PASSING_MAX_PROBE_COUNT_11N</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">SNIFF_TIME</span> <span class="o">*</span> <span class="n">EXPECTED_PROBES_PS_11N</span><span class="p">))</span> <span class="o">+</span> <span class="n">EXPECTED_PROBES_PS_11N</span>
+
+<span class="n">PASSING_MIN_PROBE_COUNT_11G</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">((</span><span class="n">SNIFF_TIME</span> <span class="o">*</span> <span class="n">EXPECTED_PROBES_PS_11G</span><span class="p">)</span> <span class="o">*</span> <span class="n">PASS_RATE</span><span class="p">))</span>
+<span class="n">PASSING_MAX_PROBE_COUNT_11G</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">SNIFF_TIME</span> <span class="o">*</span> <span class="n">EXPECTED_PROBES_PS_11G</span><span class="p">))</span> <span class="o">+</span> <span class="n">EXPECTED_PROBES_PS_11G</span>
+
+<span class="n">PROBE_REQ_FILTER</span> <span class="o">=</span> <span class="s1">&#39;wlan.fc.type_subtype == 0x4&#39;</span>
+
+<span class="n">SAT_DATA_IE</span> <span class="o">=</span> <span class="s1">&#39;32:00&#39;</span>
+
+
+<div class="viewcode-block" id="SonosnetProbesException"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbesException">[docs]</a><span class="k">class</span> <span class="nc">SonosnetProbesException</span><span class="p">(</span><span class="ne">Exception</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Base exception class for exceptions in this module</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">pass</span></div>
+
+
+<div class="viewcode-block" id="SonosnetProbes"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes">[docs]</a><span class="k">class</span> <span class="nc">SonosnetProbes</span><span class="p">(</span><span class="n">WorkflowTestFixture</span><span class="p">,</span> <span class="n">PacketCaptureMixin</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Test basic properties of sonosnet probe requests. More info here:</span>
+<span class="sd">    - confluence.sonos.com/display/PDSW/Wireless+Probes</span>
+<span class="sd">    - confluence.sonos.com/display/PDSW/SonosNet+RSSI+monitoring+and+link+setup</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+<div class="viewcode-block" id="SonosnetProbes.setUpFixture"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.setUpFixture">[docs]</a>    <span class="k">def</span> <span class="nf">setUpFixture</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that we have the correct mix of devices. Verify that we are</span>
+<span class="sd">        able to capture packets on on the wireless capture interface.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_unique_devices</span><span class="p">()]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">zp_l</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp_r</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">sats</span> <span class="k">for</span> <span class="n">sats</span> <span class="ow">in</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">generators</span><span class="o">.</span><span class="n">generate_testbed_ht_satellite_capable_devices</span><span class="p">()][</span><span class="mi">0</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">([</span><span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span> <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_n_capable</span><span class="p">()]),</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;Testbed contains at least one 11n device&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">([</span><span class="n">zc</span> <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span> <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">()]),</span> <span class="mi">1</span><span class="p">,</span>
+            <span class="s2">&quot;Testbed contains at-least one 11bg-only device&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">boot_seqs</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">zc</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="n">Athconfig</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">boot_seqs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">=</span> <span class="n">zc</span><span class="o">.</span><span class="n">bootseq</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">capture_all</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_probe_capture</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">INTERFACE_2GHZ</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="s1">&#39;initial_capture.pcap&#39;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterEqualOrStop</span><span class="p">(</span>
+            <span class="nb">sum</span><span class="p">(</span><span class="mi">1</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">capture_all</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;Verify that sniffing works&quot;</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">hhid</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">diag</span><span class="o">.</span><span class="n">get_hhid</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SonosnetProbes.setUpTest"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.setUpTest">[docs]</a>    <span class="k">def</span> <span class="nf">setUpTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Setting up test&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Cleaning up bonded zone (</span><span class="si">{}</span><span class="s2">)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="SonosnetProbes.tearDownTest"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.tearDownTest">[docs]</a>    <span class="k">def</span> <span class="nf">tearDownTest</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Tearing down test&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">zp</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">zp</span><span class="o">.</span><span class="n">is_bonded</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Cleaning up bonded zone (</span><span class="si">{}</span><span class="s2">)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zp</span><span class="p">))</span>
+                <span class="n">zp</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+
+        <span class="n">run_concurrent_processes</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">z</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">z</span><span class="p">]</span><span class="o">.</span><span class="n">clear_testpoints</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">),</span>
+            <span class="p">[</span><span class="n">z</span> <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">zcs</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">z</span><span class="o">.</span><span class="n">is_br100</span><span class="p">()])</span></div>
+
+    <span class="k">def</span> <span class="nf">_validate_packet_values</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">packet</span><span class="p">,</span> <span class="n">field_val_dict</span><span class="p">,</span> <span class="n">layer</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to validate the fields values found in a</span>
+<span class="sd">        particular layer of a packet</span>
+
+<span class="sd">        :param capture: pyshark packet</span>
+<span class="sd">        :type capture: :class:`pyshark.Packet`</span>
+<span class="sd">        :param field_val_dict: dictionary of pyshark packet field to</span>
+<span class="sd">            expected value mapping.</span>
+<span class="sd">            For example {&#39;ssid&#39;:&#39;Sonos_FbraA8FDSCsgcDLngd0mAzNFaF&#39;}</span>
+<span class="sd">        :type field_val_dict: :obj:`dict`</span>
+<span class="sd">        :param layer: pyshark packet layer name, ie. radiotap, wlan,</span>
+<span class="sd">            wlan_mgt, etc.</span>
+<span class="sd">        :type layer: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># The following IEs need to have their byte order reformatted</span>
+        <span class="n">little_endian_ies</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;sonos_ie_boot_seqnum&#39;</span><span class="p">,</span> <span class="s1">&#39;sonos_ie_htchan&#39;</span><span class="p">]</span>
+        <span class="n">packet_layer</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">packet</span><span class="p">,</span> <span class="n">layer</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">field</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">field_val_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">actual_val</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">packet_layer</span><span class="p">,</span> <span class="n">field</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">actual_val</span><span class="p">:</span>
+                <span class="k">if</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">little_endian_ies</span><span class="p">:</span>
+                    <span class="n">actual_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reformat_ie</span><span class="p">(</span><span class="n">actual_val</span><span class="p">)</span>
+                <span class="k">elif</span> <span class="s1">&#39;uuid&#39;</span> <span class="ow">in</span> <span class="n">field</span><span class="p">:</span>
+                    <span class="n">actual_val</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reformat_uuid</span><span class="p">(</span><span class="n">actual_val</span><span class="p">)</span>
+            <span class="n">verify_msg</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2"> is </span><span class="si">{}</span><span class="s2">found in </span><span class="si">{}</span><span class="s2"> layer </span><span class="si">{}</span><span class="s2"> in packet&quot;</span>
+                          <span class="s2">&quot; {{}}&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">field</span><span class="p">,</span> <span class="s2">&quot;not &quot;</span> <span class="k">if</span> <span class="ow">not</span> <span class="n">val</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span><span class="p">,</span>
+                                         <span class="n">layer</span><span class="p">,</span>
+                                         <span class="s2">&quot;with val of </span><span class="si">{}</span><span class="s2"> &quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">val</span><span class="p">)</span> <span class="k">if</span> <span class="n">val</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrStop</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">actual_val</span><span class="p">,</span>
+                                   <span class="n">verify_msg</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">packet</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">seq</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">_verify_basic_probe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">,</span> <span class="n">packet_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to verify some basic properties of probes</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        :param packet_list: list of pyshark packets</span>
+<span class="sd">        :type packet_list: :obj:`list` of :class:`pyshark.Packet`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">wire</span><span class="o">.</span><span class="n">is_enabled</span><span class="p">():</span>
+            <span class="n">routing_flags</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">routing_flags</span> <span class="o">=</span> <span class="s1">&#39;01&#39;</span>
+        <span class="n">probe_ie_val_dict</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;ssid&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                             <span class="s1">&#39;sonos_ie_bridge_addr&#39;</span><span class="p">:</span> <span class="n">zc</span><span class="o">.</span><span class="n">mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                             <span class="s1">&#39;sonos_ie_routing_flags&#39;</span><span class="p">:</span> <span class="n">routing_flags</span><span class="p">,</span>
+                             <span class="s1">&#39;sonos_ie_boot_seqnum&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">boot_seqs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">}</span>
+        <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_packet_values</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span>
+                                                     <span class="n">probe_ie_val_dict</span><span class="p">,</span>
+                                                     <span class="s2">&quot;wlan_mgt&quot;</span><span class="p">),</span>
+            <span class="n">packet_list</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_verify_sequence_and_antenna_ie</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">,</span> <span class="n">packet_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify seq num and ant of each packet. The seq nums should be incrementing</span>
+<span class="sd">        and the ant should alternate between 0 and 1 on 11g devices. This test</span>
+<span class="sd">        assumes that there are 11g devices in the HH. As a result, devices</span>
+<span class="sd">        send each packet twice, with same sequence number.</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        :param packet_list: list of pyshark packets (filtered for probes and DUT</span>
+<span class="sd">                            source address)</span>
+<span class="sd">        :type packet_list: :obj:`list` of :class:`pyshark.Packet`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">first_packet</span> <span class="o">=</span> <span class="n">packet_list</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">ie</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">first_packet</span><span class="p">,</span> <span class="s1">&#39;wlan_mgt&#39;</span><span class="p">),</span>
+                     <span class="s1">&#39;sonos_ie_seq_and_ant&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+        <span class="n">last_seq_num</span><span class="p">,</span> <span class="n">last_ant</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">ie</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Starting seq num: </span><span class="si">{}</span><span class="s2"> Starting ant: </span><span class="si">{}</span><span class="s2">&quot;</span>
+                          <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_seq_num</span><span class="p">,</span> <span class="n">last_ant</span><span class="p">))</span>
+        <span class="n">same_seq_num_count</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">wrap_count</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">packet</span> <span class="ow">in</span> <span class="n">packet_list</span><span class="p">[</span><span class="mi">1</span><span class="p">:]:</span>
+            <span class="n">ie</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">packet</span><span class="p">,</span> <span class="s1">&#39;wlan_mgt&#39;</span><span class="p">),</span> <span class="s1">&#39;sonos_ie_seq_and_ant&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+            <span class="n">seq_num</span><span class="p">,</span> <span class="n">ant</span> <span class="o">=</span> <span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">ie</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">)]</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;IE: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ie</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Last_seq_num: </span><span class="si">{}</span><span class="s2"> seq_num: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">last_seq_num</span><span class="p">,</span>
+                                                                    <span class="n">seq_num</span><span class="p">))</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            The sequence number is a uint8. As such, the sequence number will</span>
+<span class="sd">            wrap after 255. In this case, it is possible that the current</span>
+<span class="sd">            sequence number is less than the last. Given the length of the sniff</span>
+<span class="sd">            time, this should, also, only happen once.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="n">diff</span> <span class="o">=</span> <span class="n">seq_num</span> <span class="o">-</span> <span class="n">last_seq_num</span>
+            <span class="k">if</span> <span class="n">diff</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">diff</span> <span class="o">=</span> <span class="n">seq_num</span>
+                <span class="n">same_seq_num_count</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="n">wrap_count</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">                A failure here would indicate that the sequence numbers are not</span>
+<span class="sd">                increasing</span>
+<span class="sd">                &quot;&quot;&quot;</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span><span class="n">wrap_count</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;The sequence &quot;</span>
+                                               <span class="s2">&quot;number should wrap no more &quot;</span>
+                                               <span class="s2">&quot;than once&quot;</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">diff</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">same_seq_num_count</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessOrFailCase</span><span class="p">(</span><span class="n">same_seq_num_count</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;A packet with&quot;</span>
+                                          <span class="s2">&quot; the same sequence number should be&quot;</span>
+                                          <span class="s2">&quot; seen no more than twice&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">same_seq_num_count</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">same_seq_num_count</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="ow">not</span> <span class="n">last_ant</span><span class="p">),</span> <span class="n">ant</span><span class="p">,</span> <span class="s2">&quot;If we&#39;ve&quot;</span>
+                                               <span class="s2">&quot; seen a packet with the seq num&quot;</span>
+                                               <span class="s2">&quot; twice, the ant should have switched&quot;</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span><span class="n">ant</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;The current antenna&quot;</span>
+                                                   <span class="s2">&quot; should be either 0 or 1&quot;</span><span class="p">)</span>
+                <span class="n">last_ant</span> <span class="o">=</span> <span class="n">ant</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">ant</span><span class="p">,</span> <span class="s2">&quot;The antenna should be 0&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyLessEqualOrFailCase</span><span class="p">(</span><span class="n">diff</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="s2">&quot;The difference in &quot;</span>
+                                           <span class="s2">&quot;sequence numbers should be small&quot;</span><span class="p">)</span>
+            <span class="n">last_seq_num</span> <span class="o">=</span> <span class="n">seq_num</span>
+
+    <span class="k">def</span> <span class="nf">_reformat_ie</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Reformats the value given by sonos_ie_boot_seqnum. When taken from</span>
+<span class="sd">        pyshark, this value is a string of the form xx:xx:xx:xx, which represents</span>
+<span class="sd">        a little endian byte string. This method removes the colons and</span>
+<span class="sd">        converts the string to an int</span>
+
+<span class="sd">        :param value: The value received from wlan_mgt.sonos_ie_boot_seqnum</span>
+<span class="sd">        :type value: :obj:`str`</span>
+<span class="sd">        :return: The value converted to an int</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Strip colon from value</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+        <span class="c1"># Change endianness and convert to int</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">reversed</span><span class="p">([</span><span class="n">value</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span> <span class="o">+</span> <span class="mi">2</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="p">),</span> <span class="mi">2</span><span class="p">)]))</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="mi">16</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_reformat_uuid</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Wireshark/tshark returns the uuid as string of 24 hex digits separated</span>
+<span class="sd">        by a colon. This function strips the colons and converts the resulting</span>
+<span class="sd">        string from hex digits to their ASCII equivelent.</span>
+
+<span class="sd">        :param value: The value received from wlan_mgt.sonos_ie_uuid</span>
+<span class="sd">        :type value: :obj:`str`</span>
+<span class="sd">        :return: The UUID</span>
+<span class="sd">        :rtype: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">uuid</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+        <span class="n">value</span> <span class="o">=</span> <span class="n">value</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s1">&#39;:&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="p">),</span> <span class="mi">2</span><span class="p">):</span>
+            <span class="n">uuid</span> <span class="o">+=</span> <span class="nb">str</span><span class="p">(</span><span class="n">unichr</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">value</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span> <span class="o">+</span> <span class="mi">2</span><span class="p">],</span> <span class="mi">16</span><span class="p">)))</span>
+        <span class="k">return</span> <span class="n">uuid</span>
+
+<div class="viewcode-block" id="SonosnetProbes.start_scan_and_count_probes"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.start_scan_and_count_probes">[docs]</a>    <span class="nd">@retry</span><span class="p">(</span><span class="n">attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">expected_exception</span><span class="o">=</span><span class="n">SonosnetProbesException</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">start_scan_and_count_probes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">chan</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Helper function to trigger scan and capture resulting probes</span>
+<span class="sd">        on a specific channel</span>
+
+<span class="sd">        :param chan: channel to sniff on</span>
+<span class="sd">        :type chan: :obj:`int`</span>
+<span class="sd">        :param zc: sonos zone that will be scanning</span>
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :rtype: :obj:`int`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">SNIFF_SEC</span> <span class="o">=</span> <span class="mi">3</span>
+        <span class="n">SNIFFER_PREP_TIME_SEC</span> <span class="o">=</span> <span class="mf">1.2</span>  <span class="c1"># ensure we&#39;re monitoring before scanstart</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_wireless_channel</span><span class="p">(</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span> <span class="n">chan</span><span class="p">)</span>
+
+        <span class="n">output_file</span> <span class="o">=</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">_</span><span class="si">{}</span><span class="s1">.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">,</span> <span class="n">chan</span><span class="p">)</span>
+        <span class="n">bpf_filter</span> <span class="o">=</span> <span class="s1">&#39;wlan addr2 </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_mac_address</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">))</span>
+
+        <span class="k">def</span> <span class="nf">capture_func</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+            <span class="c1"># Remove existing pcap file to prevent PCAP corruption issues</span>
+            <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;output_file&#39;</span><span class="p">]):</span>
+                <span class="n">os</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">kwargs</span><span class="p">[</span><span class="s1">&#39;output_file&#39;</span><span class="p">])</span>
+            <span class="n">timeout</span> <span class="o">=</span> <span class="n">kwargs</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;timeout&#39;</span><span class="p">)</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="n">pyshark</span><span class="o">.</span><span class="n">LiveCapture</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">set_debug</span><span class="p">()</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">sniff</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">)</span>
+            <span class="n">sleep</span><span class="p">(</span><span class="mf">0.250</span><span class="p">)</span>  <span class="c1"># yield in order to prevent broken pipe errors</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+            <span class="k">del</span> <span class="n">capture</span>
+
+        <span class="n">background_capture</span> <span class="o">=</span> <span class="n">Process</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="n">capture_func</span><span class="p">,</span>
+                                     <span class="n">kwargs</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;interface&#39;</span><span class="p">:</span> <span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                             <span class="s1">&#39;timeout&#39;</span><span class="p">:</span> <span class="n">SNIFF_SEC</span><span class="p">,</span>
+                                             <span class="s1">&#39;output_file&#39;</span><span class="p">:</span> <span class="n">output_file</span><span class="p">,</span>
+                                             <span class="s1">&#39;bpf_filter&#39;</span><span class="p">:</span> <span class="n">bpf_filter</span><span class="p">})</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture for </span><span class="si">{}</span><span class="s1">s on chan </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">SNIFF_SEC</span><span class="p">,</span> <span class="n">chan</span><span class="p">))</span>
+        <span class="n">background_capture</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="n">SNIFFER_PREP_TIME_SEC</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zc</span><span class="p">]</span><span class="o">.</span><span class="n">scanstart</span><span class="p">(</span><span class="n">INTERFACE_2GHZ</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">background_capture</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture completed.&#39;</span><span class="p">)</span>
+
+        <span class="n">display_filter</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">            {} and</span>
+<span class="sd">            frame.time_relative &lt; {} and</span>
+<span class="sd">            wlan.da == ff:ff:ff:ff:ff:ff and</span>
+<span class="sd">            wlan_mgt.ds.current_channel == {} and</span>
+<span class="sd">            radiotap.datarate == 1 and</span>
+<span class="sd">            wlan.fc.retry == 0 and</span>
+<span class="sd">            wlan.fcs.status == 1 and</span>
+<span class="sd">            wlan_mgt.ssid == &quot;&quot;</span>
+<span class="sd">            &#39;&#39;&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">PROBE_REQ_FILTER</span><span class="p">,</span> <span class="n">SNIFF_SEC</span><span class="p">,</span> <span class="n">chan</span><span class="p">))</span>
+
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">cap</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">post_process_capture</span><span class="p">(</span><span class="n">input_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">,</span>
+                                            <span class="n">display_filter</span><span class="o">=</span><span class="n">display_filter</span><span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">SonosnetProbesException</span><span class="p">(</span><span class="s2">&quot;PCAP file error!&quot;</span><span class="p">)</span>
+
+        <span class="n">n_probes</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">cap</span><span class="p">)</span>
+        <span class="n">cap</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">n_probes</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">n_probes</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">SonosnetProbesException</span><span class="p">(</span>
+                <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> failed to capture probes on channel </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">chan</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="SonosnetProbes.run_basic_probe_capture"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.run_basic_probe_capture">[docs]</a>    <span class="k">def</span> <span class="nf">run_basic_probe_capture</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">interface</span><span class="p">,</span> <span class="n">output_file</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Performs a wireless packet capture and filters the results to return</span>
+<span class="sd">        probes only.</span>
+
+<span class="sd">        :param zp: sonos zone</span>
+<span class="sd">        :type zp: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param interface: The zp&#39;s wifi interface (Used to determine channel)</span>
+<span class="sd">        :type interface: :obj:`str`</span>
+<span class="sd">        :return: the post processed packets</span>
+<span class="sd">        :rtype: :class:`pyshark.FileCapture`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">channel</span> <span class="o">=</span> <span class="n">channel_frequency_to_number</span><span class="p">(</span><span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_wireless_channel</span><span class="p">(</span><span class="n">interface</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Capture probes to </span><span class="si">{}</span><span class="s2"> for </span><span class="si">{}</span><span class="s2"> secs&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+            <span class="n">output_file</span><span class="p">,</span> <span class="n">SNIFF_TIME</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">run_wireless_monitor_capture</span><span class="p">(</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                          <span class="n">channel</span><span class="p">,</span>
+                                          <span class="n">timeout</span><span class="o">=</span><span class="n">SNIFF_TIME</span><span class="p">,</span>
+                                          <span class="n">output_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s1">&#39;Capture completed.&#39;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">post_process_capture</span><span class="p">(</span><span class="n">interface</span><span class="o">=</span><span class="n">WIRELESS_CAP_ID</span><span class="p">,</span>
+                                         <span class="n">display_filter</span><span class="o">=</span><span class="n">PROBE_REQ_FILTER</span><span class="p">,</span>
+                                         <span class="n">input_file</span><span class="o">=</span><span class="n">output_file</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SonosnetProbes.test_vendor_ies_for_ht"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.test_vendor_ies_for_ht">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s1">&#39;generate_testbed_ht_master_satellite_capable_devices&#39;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_vendor_ies_for_ht</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ht_master</span><span class="p">,</span> <span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test to verify probes sent from HT masters and satellites the correct</span>
+<span class="sd">        vendor specific IEs. The test configures 5.0 system, sniffs for probes,</span>
+<span class="sd">        and verifies the IEs contain the correct values.</span>
+
+<span class="sd">        :param ht_master: The master device for the HT configuration</span>
+<span class="sd">        :type ht_master: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zp_l: The left satellite for the HT configuration</span>
+<span class="sd">        :type zp_l: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zp_r: The right satellite for the HT configuration</span>
+<span class="sd">        :type zp_r: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="n">zp_l</span><span class="p">,</span> <span class="n">zp_r</span><span class="p">)</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;/wifi/athconfig scanenable ath1 0&#39;</span><span class="p">)</span>
+        <span class="n">capture_2ghz</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_probe_capture</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">INTERFACE_2GHZ</span><span class="p">,</span>
+            <span class="n">output_file</span><span class="o">=</span><span class="s1">&#39;test_vendor_ies_for_</span><span class="si">{}</span><span class="s1">_2ghz.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">ht_master</span><span class="o">.</span><span class="n">serialNumber</span><span class="p">))</span>
+        <span class="n">master_mac_2ghz</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="n">master_packets_2ghz</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span> <span class="o">==</span> <span class="n">master_mac_2ghz</span><span class="p">,</span>
+                                     <span class="n">capture_2ghz</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">master_packets_2ghz</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+            <span class="s2">&quot;The test should have captured packets from the master on 2ghz&quot;</span><span class="p">)</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        When surrounds are wired connect:amp or hideout, ath0 will be disabled</span>
+<span class="sd">        on the surround SAT. SWPBL-23315 and SWPBL-96426.</span>
+<span class="sd">        Therefore, HT master will not have an HT channel on its ath1.</span>
+<span class="sd">        So we will skip validating probes of ht master on its ath1 and</span>
+<span class="sd">        probes of SATs on their ath0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">zp_l</span><span class="o">.</span><span class="n">is_zp120</span><span class="p">()</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">zp_l</span><span class="o">.</span><span class="n">is_s16</span><span class="p">():</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_probe_capture</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span> <span class="n">INTERFACE_5GHZ</span><span class="p">,</span>
+                <span class="n">output_file</span><span class="o">=</span><span class="s1">&#39;test_vendor_ies_for_</span><span class="si">{}</span><span class="s1">_5ghz.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span>
+                <span class="n">ht_master</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+
+            <span class="n">channel</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_wireless_channel</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+            <span class="n">master_mac</span> <span class="o">=</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">mac_address_5ghz</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Master: </span><span class="si">{}</span><span class="s2"> 5Ghz MAC: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">ht_master</span><span class="p">,</span>
+                                                           <span class="n">master_mac</span><span class="p">))</span>
+            <span class="n">sat_mac</span> <span class="o">=</span> <span class="n">zp_l</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="n">master_packets</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span> <span class="o">==</span> <span class="n">master_mac</span><span class="p">,</span>
+                                    <span class="n">capture</span><span class="p">)</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">master_packets</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                <span class="s2">&quot;The test should have captured packets from the master&quot;</span><span class="p">)</span>
+
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            Since the devices are all wired, they should all advertise an empty</span>
+<span class="sd">            string for the routing flags.</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="n">routing_flags</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span>
+            <span class="n">master_ie_val_dict</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s1">&#39;ssid&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_bridge_addr&#39;</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                <span class="s1">&#39;sonos_ie_routing_flags&#39;</span><span class="p">:</span> <span class="n">routing_flags</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_uuid&#39;</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_sat_data&#39;</span><span class="p">:</span> <span class="n">SAT_DATA_IE</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_htchan&#39;</span><span class="p">:</span> <span class="n">channel</span><span class="p">}</span>
+            <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_packet_values</span><span class="p">(</span>
+                    <span class="n">pkt</span><span class="p">,</span> <span class="n">master_ie_val_dict</span><span class="p">,</span> <span class="s2">&quot;wlan_mgt&quot;</span><span class="p">),</span>
+                <span class="n">master_packets</span><span class="p">)</span>
+            <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">            The htmac IE is included in probes sent on the 2GHz interface,</span>
+<span class="sd">            if the ht master is bonded with satellites. This allows satellites that</span>
+<span class="sd">            are rebooted, or fall off of 5GHz, to find the master and move to the</span>
+<span class="sd">            correct channel</span>
+<span class="sd">            &quot;&quot;&quot;</span>
+            <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_packet_values</span><span class="p">(</span>
+                    <span class="n">pkt</span><span class="p">,</span> <span class="p">{</span><span class="s1">&#39;sonos_ie_htmac&#39;</span><span class="p">:</span> <span class="n">master_mac</span><span class="p">},</span> <span class="s2">&quot;wlan_mgt&quot;</span><span class="p">),</span>
+                <span class="n">master_packets_2ghz</span><span class="p">)</span>
+            <span class="n">sat_packets</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span> <span class="o">==</span> <span class="n">sat_mac</span><span class="p">,</span> <span class="n">capture</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span>
+                <span class="nb">len</span><span class="p">(</span><span class="n">sat_packets</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span>
+                <span class="s2">&quot;The test should have captured packets from the satellite&quot;</span><span class="p">)</span>
+            <span class="n">sat_ie_val_dict</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s1">&#39;ssid&#39;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">hhid</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_bridge_addr&#39;</span><span class="p">:</span> <span class="n">zp_l</span><span class="o">.</span><span class="n">mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                <span class="s1">&#39;sonos_ie_routing_flags&#39;</span><span class="p">:</span> <span class="n">routing_flags</span><span class="p">,</span>
+                <span class="s1">&#39;sonos_ie_primary_uuid&#39;</span><span class="p">:</span> <span class="n">ht_master</span><span class="o">.</span><span class="n">raw_udn</span><span class="p">}</span>
+            <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_packet_values</span><span class="p">(</span>
+                    <span class="n">pkt</span><span class="p">,</span> <span class="n">sat_ie_val_dict</span><span class="p">,</span> <span class="s2">&quot;wlan_mgt&quot;</span><span class="p">),</span>
+                <span class="n">sat_packets</span><span class="p">)</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">cleanup_bonded_configuration</span><span class="p">()</span>
+        <span class="n">ht_master</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;/wifi/athconfig scanenable ath1 1&#39;</span><span class="p">)</span>
+        <span class="n">capture_2ghz</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+        <span class="n">capture_2ghz</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+
+<div class="viewcode-block" id="SonosnetProbes.test_probe_requests"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.test_probe_requests">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zcs&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_probe_requests</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test basic properties of sonosnet probe requests</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">packet_list</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span> <span class="o">==</span> <span class="n">zc</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">(),</span>
+                             <span class="bp">self</span><span class="o">.</span><span class="n">capture_all</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">verifyGreaterOrStop</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">packet_list</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Stop the test if &quot;</span>
+                                 <span class="s2">&quot;the test found no packets from the DUT&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_basic_probe</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">packet_list</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_verify_sequence_and_antenna_ie</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">packet_list</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_bg_only</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyInRangeOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">packet_list</span><span class="p">),</span>
+                                             <span class="n">PASSING_MIN_PROBE_COUNT_11G</span><span class="p">,</span>
+                                             <span class="n">PASSING_MAX_PROBE_COUNT_11G</span><span class="p">,</span>
+                                              <span class="s2">&quot;Verify number of 11g probes sent.&quot;</span><span class="p">)</span>
+            <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_packet_values</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span>
+                                                         <span class="p">{</span><span class="s1">&#39;datarate&#39;</span><span class="p">:</span><span class="s2">&quot;24&quot;</span><span class="p">},</span>
+                                                         <span class="s2">&quot;radiotap&quot;</span><span class="p">),</span>
+                <span class="n">packet_list</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">probes_11n</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">radiotap</span><span class="o">.</span><span class="n">datarate</span> <span class="o">==</span> <span class="s2">&quot;26&quot;</span><span class="p">,</span>
+                                <span class="n">packet_list</span><span class="p">)</span>
+            <span class="n">probes_11g</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">radiotap</span><span class="o">.</span><span class="n">datarate</span> <span class="o">==</span> <span class="s2">&quot;24&quot;</span><span class="p">,</span>
+                                <span class="n">packet_list</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyInRangeOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">probes_11n</span><span class="p">),</span>
+                                             <span class="n">PASSING_MIN_PROBE_COUNT_11N</span><span class="p">,</span>
+                                             <span class="n">PASSING_MAX_PROBE_COUNT_11N</span><span class="p">,</span>
+                                              <span class="s2">&quot;Verify number of 11n probes sent.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyInRangeOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">probes_11g</span><span class="p">),</span>
+                                              <span class="n">PASSING_MIN_PROBE_COUNT_11N</span><span class="p">,</span>
+                                             <span class="n">PASSING_MAX_PROBE_COUNT_11N</span><span class="p">,</span>
+                                              <span class="s2">&quot;Verify number of 11g probes sent.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">packet_list</span><span class="p">),</span>
+                                       <span class="nb">len</span><span class="p">(</span><span class="n">probes_11n</span><span class="p">)</span> <span class="o">+</span> <span class="nb">len</span><span class="p">(</span><span class="n">probes_11g</span><span class="p">),</span>
+                                       <span class="s2">&quot;Verify all probes are sent at &quot;</span>
+                                       <span class="s2">&quot;either 24 or 26 rates only.&quot;</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_validate_infra_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">packet</span><span class="p">,</span> <span class="n">ant0</span><span class="p">,</span> <span class="n">ant1</span><span class="p">,</span> <span class="n">neighbor</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Validates that the packet contains the infra data IE and that the</span>
+<span class="sd">        RSSI value for the given neighbor is within the range of values listed</span>
+<span class="sd">        in /proc/ath_rincon/status for the interface under test.</span>
+
+<span class="sd">        :param packet: The packet to verify</span>
+<span class="sd">        :type packet: :class:`pyshark.Packet`</span>
+<span class="sd">        :param high_rssi: The top end of the RSSI range for the neighbor</span>
+<span class="sd">        :type high_rssi: :obj:`int`</span>
+<span class="sd">        :param low_rssi: The bottom end or the RSSI range for the neighbor</span>
+<span class="sd">        :type low_rssi: :obj:`int`</span>
+<span class="sd">        :param neighbor: The mac address of the neighbor in question</span>
+<span class="sd">        :type neighbor: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">actual_val</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">packet</span><span class="p">,</span> <span class="s2">&quot;wlan_mgt&quot;</span><span class="p">),</span> <span class="s1">&#39;sonos_ie_infra_data&#39;</span><span class="p">,</span> <span class="s1">&#39;&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">actual_val</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s1">&#39;Failed to find infra data in probe&#39;</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">neighbor</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="o">+</span> <span class="s1">&#39;:(?P&lt;ant0&gt;[0-9 | a-f]</span><span class="si">{2}</span><span class="s1">):(?P&lt;ant1&gt;[0-9 | a-f]</span><span class="si">{2}</span><span class="s1">).*&#39;</span><span class="p">,</span>
+                           <span class="n">actual_val</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">result</span><span class="p">:</span>
+            <span class="n">actual_ant0_val</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="s1">&#39;ant0&#39;</span><span class="p">),</span> <span class="mi">16</span><span class="p">)</span>
+            <span class="n">actual_ant1_val</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="s1">&#39;ant1&#39;</span><span class="p">),</span> <span class="mi">16</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">ant0</span><span class="p">,</span> <span class="n">actual_ant0_val</span><span class="p">,</span> <span class="s1">&#39;ant0 RSSI from probe&#39;</span>
+                                       <span class="s1">&#39; should match RSSI value found in&#39;</span>
+                                       <span class="s1">&#39; /proc/ath_rincon_&lt;netif&gt;/status for&#39;</span>
+                                       <span class="s1">&#39; given neighbor (</span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">neighbor</span><span class="p">))</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyEqualOrFailCase</span><span class="p">(</span><span class="n">ant1</span><span class="p">,</span> <span class="n">actual_ant1_val</span><span class="p">,</span> <span class="s1">&#39;ant1 RSSI from probe&#39;</span>
+                                       <span class="s1">&#39; should match RSSI value found in&#39;</span>
+                                       <span class="s1">&#39; /proc/ath_rincon_&lt;netif&gt;/status for&#39;</span>
+                                       <span class="s1">&#39; given neighbor (</span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">neighbor</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fail</span><span class="p">(</span><span class="s2">&quot;Failed to get RSSI for </span><span class="si">{}</span><span class="s2"> (IE: </span><span class="si">{}</span><span class="s2">)&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">neighbor</span><span class="p">,</span>
+                                                                  <span class="n">actual_val</span><span class="p">))</span>
+
+<div class="viewcode-block" id="SonosnetProbes.set_neighbor_rssi"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.set_neighbor_rssi">[docs]</a>    <span class="k">def</span> <span class="nf">set_neighbor_rssi</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zp</span><span class="p">,</span> <span class="n">netif</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Uses athconfig test points to set the RSSI value for each peer link of</span>
+<span class="sd">        the DUT</span>
+
+<span class="sd">        :param zp: The DUT</span>
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param netif: The interface on which to set the test point</span>
+<span class="sd">        :type netif: :obj:`str`</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">athconfigs</span><span class="p">[</span><span class="n">zp</span><span class="p">]</span><span class="o">.</span><span class="n">settestpoint</span><span class="p">(</span><span class="n">netif</span><span class="p">,</span> <span class="s1">&#39;fixedrssi&#39;</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+        <span class="k">except</span> <span class="n">IoctlFailedError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+            <span class="n">zp</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">get_dmesg</span><span class="p">()</span>
+            <span class="k">raise</span> <span class="n">e</span></div>
+
+<div class="viewcode-block" id="SonosnetProbes.test_infra_data_ie"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.test_infra_data_ie">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zcs&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_infra_data_ie</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test infra data IE</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_br100</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skip</span><span class="p">(</span><span class="s1">&#39;Skipping BRIDGE due to test points being unsupported&#39;</span><span class="p">)</span>
+        <span class="n">interfaces</span> <span class="o">=</span> <span class="p">[</span><span class="n">INTERFACE_2GHZ</span><span class="p">]</span>
+        <span class="n">captures</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">fullstats</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">brctl</span> <span class="o">=</span> <span class="n">Brctl</span><span class="p">(</span><span class="n">zc</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_ht_master_capable</span><span class="p">():</span>
+            <span class="n">zc</span><span class="o">.</span><span class="n">DeviceProperties</span><span class="o">.</span><span class="n">create_50_config</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">zp_l</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">zp_r</span><span class="p">)</span>
+            <span class="n">interfaces</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">INTERFACE_5GHZ</span><span class="p">)</span>
+            <span class="n">zc</span><span class="o">.</span><span class="n">cli</span><span class="o">.</span><span class="n">command</span><span class="p">(</span><span class="s1">&#39;/wifi/athconfig scanenable ath1 0&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_neighbor_rssi</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">INTERFACE_2GHZ</span><span class="p">)</span>
+        <span class="c1"># Wait for stale RSSI values to be aged out of fullstatus</span>
+        <span class="n">sleep</span><span class="p">(</span><span class="mi">33</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="n">interfaces</span><span class="p">:</span>
+            <span class="n">capture</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_basic_probe_capture</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">interface</span><span class="p">,</span>
+                <span class="n">output_file</span><span class="o">=</span><span class="s1">&#39;test_infra_data_ie_</span><span class="si">{}</span><span class="s1">.pcap&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="o">.</span><span class="n">modelNumber</span><span class="p">))</span>
+
+            <span class="n">fullstats</span><span class="p">[</span><span class="n">interface</span><span class="p">]</span> <span class="o">=</span> <span class="n">Fullstatus</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">interface</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">interface</span> <span class="o">==</span> <span class="n">INTERFACE_2GHZ</span><span class="p">:</span>
+                <span class="n">zc_mac</span> <span class="o">=</span> <span class="n">zc</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">zc_mac</span> <span class="o">=</span> <span class="n">zc</span><span class="o">.</span><span class="n">mac_address_5ghz</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+            <span class="n">captures</span><span class="p">[</span><span class="n">interface</span><span class="p">]</span> <span class="o">=</span> <span class="nb">filter</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="n">pkt</span><span class="o">.</span><span class="n">wlan</span><span class="o">.</span><span class="n">sa</span> <span class="o">==</span> <span class="n">zc_mac</span><span class="p">,</span>
+                                         <span class="n">capture</span><span class="p">)</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+            <span class="n">capture</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+        <span class="c1"># Get neighbor/showports</span>
+        <span class="n">neighbor_info</span> <span class="o">=</span> <span class="n">brctl</span><span class="o">.</span><span class="n">showports</span><span class="p">()</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Verify that each testbed device is found in the DUTs bridge table</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">neighbor_macs</span> <span class="o">=</span> <span class="p">[</span><span class="n">neighbor</span><span class="o">.</span><span class="n">mac</span> <span class="k">for</span> <span class="n">neighbor</span> <span class="ow">in</span> <span class="n">neighbor_info</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">device</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">my_devices</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">device</span> <span class="o">==</span> <span class="n">zc</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyTrueOrStop</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">direct_routing_mac_address</span> <span class="ow">in</span> <span class="n">neighbor_macs</span><span class="p">,</span>
+                                  <span class="s2">&quot;</span><span class="si">{}</span><span class="s2"> should be found in DUTs (</span><span class="si">{}</span><span class="s2">) bridge table&quot;</span>
+                                  <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">direct_routing_mac_address</span><span class="p">,</span> <span class="n">zc</span><span class="p">))</span>
+
+        <span class="c1"># Check neighbors RSSI against IE</span>
+        <span class="k">for</span> <span class="n">neighbor</span> <span class="ow">in</span> <span class="n">neighbor_info</span><span class="p">:</span>
+            <span class="n">rssi</span> <span class="o">=</span> <span class="n">fullstats</span><span class="p">[</span><span class="n">neighbor</span><span class="o">.</span><span class="n">dev</span><span class="p">]</span><span class="o">.</span><span class="n">neighbor_rssi_value</span><span class="p">(</span><span class="n">neighbor</span><span class="o">.</span><span class="n">mac</span><span class="p">)</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">rssi</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">stop</span><span class="p">(</span><span class="s1">&#39;Could not get RSSI values for neighbor (</span><span class="si">{}</span><span class="s1">)&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">neighbor</span><span class="o">.</span><span class="n">mac</span><span class="p">))</span>
+            <span class="n">ant0</span> <span class="o">=</span> <span class="n">rssi</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">ant1</span> <span class="o">=</span> <span class="n">rssi</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="n">rssi</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">else</span> <span class="mi">0</span>
+
+            <span class="nb">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">pkt</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">_validate_infra_data</span><span class="p">(</span><span class="n">pkt</span><span class="p">,</span> <span class="n">ant0</span><span class="p">,</span> <span class="n">ant1</span><span class="p">,</span> <span class="n">neighbor</span><span class="o">.</span><span class="n">mac</span><span class="p">),</span>
+                <span class="n">captures</span><span class="p">[</span><span class="n">neighbor</span><span class="o">.</span><span class="n">dev</span><span class="p">])</span> </div>
+
+<div class="viewcode-block" id="SonosnetProbes.test_24ghz_scan_probes"><a class="viewcode-back" href="../../networking.html#networking.test_sonosnet_probes.SonosnetProbes.test_24ghz_scan_probes">[docs]</a>    <span class="nd">@combinatorial</span><span class="p">(</span><span class="s2">&quot;zcs&quot;</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">test_24ghz_scan_probes</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zc</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Test basic properties of probes when scanning in 2.4 Ghz</span>
+
+<span class="sd">        :type zc: :class:`~sonos.client.internal.SonosZoneComponent`</span>
+<span class="sd">        :param zc: sonos zone</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">FIRST_24GHZ_CHANNEL</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">LAST_24GHZ_CHANNEL</span> <span class="o">=</span> <span class="mi">11</span>
+
+        <span class="k">if</span> <span class="n">zc</span><span class="o">.</span><span class="n">is_bridge</span><span class="p">():</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">skipTest</span><span class="p">(</span><span class="s1">&#39;Bridges do not support athconfig scanstart command&#39;</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">channel</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">FIRST_24GHZ_CHANNEL</span><span class="p">,</span> <span class="n">LAST_24GHZ_CHANNEL</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">verifyInRangeOrFailCase</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">start_scan_and_count_probes</span><span class="p">(</span><span class="n">channel</span><span class="p">,</span> <span class="n">zc</span><span class="p">),</span>
+                <span class="mi">2</span><span class="p">,</span>
+                <span class="mi">3</span><span class="p">,</span>
+                <span class="s2">&quot;Verify </span><span class="si">{}</span><span class="s2"> sends out ~3 probes on &quot;</span>
+                <span class="s2">&quot;channel </span><span class="si">{}</span><span class="s2"> in scan&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">zc</span><span class="p">,</span> <span class="n">channel</span><span class="p">))</span></div></div>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+    <span class="n">fixtures</span> <span class="o">=</span> <span class="n">deque</span><span class="p">([</span><span class="n">SonosnetProbes</span><span class="p">])</span>
+    <span class="n">suite</span> <span class="o">=</span> <span class="n">WorkflowTestSuite</span><span class="p">(</span><span class="n">fixtures</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="vm">__name__</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">suite</span><span class="o">.</span><span class="n">get_test_branch_name</span><span class="p">()</span> <span class="ow">and</span> <span class="n">suite</span><span class="o">.</span><span class="n">get_test_update_url</span><span class="p">()</span> <span class="ow">and</span>
+            <span class="n">suite</span><span class="o">.</span><span class="n">get_test_version</span><span class="p">()):</span>
+        <span class="n">fixtures</span><span class="o">.</span><span class="n">appendleft</span><span class="p">(</span><span class="n">ConditionalUpgradeTestFixture</span><span class="p">)</span>
+    <span class="n">suite</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="n">fixture</span><span class="p">()</span> <span class="k">for</span> <span class="n">fixture</span> <span class="ow">in</span> <span class="n">fixtures</span><span class="p">])</span>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../index.html">Documentation overview</a><ul>
+  <li><a href="../index.html">Module code</a><ul>
+  <li><a href="../networking.html">networking</a><ul>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>

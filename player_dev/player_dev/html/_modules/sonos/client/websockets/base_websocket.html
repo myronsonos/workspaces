@@ -1,0 +1,542 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>sonos.client.websockets.base_websocket &#8212; TestCase Documentation  documentation</title>
+    <link rel="stylesheet" href="../../../../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../../../../" src="../../../../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../../../../_static/jquery.js"></script>
+    <script type="text/javascript" src="../../../../_static/underscore.js"></script>
+    <script type="text/javascript" src="../../../../_static/doctools.js"></script>
+    <script type="text/javascript" src="../../../../_static/language_data.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for sonos.client.websockets.base_websocket</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">reference</span> <span class="k">import</span> <span class="n">Reference</span>
+<span class="kn">from</span> <span class="nn">sonos.settings</span> <span class="k">import</span> <span class="n">make_log_name</span>
+<span class="kn">from</span> <span class="nn">twisted.internet</span> <span class="k">import</span> <span class="n">ssl</span><span class="p">,</span> <span class="n">reactor</span><span class="p">,</span> <span class="n">defer</span>
+<span class="kn">from</span> <span class="nn">autobahn.twisted.websocket</span> <span class="k">import</span> <span class="p">(</span>
+    <span class="n">WebSocketClientFactory</span><span class="p">,</span> <span class="n">WebSocketClientProtocol</span><span class="p">,</span> <span class="n">WebSocketServerProtocol</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">autobahn.websocket.protocol</span> <span class="k">import</span> <span class="n">PreparedMessage</span>
+
+<span class="c1"># The helper functions for WebSocket URL handling moved to autobahn.websocket.util</span>
+<span class="c1"># and got renamed in version 0.13.1 (published 2016 April 9). It appears that these</span>
+<span class="c1"># functions are not part of the official API.</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="c1"># the function name changed in release 0.13.1</span>
+    <span class="kn">from</span> <span class="nn">autobahn.websocket.util</span> <span class="k">import</span> <span class="n">create_url</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="c1"># try the version that we used initially</span>
+    <span class="kn">from</span> <span class="nn">autobahn.websocket.protocol</span> <span class="k">import</span> <span class="n">createWsUrl</span> <span class="k">as</span> <span class="n">create_url</span>
+
+<span class="kn">import</span> <span class="nn">logging</span>
+<span class="kn">from</span> <span class="nn">sonos.client.zone_player</span> <span class="k">import</span> <span class="n">X_SONOS_API_KEY</span>
+
+<span class="n">CONNECTED_STATE</span> <span class="o">=</span> <span class="s2">&quot;connected&quot;</span>
+<span class="n">DISCONNECTED_STATE</span> <span class="o">=</span> <span class="s2">&quot;disconnected&quot;</span>
+
+
+<span class="k">def</span> <span class="nf">WebsocketMessageRaw</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">isBinary</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">applyMask</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">doNotCompress</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">hybi</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Prepares the payload to be sent over the wire.</span>
+
+<span class="sd">    :param payload: Buffer containing the websocket message to be prepared for</span>
+<span class="sd">    transmission over the wire.</span>
+<span class="sd">    :param isBinary: True for binary payload</span>
+<span class="sd">    :param applyMask: Controls whether the websocket message will be masked</span>
+<span class="sd">    :param doNotCompress: If True, the message will not be compressed</span>
+<span class="sd">    :param hybi: Selects between HyBi and hixie-76</span>
+<span class="sd">    :return: A wire format websocket message.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">msg</span> <span class="o">=</span> <span class="n">PreparedMessage</span><span class="p">(</span><span class="n">payload</span><span class="p">,</span> <span class="n">isBinary</span><span class="p">,</span> <span class="n">applyMask</span><span class="p">,</span> <span class="n">doNotCompress</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">msg</span><span class="o">.</span><span class="n">payloadHybi</span> <span class="k">if</span> <span class="n">hybi</span> <span class="k">else</span> <span class="n">msg</span><span class="o">.</span><span class="n">payloadHixie</span>
+
+<span class="k">class</span> <span class="nc">WebsocketClientProtocol</span><span class="p">(</span><span class="n">WebSocketClientProtocol</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Websocket client protocol base. Override the onOpen() and onClose() methods so we can let</span>
+<span class="sd">    our WebsocketClient know what state we&#39;re in.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">onOpen</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Override onOpen() (from IWebSocketChannel).</span>
+<span class="sd">        onOpen() is called when the web socket channel is fully established and ready to send and</span>
+<span class="sd">        receive websocket messages.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+        <span class="c1"># Pass ourselves back to our factory&#39;s client.</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">client</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">onConnectionOpen</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">onClose</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wasClean</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Override onClose() (from IWebSocketChannel).</span>
+<span class="sd">        onClose() is called when the web socket channel is closed either cleanly or due to loss of the</span>
+<span class="sd">        underlying TCP connection.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">client</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">factory</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">onConnectionClosed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">wasClean</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">reason</span><span class="p">)</span>
+
+<span class="k">class</span> <span class="nc">WebsocketMultiServerProtocol</span><span class="p">(</span><span class="n">WebSocketServerProtocol</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Websocket server protocol base. Handles updating a dictionary of connections</span>
+<span class="sd">    whenever a new connection is made. This allows us to launch one server</span>
+<span class="sd">    for all of the ZPs in a household.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WebsocketMultiServerProtocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connections</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">onConnect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WebsocketMultiServerProtocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">onConnect</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+        <span class="c1"># Peer comes in as: &quot;ip4:&lt;ip&gt;:&lt;port&gt;&quot; or &quot;&lt;ip&gt;:&lt;port&gt;&quot;</span>
+        <span class="c1"># We want to work by IP</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="s2">&quot;Request peer &lt;</span><span class="si">{}</span><span class="s2">&gt;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">request</span><span class="o">.</span><span class="n">peer</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">peer</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;ip4&quot;</span><span class="p">):</span>
+            <span class="n">ip</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">peer</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">ip</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">peer</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">connections</span><span class="p">[</span><span class="n">ip</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span>
+
+
+<span class="k">def</span> <span class="nf">make_multi_server_protocol</span><span class="p">(</span><span class="n">protocol</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Builds a protocol and dictionary of websockets connected.</span>
+
+<span class="sd">    :param protocol: Base protocol that we need references to</span>
+<span class="sd">    :return: Tuple of a protocol class that can be used in a websocket server</span>
+<span class="sd">    factory or sent as the basis for a MockLechmereServer and a dictionary that</span>
+<span class="sd">    will hold protocol connections indexed by incoming IP address.</span>
+<span class="sd">    :rtype: tuple</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">connections</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">()</span>
+
+    <span class="k">class</span> <span class="nc">Protocol</span><span class="p">(</span><span class="n">protocol</span><span class="p">,</span> <span class="n">WebsocketMultiServerProtocol</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="nb">super</span><span class="p">(</span><span class="n">Protocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">connections</span> <span class="o">=</span> <span class="n">connections</span>
+
+    <span class="k">return</span> <span class="n">Protocol</span><span class="p">,</span> <span class="n">connections</span>
+
+
+<span class="k">class</span> <span class="nc">WebsocketServerProtocol</span><span class="p">(</span><span class="n">WebSocketServerProtocol</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Websocket server protocol base. Handles updating a reference on connect.</span>
+<span class="sd">    Used with make_server_protocol.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WebsocketServerProtocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_reference</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">onConnect</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WebsocketServerProtocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="n">onConnect</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_reference</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_reference</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">make_server_protocol</span><span class="p">(</span><span class="n">protocol</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Builds a protocol and reference to the connected protocol.</span>
+
+<span class="sd">    :param protocol: Base protocol that we need a reference to.</span>
+<span class="sd">    :return: Tuple of a protocol class that can be used in a websocket server</span>
+<span class="sd">    factory or sent as the basis for a MockLechmereServer and a reference to the</span>
+<span class="sd">    protocol that will be connected.</span>
+<span class="sd">    :rtype: tuple</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">reference</span> <span class="o">=</span> <span class="n">Reference</span><span class="p">()</span>
+
+    <span class="k">class</span> <span class="nc">Protocol</span><span class="p">(</span><span class="n">protocol</span><span class="p">,</span> <span class="n">WebsocketServerProtocol</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="nb">super</span><span class="p">(</span><span class="n">Protocol</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_reference</span> <span class="o">=</span> <span class="n">reference</span>
+
+    <span class="k">return</span> <span class="n">Protocol</span><span class="p">,</span> <span class="n">reference</span>
+
+<span class="k">class</span> <span class="nc">WebsocketClientFactory</span><span class="p">(</span><span class="n">WebSocketClientFactory</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    WebsocketClientFactory overrides autobahn.twisted.websocket.WebSocketClientFactory</span>
+<span class="sd">    so it can detect failed connections via the clientConnectionFailed() callback.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">websocketclient</span><span class="p">,</span> <span class="n">url</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :param websocketclient is the WebsocketClient that instantiated us</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">WebsocketClientFactory</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">client</span> <span class="o">=</span> <span class="n">websocketclient</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">protocol</span> <span class="o">=</span> <span class="n">websocketclient</span><span class="o">.</span><span class="n">PROTOCOL</span>
+
+    <span class="k">def</span> <span class="nf">clientConnectionFailed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connector</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="n">WebSocketClientFactory</span><span class="o">.</span><span class="n">clientConnectionFailed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connector</span><span class="p">,</span> <span class="n">reason</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">client</span><span class="o">.</span><span class="n">onConnectionFailed</span><span class="p">(</span><span class="n">connector</span><span class="p">,</span> <span class="n">reason</span><span class="p">)</span>
+
+
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">WebsocketClient is the Sonos-defined class that represents a single websocket connection.</span>
+<span class="sd">It is designed to be used by test scripts, and it hides most (all?) of the twisted / autobahn</span>
+<span class="sd">details from the test scripts.</span>
+
+<span class="sd">Usage:</span>
+<span class="sd">Subclasses must override the following attributes:</span>
+<span class="sd">  ENDPOINT - the URL to connect to (TODO: fix this to get the endpoint from the SSDP</span>
+<span class="sd">             message for players discovered on the LAN)</span>
+<span class="sd">  PROTOCOL - a subclass of twisted.internet.protocol.ClientProtocol, which will be instantiated</span>
+<span class="sd">             when the connection is made and which will be available via the &#39;protocol&#39; attribute</span>
+<span class="sd">             of the WebsocketClient object.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="k">class</span> <span class="nc">WebsocketClient</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="n">ENDPOINT</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">PROTOCOL</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">component</span><span class="p">,</span> <span class="n">auto_connect</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">wait</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                 <span class="n">params</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">is_secure</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">protocols</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Initialize the websocket client</span>
+<span class="sd">        :param component: Component the client connects to</span>
+<span class="sd">        :type component: SonosZoneComponent</span>
+<span class="sd">        :param auto_connect: Whether the connection should be connected</span>
+<span class="sd">            automatically</span>
+<span class="sd">        :param wait: Whether to wait for the connection to be made.</span>
+<span class="sd">        :param params: Exposes the autobahn &quot;params&quot; keyword @see autobahn.websocket.util.create_url</span>
+<span class="sd">        :param is_secure: Exposes the autobahn &quot;isSecure&quot; keyword @see autobahn.websocket.util.create_url</span>
+<span class="sd">        :param dict headers: Headers for connection</span>
+<span class="sd">        :param protocols: Exposes the autobahn &quot;protocols&quot; keyword @see \</span>
+<span class="sd">        autobahn.websocket.protocol.WebsocketClientFactory()</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="n">make_log_name</span><span class="p">([</span><span class="vm">__name__</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span><span class="p">]))</span>
+        <span class="c1"># Note: this class itself no long relies upon self.component.  However, I&#39;m leaving it as is in case</span>
+        <span class="c1"># any other code relies on this property of WebsocketClient.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">component</span> <span class="o">=</span> <span class="n">component</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_secure</span> <span class="o">=</span> <span class="n">is_secure</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">protocols</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span><span class="s2">&quot;**Attempting to make a Muse v1 connection without a subprotocol**&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Cache the host and port here so we can safely access them from the reactor thread</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_port</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">component</span><span class="o">.</span><span class="n">ssl_port</span> <span class="k">if</span> <span class="n">is_secure</span> <span class="k">else</span> <span class="n">component</span><span class="o">.</span><span class="n">port</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_host</span> <span class="o">=</span> <span class="n">component</span><span class="o">.</span><span class="n">host</span>
+
+        <span class="n">url</span> <span class="o">=</span> <span class="n">create_url</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_host</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_port</span><span class="p">,</span>
+                         <span class="n">isSecure</span><span class="o">=</span><span class="n">is_secure</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ENDPOINT</span><span class="p">,</span>
+                         <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">headers</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">headers</span> <span class="o">=</span> <span class="p">{}</span>
+
+        <span class="k">if</span> <span class="s1">&#39;X-Sonos-Api-Key&#39;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">headers</span><span class="p">:</span>
+            <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;X-Sonos-Api-Key&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="n">X_SONOS_API_KEY</span>
+
+        <span class="c1"># Rember the api_key so that it can be compared by tests</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">api_key</span> <span class="o">=</span> <span class="n">headers</span><span class="p">[</span><span class="s1">&#39;X-Sonos-Api-Key&#39;</span><span class="p">]</span>
+
+        <span class="c1"># note: creating a new WebsocketClientFactory for each WebsocketClient is non-standard for</span>
+        <span class="c1"># twisted; however, we leverage this because the factory object is the one that gets notified</span>
+        <span class="c1"># when a connection fails or is broken, and in our model the factory is 1:1 with the WebsocketClient,</span>
+        <span class="c1"># so the factory notifies its WebsocketClient when those events occur (connectionFailed(),</span>
+        <span class="c1"># connectionLost()).</span>
+        <span class="c1"># Normally, twisted ProtocolFactories are  global singletons, so that all</span>
+        <span class="c1"># connections (Protocol instances) share the same factory.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_factory</span> <span class="o">=</span> <span class="n">WebsocketClientFactory</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">url</span><span class="p">,</span> <span class="n">headers</span><span class="o">=</span><span class="n">headers</span><span class="p">,</span> <span class="n">protocols</span><span class="o">=</span><span class="n">protocols</span><span class="p">)</span>
+
+        <span class="c1"># The _connection knows how to connect() and disconnect().  That&#39;s about it.</span>
+        <span class="c1"># TODO: rename to _connector?</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="c1"># _deferredConnection is a Deferred that is called back once the</span>
+        <span class="c1"># connection has been established (or has failed).</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="c1"># _deferredDisconnection is a Deferred that is called back once the async</span>
+        <span class="c1"># disconnect process has completed.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_deferredDisconnection</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="c1"># _protocol is the instance of PROTOCOL associated with this connection.</span>
+        <span class="c1"># This is set whenever we have an established connection to the server.</span>
+        <span class="c1"># It is None whenever we do not have an established connection.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="n">auto_connect</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+
+
+    <span class="k">def</span> <span class="nf">_execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Execute all autobahn- / reactor- / twisted- related calls through this interface.</span>
+<span class="sd">        Reason:  All network I/O on the websocket must be performed on the</span>
+<span class="sd">                 reactor thread.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="kn">import</span> <span class="nn">twisted.internet.threads</span>
+        <span class="k">return</span> <span class="n">twisted</span><span class="o">.</span><span class="n">internet</span><span class="o">.</span><span class="n">threads</span><span class="o">.</span><span class="n">blockingCallFromThread</span><span class="p">(</span><span class="n">reactor</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_connect_once</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Attempt fresh connect</span>
+        <span class="c1"># TADC: TODO: can this be simplified by using twisted &#39;endpoints&#39; (added in Twisted 10.1)?</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_secure</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span> <span class="o">=</span> <span class="n">reactor</span><span class="o">.</span><span class="n">connectSSL</span><span class="p">(</span>    <span class="c1"># @UndefinedVariable (connectSSL())</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_host</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_port</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_factory</span><span class="p">,</span> <span class="n">ssl</span><span class="o">.</span><span class="n">CertificateOptions</span><span class="p">())</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span> <span class="o">=</span> <span class="n">reactor</span><span class="o">.</span><span class="n">connectTCP</span><span class="p">(</span>    <span class="c1"># @UndefinedVariable (connectTCP())</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">_host</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_port</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_factory</span><span class="p">)</span>
+        <span class="c1"># Attempt reconnect after disconnect</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_disconnected</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span><span class="o">.</span><span class="n">connect</span><span class="p">()</span>
+        <span class="c1"># Warn about attempting connect while already connected</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Call to connect aborted because in </span><span class="si">{}</span><span class="s2"> state&quot;</span>
+                            <span class="s2">&quot;&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_connection</span><span class="o">.</span><span class="n">state</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">connect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Connect the websocket and block until the connection either succeeds or there is an</span>
+<span class="sd">        error or the connection attempt times out.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Use _execute() to ensure that the connection is established on the reactor thread.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_execute</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_connect</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_connected</span>
+
+    <span class="k">def</span> <span class="nf">_connect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;_connect: outstanding deferred operation in </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">))</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">_connect_once</span><span class="p">()</span>
+        <span class="c1"># This is the async way to do things in the twisted / reactor model.</span>
+        <span class="c1"># Create a deferred object and return it.  This is a promise that the connection</span>
+        <span class="c1"># process will eventually complete; when it does, the deferred object will be</span>
+        <span class="c1"># used to deliver the result to the caller.</span>
+        <span class="n">d</span> <span class="o">=</span> <span class="n">defer</span><span class="o">.</span><span class="n">Deferred</span><span class="p">()</span>
+        <span class="c1"># Hold onto this deferred so we can call its callback() or errback() method when</span>
+        <span class="c1"># the async connection completes (successfully or with an error).</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="o">=</span> <span class="n">d</span>
+        <span class="k">return</span> <span class="n">d</span>
+
+    <span class="k">def</span> <span class="nf">disconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Disconnect, and block if necessary until the connection is completely torn down.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># Use _execute() to ensure that the disconnection is established on the reactor thread.</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_execute</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_disconnect</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">r</span>
+
+    <span class="k">def</span> <span class="nf">_disconnect</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Internal method that performs the disconnection on the reactor thread.</span>
+<span class="sd">        :return None if already disconnected, or a Deferred instance if the disconnection will</span>
+<span class="sd">                be asynchronous.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># IMPORTANT: do NOT set self._protocol to None here; instead, wait for onConnectionClosed()</span>
+        <span class="c1"># to be called, which will clear out self._protocol.</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;_disconnect: outstanding deferred operation in </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">))</span>
+
+        <span class="c1"># If we have a connection, wait for onConnectionClosed() to be called.</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_connected</span><span class="p">:</span>
+            <span class="c1"># Send a close frame over the websocket connection. This will shut down the</span>
+            <span class="c1"># connection cleanly. Otherwise, the close frame is not transmitted and an</span>
+            <span class="c1"># error is propogated to onConnectionClosed.</span>
+            <span class="c1">#</span>
+            <span class="c1"># We don&#39;t currently have any tests that need to tear down a connection uncleanly,</span>
+            <span class="c1"># but we can add an unclean version of _disconnect in the future if needed.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span><span class="o">.</span><span class="n">sendClose</span><span class="p">()</span>
+
+            <span class="n">d</span> <span class="o">=</span> <span class="n">defer</span><span class="o">.</span><span class="n">Deferred</span><span class="p">()</span>
+            <span class="c1"># Hold onto this deferred so we can call its callback() or errback() method when</span>
+            <span class="c1"># the async disconnection completes.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_deferredDisconnection</span> <span class="o">=</span> <span class="n">d</span>
+            <span class="k">return</span> <span class="n">d</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Just in case we are in the process of trying to connect, call disconnect().  It is safe</span>
+            <span class="c1"># to call this in any state.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_connection</span><span class="o">.</span><span class="n">disconnect</span><span class="p">()</span>
+            <span class="c1"># If we don&#39;t have a connection, we&#39;re done.  return nothing (None)</span>
+            <span class="k">return</span>
+
+    <span class="k">def</span> <span class="nf">onConnectionOpen</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">protocol</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        onConnectionOpen() is called when the websocket is ready for sending messages</span>
+<span class="sd">        :param r: a WebsocketClientProtocol object that was connected (or a subclass)</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span> <span class="o">=</span> <span class="n">protocol</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">protocol</span><span class="p">,</span> <span class="n">WebsocketClientProtocol</span><span class="p">):</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="o">.</span><span class="n">callback</span><span class="p">(</span><span class="n">protocol</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="s2">&quot;unexpected type for &#39;r&#39; in </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">onConnectionFailed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">connector</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        onConnectionFailed() is called when we fail to establish a websocket connection</span>
+<span class="sd">        :param reason is an Exception or twisted.python.failure.Failure object (or subclass thereof)</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;connection failed: </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">reason</span><span class="p">))</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="p">:</span>
+            <span class="c1"># note: don&#39;t call errback() here - connect() is not designed to raise an exception, and</span>
+            <span class="c1"># calling errback() would raise an exception.</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="o">.</span><span class="n">callback</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">onConnectionClosed</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">protocol</span><span class="p">,</span> <span class="n">wasClean</span><span class="p">,</span> <span class="n">code</span><span class="p">,</span> <span class="n">reason</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        onConnectionClosed() is called when a connection closes, for any reason (clean or unclean).</span>
+<span class="sd">        :param r is an Exception object (or subclass thereof)</span>
+<span class="sd">        :return:</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">hadProtocol</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span> <span class="o">!=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">hadProtocol</span><span class="p">:</span>
+            <span class="n">errmsg</span> <span class="o">=</span> <span class="s2">&quot;websocket closed during connection sequence: &quot;</span> <span class="o">+</span> <span class="n">reason</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="n">errmsg</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="p">:</span>
+                <span class="c1"># note: don&#39;t call errback() here - connect() is not designed to raise an exception, and</span>
+                <span class="c1"># calling errback() would raise an exception.</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span><span class="o">.</span><span class="n">callback</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_deferredConnection</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">wasClean</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;websocket closed uncleanly: &quot;</span> <span class="o">+</span> <span class="n">reason</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_deferredDisconnection</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_deferredDisconnection</span><span class="o">.</span><span class="n">callback</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_deferredDisconnection</span> <span class="o">=</span> <span class="kc">None</span>
+
+
+    <span class="k">def</span> <span class="nf">wait_until_disconnected</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">retry_delay</span><span class="o">=.</span><span class="mi">25</span><span class="p">,</span> <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">):</span>
+        <span class="c1"># TADC: TODO: because disconnect() now blocks until the connection is closed,</span>
+        <span class="c1"># this is now a stub.  In a separate change, we should remove the two calls</span>
+        <span class="c1"># to this method, and then remove this method.</span>
+        <span class="k">pass</span>
+
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">protocol</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;  TADC: why is this method necessary?  Who calls it?</span>
+<span class="sd">        :return:</span>
+<span class="sd">        :rtype: WebsocketProtocol</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">is_connected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return True if a connection has been successfully established to the server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_protocol</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">is_disconnected</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        :return True if the connection was never established, or if it was closed either locally</span>
+<span class="sd">                or by the remote server.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_connected</span>
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../../index.html">TestCase Documentation</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../audio.html">audio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../cloud.html">cloud package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../common.html">common package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../data_reporting.html">data_reporting package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../dataio.html">dataio package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../hdmi.html">hdmi package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../ixchariot.html">ixchariot package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../networking.html">networking package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../other.html">other package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../perf.html">perf package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../pytest_automation.html">pytest_automation package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../secure_registration.html">secure_registration package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../syssw.html">syssw package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../upnp.html">upnp package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../voice.html">voice package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver.html">webserver package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../webserver_v0.html">webserver_v0 package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2019, Author.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.5</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+    </div>
+
+    
+
+    
+  </body>
+</html>
